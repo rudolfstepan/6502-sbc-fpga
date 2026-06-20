@@ -188,9 +188,15 @@ foreach ($group in $sidebarGroups.Keys) {
     }
     $sidebar.Add("")
 }
+$sidebar.Add("## Project")
+$sidebar.Add("- [Emulator Repository](https://github.com/rudolfstepan/6502-sbc-emulator)")
+$sidebar.Add("- [Emulator Wiki](https://github.com/rudolfstepan/6502-sbc-emulator/wiki)")
 Set-Content -Encoding UTF8 -Path (Join-Path $wikiPath "_Sidebar.md") -Value ($sidebar.ToArray() -join "`n")
 
-$footer = "Generated from [$Repo]($repoUrl) Markdown documentation."
+$parentRepoUrl = "https://github.com/rudolfstepan/6502-sbc-emulator"
+$footer = "Generated from [$Repo]($repoUrl) Markdown documentation. " +
+    "Part of the [6502 SBC emulator]($parentRepoUrl) project " +
+    "([emulator Wiki]($parentRepoUrl/wiki))."
 Set-Content -Encoding UTF8 -Path (Join-Path $wikiPath "_Footer.md") -Value $footer
 
 Push-Location $wikiPath

@@ -1,8 +1,17 @@
 # 6502 SBC FPGA
 
-This directory contains the hardware implementation track for the 6502 SBC emulator.
+> 📖 **Documentation:** the full guide lives in the **[Wiki](https://github.com/rudolfstepan/6502-sbc-fpga/wiki)** (mirrors [docs/](docs/INDEX.md)).
+> 🧩 **Part of:** the [6502 SBC emulator](https://github.com/rudolfstepan/6502-sbc-emulator) project ([emulator Wiki](https://github.com/rudolfstepan/6502-sbc-emulator/wiki)). This repo is linked there as the `fpga/` submodule.
+
+This repository contains the hardware implementation track for the
+[6502 SBC emulator](https://github.com/rudolfstepan/6502-sbc-emulator).
 The goal is to rebuild the emulator's machine as synthesizable VHDL for real FPGA
 targets while keeping the memory map and software-facing behavior compatible.
+
+The FPGA build reuses ROMs and kernel sources from the parent emulator repository
+(via `../roms/` and `../../tools/kernel/`), so check it out as the `fpga/`
+submodule inside [6502-sbc-emulator](https://github.com/rudolfstepan/6502-sbc-emulator)
+when building.
 
 ## Current Scope
 
