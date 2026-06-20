@@ -2,6 +2,9 @@
 work-*.cf
 e~*.cf
 
+# Generated wiki checkout (published by tools/publish_wiki.ps1)
+.wiki/
+
 # Generated simulation artifacts (built by make roms / make sd-boot-image)
 sim/generated/
 
