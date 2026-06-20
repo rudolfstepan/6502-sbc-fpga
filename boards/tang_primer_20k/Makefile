@@ -15,4 +15,5 @@ program:
 	$(OPENLOAD) -b tang_primer_20k $(BITSTREAM)
 
 clean:
-	-rm -rf project/impl/ project/tmp/
+	-rm -rf project/impl/gwsynthesis project/impl/temp project/tmp
+	-find project/impl/pnr -mindepth 1 ! -name device.cfg -delete

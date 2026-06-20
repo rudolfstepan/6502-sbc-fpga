@@ -172,11 +172,13 @@ under `third_party/usb_hid_host/` for future investigation.  PS/2 works
 reliably and was adopted as the primary keyboard interface.
 
 The on-board SDIO slot uses pins M8 (sd_miso / DAT0) and M10 (unused) which are
-dual-purpose SSPI pins on the GW2A-18C. The build uses a Tcl script
+dual-purpose SSPI pins on the GW2A-18C. The `make build` flow uses a Tcl script
 (`project/build.tcl`) instead of the `.gprj` project file so that
 `set_option -use_sspi_as_gpio 1` is passed to P&R before placement runs.
-This permanently embeds the setting and avoids the `PR2017`/`PR2028` errors that
-occur when GowinEDA regenerates `device.cfg` from `.gprj` defaults.
+For the GUI flow, `impl/pnr/device.cfg` is checked into the repo with SSPI/MSPI
+set to `regular_io = true`. Both paths avoid the `PR2017`/`PR2028` errors that
+otherwise occur when SSPI/MSPI default to dedicated config pins. See
+*Opening in GOWIN FPGA Designer* and *Why `build.tcl` instead of the `.gprj`*.
 
 ## Audio (PT8211 DAC)
 
@@ -250,6 +252,32 @@ errors `PR2017` / `PR2028`.
 gw_sh writes `set SSPI regular_io = true` into `device.cfg` on the first pass.
 No post-build patching is needed.
 
+### Opening in GOWIN FPGA Designer (GUI)
+
+You can place & route from the GUI instead of `make build`. The GUI does **not**
+read `build.tcl`, so the `set_option -use_sspi_as_gpio` / `-use_mspi_as_gpio`
+lines have no effect there — it relies on `impl/pnr/device.cfg` instead. To save
+the next person the trouble, that file is checked into the repo with the correct
+settings, so a fresh checkout works out of the box:
+
+1. Open `project/tang_sbc.gprj` in GOWIN FPGA Designer.
+2. Run **Place & Route**.
+
+The committed `impl/pnr/device.cfg` already contains:
+
+```
+set SSPI regular_io = true
+set MSPI regular_io = true
+```
+
+which releases the dedicated SSPI pads so `sd_miso` (pin `M8`) and `key[0]`
+(pin `T10`) can be placed, avoiding `PR2017` / `PR2028`.
+
+If `device.cfg` is ever missing or reset to `false`, re-enable it via
+**Project → Configuration → Dual-Purpose Pin** → tick **Use SSPI as regular IO**
+and **Use MSPI as regular IO**, then save. `make build` also rewrites it to the
+correct values, and `make clean` is set up to preserve it.
+
 ### Programming the board
 
 With openFPGALoader (USB cable connected to the Tang Primer 20K JTAG port):
@@ -280,5 +308,6 @@ make build
 |---------|-----|
 | `gw_sh: command not found` | Add GowinEDA `bin/` to `PATH`, or set `GOWIN=<full path>` |
 | `PR2017` / `PR2028` on `sd_miso` | Build is using the old `.gprj` flow; switch to `make build` which uses `build.tcl` |
+| `PR2017` / `PR2028` on `sd_miso` or `key[0]` in the GUI | Enable **Use SSPI as regular IO** and **Use MSPI as regular IO** under **Project → Configuration → Dual-Purpose Pin** (see *Opening in GOWIN FPGA Designer*) |
 | Newly added VHDL unit not compiled in `work` | Run `make clean && make build` to force full resynthesis |
 | Stale objects from `tang_sbc.vg` | Run `make clean` — that file is a generated netlist, not source |

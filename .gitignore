@@ -34,7 +34,14 @@ boards/pix16/project/*.lso
 boards/pix16/project/*.xrpt
 
 # ── Tang Primer 20K / GowinEDA ────────────────────────────────────────────────
-boards/tang_primer_20k/project/impl/
+# Ignore the generated impl/ tree, but keep device.cfg under version control so
+# the GUI (GOWIN FPGA Designer) gets the dual-purpose-pin settings (SSPI/MSPI as
+# regular IO) without manual setup. A parent dir can't be re-included once
+# ignored, so descend explicitly to the one tracked file.
+boards/tang_primer_20k/project/impl/*
+!boards/tang_primer_20k/project/impl/pnr/
+boards/tang_primer_20k/project/impl/pnr/*
+!boards/tang_primer_20k/project/impl/pnr/device.cfg
 boards/tang_primer_20k/project/tmp/
 boards/tang_primer_20k/project/*.gprj.user
 
