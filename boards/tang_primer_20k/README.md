@@ -79,15 +79,12 @@ The two on-board push buttons are active-low with internal pull-ups:
 | Button                 | FPGA pin | Function                               |
 |------------------------|----------|----------------------------------------|
 | **KEY0** (dock **S0**) | `T10`    | Reset button (see below)               |
-| **KEY1** (rewired)     | `T6`     | Enter UART monitor / hold the 6502 CPU |
+| **KEY1** (dock **S1**) | `T3`     | Enter UART monitor / show boot screen / hold CPU |
 
-> **DDR3 bank conflict:** DDR3 occupies I/O banks 4, 5 and 6 (forced to
-> SSTL15 / 1.5 V). The dock buttons S1–S5 all live in those banks (S1=`T3` is in
-> Bank 4), so only S0 (`T10`, Bank 3) survives. `key[1]` is therefore moved to
-> the free Bank-3 pin **`T6`** on PMOD0 (next to the PS/2 pins `T7`/`T8`). To use
-> the monitor button, wire a momentary button from that header pin to GND; with
-> nothing connected the internal pull-up reads it inactive, so the board still
-> works (just without a monitor button).
+> **DDR3 bank voltage:** S1 (`T3`) is in DDR Bank 4, which runs at 1.5 V while
+> DDR3 is enabled. Because the dock button only pulls the pin to GND, it remains
+> usable as an active-low input configured for **SSTL15** with an internal
+> pull-up. Do not change this pin back to LVCMOS33 while DDR3 is enabled.
 
 KEY0 is a dual-action reset, debounced and synchronised in the 54 MHz `clk_sys`
 domain:

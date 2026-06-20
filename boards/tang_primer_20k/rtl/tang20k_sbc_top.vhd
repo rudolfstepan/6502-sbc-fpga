@@ -9,7 +9,7 @@
 -- KEY[0] = T5  (LVCMOS33, active-low reset button):
 --                short press  -> CPU soft reset (restart program, keep ROM/boot)
 --                long press >1s -> full board reset (re-run SD boot loader)
--- KEY[1] = T3  (LVCMOS33, active-low UART monitor enter / CPU hold)
+-- KEY[1] = T3  (SSTL15 in DDR Bank 4, active-low UART monitor / boot screen)
 -- LED[0]/LED[1] show boot status until boot_done, then LED[3:0] follow VIA PB[3:0].
 library ieee;
 use ieee.std_logic_1164.all;

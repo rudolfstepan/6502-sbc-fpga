@@ -70,19 +70,16 @@ IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 // earlier key[0]=T5 (and the T2 guess) were wrong: S1/T3 worked but S0 was dead.
 // key[0] = T10 (S0)  reset button: short press = CPU soft reset (restart program,
 //                    keep ROM/boot); long press >1s = full board reset.
-// key[1] = T6        UART monitor enter / CPU hold.
+// key[1] = T3  (S1)  UART monitor enter / CPU hold.
 //
-// NOTE: with DDR3 enabled the dock S1 button (T3) is unusable — T3 is in Bank 4,
-// which DDR3 forces to SSTL15 / 1.5 V (banks 4/5/6 belong to DDR3). All dock
-// buttons except S0 (T10, Bank 3) sit in DDR banks. key[1] is therefore moved to
-// the free Bank-3 pin T6 (on PMOD0, next to the PS/2 pins T7/T8). Wire a
-// momentary button from this header pin to GND to use the monitor button; the
-// internal pull-up reads it inactive ('1') when nothing is connected.
+// T3 is in DDR Bank 4, whose VCCIO is 1.5 V while DDR3 is enabled.  The dock
+// button only shorts the input to GND, so it remains usable when constrained as
+// an SSTL15 input with a pull-up.  It must not be configured as LVCMOS33.
 // -------------------------------------------------------------------------
 IO_LOC "key[0]" T10;
 IO_PORT "key[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
-IO_LOC "key[1]" T6;
-IO_PORT "key[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "key[1]" T3;
+IO_PORT "key[1]" IO_TYPE=SSTL15 PULL_MODE=UP BANK_VCCIO=1.5;
 
 // -------------------------------------------------------------------------
 // LEDs (active-low)
