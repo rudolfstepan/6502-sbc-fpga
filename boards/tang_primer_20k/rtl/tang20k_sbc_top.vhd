@@ -41,7 +41,24 @@ entity tang20k_sbc_top is
     tmds_clk_p : out std_logic;
     tmds_clk_n : out std_logic;
     tmds_d_p   : out std_logic_vector(2 downto 0);
-    tmds_d_n   : out std_logic_vector(2 downto 0)
+    tmds_d_n   : out std_logic_vector(2 downto 0);
+
+    -- DDR3 SDRAM (on-board, drives main RAM via Gowin DDR3 Memory Interface IP)
+    ddr_addr    : out   std_logic_vector(13 downto 0);
+    ddr_bank    : out   std_logic_vector(2 downto 0);
+    ddr_cs      : out   std_logic;
+    ddr_ras     : out   std_logic;
+    ddr_cas     : out   std_logic;
+    ddr_we      : out   std_logic;
+    ddr_ck      : out   std_logic;
+    ddr_ck_n    : out   std_logic;
+    ddr_cke     : out   std_logic;
+    ddr_odt     : out   std_logic;
+    ddr_reset_n : out   std_logic;
+    ddr_dm      : out   std_logic_vector(1 downto 0);
+    ddr_dq      : inout std_logic_vector(15 downto 0);
+    ddr_dqs     : inout std_logic_vector(1 downto 0);
+    ddr_dqs_n   : inout std_logic_vector(1 downto 0)
   );
 end entity;
 
@@ -125,6 +142,62 @@ architecture rtl of tang20k_sbc_top is
       PSDA    : in  std_logic_vector(3 downto 0);
       DUTYDA  : in  std_logic_vector(3 downto 0);
       FDLY    : in  std_logic_vector(3 downto 0)
+    );
+  end component;
+
+  -- Gowin DDR3 memory-interface IP (generated; see project/src/ddr3_memory_interface)
+  component DDR3_Memory_Interface_Top
+    port (
+      clk                 : in    std_logic;
+      memory_clk          : in    std_logic;
+      pll_lock            : in    std_logic;
+      rst_n               : in    std_logic;
+      app_burst_number    : in    std_logic_vector(5 downto 0);
+      cmd_ready           : out   std_logic;
+      cmd                 : in    std_logic_vector(2 downto 0);
+      cmd_en              : in    std_logic;
+      addr                : in    std_logic_vector(27 downto 0);
+      wr_data_rdy         : out   std_logic;
+      wr_data             : in    std_logic_vector(127 downto 0);
+      wr_data_en          : in    std_logic;
+      wr_data_end         : in    std_logic;
+      wr_data_mask        : in    std_logic_vector(15 downto 0);
+      rd_data             : out   std_logic_vector(127 downto 0);
+      rd_data_valid       : out   std_logic;
+      rd_data_end         : out   std_logic;
+      sr_req              : in    std_logic;
+      ref_req             : in    std_logic;
+      sr_ack              : out   std_logic;
+      ref_ack             : out   std_logic;
+      init_calib_complete : out   std_logic;
+      clk_out             : out   std_logic;
+      ddr_rst             : out   std_logic;
+      burst               : in    std_logic;
+      O_ddr_addr          : out   std_logic_vector(13 downto 0);
+      O_ddr_ba            : out   std_logic_vector(2 downto 0);
+      O_ddr_cs_n          : out   std_logic;
+      O_ddr_ras_n         : out   std_logic;
+      O_ddr_cas_n         : out   std_logic;
+      O_ddr_we_n          : out   std_logic;
+      O_ddr_clk           : out   std_logic;
+      O_ddr_clk_n         : out   std_logic;
+      O_ddr_cke           : out   std_logic;
+      O_ddr_odt           : out   std_logic;
+      O_ddr_reset_n       : out   std_logic;
+      O_ddr_dqm           : out   std_logic_vector(1 downto 0);
+      IO_ddr_dq           : inout std_logic_vector(15 downto 0);
+      IO_ddr_dqs          : inout std_logic_vector(1 downto 0);
+      IO_ddr_dqs_n        : inout std_logic_vector(1 downto 0)
+    );
+  end component;
+
+  -- Generated rPLL wrapper for the DDR3 memory clock (27 MHz -> ~400 MHz)
+  component Gowin_rPLL
+    port (
+      clkout : out std_logic;
+      lock   : out std_logic;
+      reset  : in  std_logic;
+      clkin  : in  std_logic
     );
   end component;
 
@@ -220,6 +293,44 @@ architecture rtl of tang20k_sbc_top is
   signal usb_cap_addr       : std_logic_vector(6 downto 0);
   signal usb_cap_data       : std_logic_vector(15 downto 0);
   signal usb_cap_ready      : std_logic;
+
+  -- DDR3 main RAM (Gowin IP + ddr3_byte_bridge)
+  signal ddr_memory_clk     : std_logic;
+  signal ddr_pll_lock       : std_logic;
+  signal ddr_clk_x1         : std_logic;   -- 100 MHz DDR3 user clock
+  signal ddr_calib_complete : std_logic;
+  signal app_cmd            : std_logic_vector(2 downto 0);
+  signal app_cmd_en         : std_logic;
+  signal app_cmd_rdy        : std_logic;
+  signal app_addr27         : std_logic_vector(26 downto 0);
+  signal app_addr28         : std_logic_vector(27 downto 0);
+  signal ddr_pll_reset      : std_logic;
+  -- Reference DDR3 IP uses zero for a single 128-bit user-interface beat.
+  signal app_wren           : std_logic;
+  signal app_wdata          : std_logic_vector(127 downto 0);
+  signal app_wdata_end      : std_logic;
+  signal app_wdata_mask     : std_logic_vector(15 downto 0);
+  signal app_wdata_rdy      : std_logic;
+  signal app_rdata          : std_logic_vector(127 downto 0);
+  signal app_rdata_valid    : std_logic;
+  -- core <-> bridge byte port
+  signal sram_ext_req   : std_logic;
+  signal sram_ext_we    : std_logic;
+  signal sram_ext_addr  : std_logic_vector(14 downto 0);
+  signal sram_ext_din   : data_t;
+  signal sram_ext_dout  : data_t;
+  signal sram_ext_ack   : std_logic;
+  signal ram_ready      : std_logic;
+  -- self-test status (to boot screen)
+  signal ram_test_active    : std_logic;
+  signal ram_test_done      : std_logic;
+  signal ram_test_error     : std_logic;
+  signal ram_test_phase     : std_logic_vector(3 downto 0);
+  signal ram_test_addr      : std_logic_vector(14 downto 0);
+  signal ram_test_fail_addr : std_logic_vector(14 downto 0);
+  signal ram_test_expected  : data_t;
+  signal ram_test_actual    : data_t;
+  signal sbc_boot_done      : std_logic;
 begin
   -- key(0) is the reset button: a short press soft-resets only the CPU (the
   -- running program restarts via its reset vector, ROM/boot/SRAM kept), a long
@@ -271,7 +382,10 @@ begin
   sd_ncs <= sd_ncs_i;
   sd_dclk <= sd_dclk_i;
   sd_mosi <= sd_mosi_i;
-  boot_vga_active <= (not boot_done) or boot_error or monitor_active;
+  -- Hold the CPU until both the SD ROM load (boot_done) and the DDR3 main RAM
+  -- (calibration + self-test, ram_ready) are ready.
+  sbc_boot_done   <= boot_done and ram_ready;
+  boot_vga_active <= (not sbc_boot_done) or boot_error or monitor_active;
 
   vga_mux_r  <= boot_vga_r  when boot_vga_active = '1' else sbc_vga_r;
   vga_mux_g  <= boot_vga_g  when boot_vga_active = '1' else sbc_vga_g;
@@ -437,7 +551,7 @@ begin
     port map (
       clk           => clk_sys,
       reset_n       => reset_n,
-      boot_done     => boot_done,
+      boot_done     => sbc_boot_done,
       soft_reset    => soft_reset,
       monitor_hold  => monitor_active,
       monitor_mem_req   => monitor_mem_req,
@@ -462,6 +576,12 @@ begin
       uart_tx_valid => uart_tx_valid,
       uart_tx_busy  => uart_tx_busy,
       via_portb     => via_portb,
+      sram_ext_req  => sram_ext_req,
+      sram_ext_we   => sram_ext_we,
+      sram_ext_addr => sram_ext_addr,
+      sram_ext_din  => sram_ext_din,
+      sram_ext_dout => sram_ext_dout,
+      sram_ext_ack  => sram_ext_ack,
       dac_bck       => dac_bck,
       dac_ws        => dac_ws,
       dac_din       => dac_din,
@@ -509,14 +629,14 @@ begin
       usb_phase       => usb_phase,
       usb_key_event   => usb_key_event,
       usb_polling     => usb_polling,
-      ram_test_active => '0',
-      ram_test_done   => boot_done,
-      ram_test_error  => '0',
-      ram_test_phase  => x"0",
-      ram_test_addr   => (others => '0'),
-      ram_test_fail_addr => (others => '0'),
-      ram_test_expected  => x"00",
-      ram_test_actual    => x"00",
+      ram_test_active => ram_test_active,
+      ram_test_done   => ram_test_done,
+      ram_test_error  => ram_test_error,
+      ram_test_phase  => ram_test_phase,
+      ram_test_addr   => ram_test_addr,
+      ram_test_fail_addr => ram_test_fail_addr,
+      ram_test_expected  => ram_test_expected,
+      ram_test_actual    => ram_test_actual,
       vga_r           => boot_vga_r,
       vga_g           => boot_vga_g,
       vga_b           => boot_vga_b,
@@ -564,9 +684,107 @@ begin
       tmds_d_n   => tmds_d_n
     );
 
+  -- ── DDR3 main RAM ───────────────────────────────────────────────────────
+  -- Single-rank board: chip-select tied low (matches Sipeed DDR-test example).
+  ddr_cs        <= '0';
+  ddr_pll_reset <= not reset_n;
+  app_addr28    <= '0' & app_addr27;
+
+  ddr_mem_pll_i : Gowin_rPLL
+    port map (
+      clkout => ddr_memory_clk,   -- ~400 MHz (DDR-800)
+      lock   => ddr_pll_lock,
+      reset  => ddr_pll_reset,
+      clkin  => clk_27mhz
+    );
+
+  ddr3_ip_i : DDR3_Memory_Interface_Top
+    port map (
+      clk                 => clk_27mhz,
+      memory_clk          => ddr_memory_clk,
+      pll_lock            => ddr_pll_lock,
+      rst_n               => reset_n,
+      app_burst_number    => (others => '0'), -- one 128-bit user-interface beat
+      cmd_ready           => app_cmd_rdy,
+      cmd                 => app_cmd,
+      cmd_en              => app_cmd_en,
+      addr                => app_addr28,
+      wr_data_rdy         => app_wdata_rdy,
+      wr_data             => app_wdata,
+      wr_data_en          => app_wren,
+      wr_data_end         => app_wdata_end,
+      wr_data_mask        => app_wdata_mask,
+      rd_data             => app_rdata,
+      rd_data_valid       => app_rdata_valid,
+      rd_data_end         => open,
+      sr_req              => '0',
+      ref_req             => '0',
+      sr_ack              => open,
+      ref_ack             => open,
+      init_calib_complete => ddr_calib_complete,
+      clk_out             => ddr_clk_x1,
+      ddr_rst             => open,
+      burst               => '1',
+      O_ddr_addr          => ddr_addr,
+      O_ddr_ba            => ddr_bank,
+      O_ddr_cs_n          => open,   -- ddr_cs pin tied low above
+      O_ddr_ras_n         => ddr_ras,
+      O_ddr_cas_n         => ddr_cas,
+      O_ddr_we_n          => ddr_we,
+      O_ddr_clk           => ddr_ck,
+      O_ddr_clk_n         => ddr_ck_n,
+      O_ddr_cke           => ddr_cke,
+      O_ddr_odt           => ddr_odt,
+      O_ddr_reset_n       => ddr_reset_n,
+      O_ddr_dqm           => ddr_dm,
+      IO_ddr_dq           => ddr_dq,
+      IO_ddr_dqs          => ddr_dqs,
+      IO_ddr_dqs_n        => ddr_dqs_n
+    );
+
+  ddr_bridge_i : entity work.ddr3_byte_bridge
+    generic map (ADDR_BITS => 15, MASK_BIT_MASKS => true)
+    port map (
+      clk_sys   => clk_sys,
+      rst_sys_n => reset_n,
+      req       => sram_ext_req,
+      we        => sram_ext_we,
+      addr      => sram_ext_addr,
+      din       => sram_ext_din,
+      dout      => sram_ext_dout,
+      ack       => sram_ext_ack,
+      ram_ready => ram_ready,
+
+      ram_test_active    => ram_test_active,
+      ram_test_done      => ram_test_done,
+      ram_test_error     => ram_test_error,
+      ram_test_phase     => ram_test_phase,
+      ram_test_addr      => ram_test_addr,
+      ram_test_fail_addr => ram_test_fail_addr,
+      ram_test_expected  => ram_test_expected,
+      ram_test_actual    => ram_test_actual,
+
+      clk_x1              => ddr_clk_x1,
+      init_calib_complete => ddr_calib_complete,
+      dbg_pll_lock        => ddr_pll_lock,
+      app_cmd             => app_cmd,
+      app_cmd_en          => app_cmd_en,
+      app_cmd_rdy         => app_cmd_rdy,
+      app_addr            => app_addr27,
+      app_wren            => app_wren,
+      app_wdata           => app_wdata,
+      app_wdata_end       => app_wdata_end,
+      app_wdata_mask      => app_wdata_mask,
+      app_wdata_rdy       => app_wdata_rdy,
+      app_rdata           => app_rdata,
+      app_rdata_valid     => app_rdata_valid
+    );
+
   led(0) <= not (boot_done or sd_init_done) when boot_done = '0' else not via_portb(0);
   led(1) <= not (boot_error or sd_seen_read_end) when boot_done = '0' else not via_portb(1);
-  led(2) <= not via_portb(2);
-  led(3) <= not via_portb(3);
+  -- DDR3 bring-up diagnostics until the CPU is released:
+  --   LED2 lit = DDR memory PLL locked, LED3 lit = DDR3 calibration complete.
+  led(2) <= not ddr_pll_lock        when sbc_boot_done = '0' else not via_portb(2);
+  led(3) <= not ddr_calib_complete  when sbc_boot_done = '0' else not via_portb(3);
 
 end architecture;

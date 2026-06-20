@@ -29,6 +29,9 @@ add_file -type vhdl {../../../rtl/core/cpu/t65_adapter.vhd}
 add_file -type vhdl {../../../rtl/core/bus_decode.vhd}
 add_file -type vhdl {../../../rtl/core/sbc_t65_boot_monitor_top.vhd}
 add_file -type vhdl {../../../rtl/core/hdmi/tmds_encoder.vhd}
+add_file -type verilog {src/gowin_rpll/gowin_rpll.v}
+add_file -type verilog {src/ddr3_memory_interface/ddr3_memory_interface.v}
+add_file -type vhdl {../rtl/ddr3_byte_bridge.vhd}
 add_file -type vhdl {../rtl/tang20k_hdmi_tx.vhd}
 add_file -type vhdl {../rtl/tang20k_sbc_top.vhd}
 add_file -type cst {../constraints/tang20k_sbc.cst}

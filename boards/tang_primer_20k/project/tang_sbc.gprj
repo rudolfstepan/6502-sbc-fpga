@@ -54,6 +54,11 @@
         <!-- HDMI TMDS encoder (generic, reusable) -->
         <File path="../../../rtl/core/hdmi/tmds_encoder.vhd" type="file.vhdl" enable="1"/>
 
+        <!-- DDR3 main RAM: Gowin DDR3 Memory Interface IP + rPLL (generated) -->
+        <File path="src/gowin_rpll/gowin_rpll.v" type="file.verilog" enable="1"/>
+        <File path="src/ddr3_memory_interface/ddr3_memory_interface.v" type="file.verilog" enable="1"/>
+        <File path="../rtl/ddr3_byte_bridge.vhd" type="file.vhdl" enable="1"/>
+
         <!-- Board top and HDMI TX (Tang Primer 20K, Gowin-specific primitives) -->
         <File path="../rtl/tang20k_hdmi_tx.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/tang20k_sbc_top.vhd" type="file.vhdl" enable="1"/>

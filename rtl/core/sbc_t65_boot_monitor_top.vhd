@@ -45,6 +45,16 @@ entity sbc_t65_boot_monitor_top is
 
     via_portb   : out data_t;
 
+    -- External main-RAM byte port (DDR3 via ddr3_byte_bridge on the board).
+    -- Covers the SRAM device region except the BRAM-backed zero page. The CPU is
+    -- held (cpu_rdy='0') for the whole access; payload is latched at sram_ext_req.
+    sram_ext_req  : out std_logic;                      -- 1-clk pulse: start access
+    sram_ext_we   : out std_logic;                      -- 1=write, 0=read
+    sram_ext_addr : out std_logic_vector(14 downto 0);  -- byte address (latched)
+    sram_ext_din  : out data_t;                         -- write byte (latched)
+    sram_ext_dout : in  data_t := (others => '0');      -- read byte (held by bridge)
+    sram_ext_ack  : in  std_logic := '0';               -- 1-clk pulse: access complete
+
     -- PT8211 audio DAC (I2S-style serial output)
     dac_bck     : out std_logic;
     dac_ws      : out std_logic;
@@ -117,6 +127,29 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal sram_we_mux : std_logic;
   signal sram_addr_mux : std_logic_vector(14 downto 0);
   signal sram_din_mux  : data_t;
+
+  -- External main-RAM (DDR3) access controller.  sram_dout now comes from the
+  -- bridge instead of an internal BSRAM.
+  --
+  -- CPU writes are captured into a one-deep deferred latch the moment the write
+  -- strobe fires (T65 write cycles cannot be reliably stretched with RDY — see
+  -- sdram_if.vhd / the bitmap deferred-write mechanism), then drained to the
+  -- bridge with priority.  CPU reads and all monitor accesses stall via cpu_rdy
+  -- until the bridge acknowledges.  Reads are held off while a write is pending
+  -- so a read-after-write never returns stale data.
+  signal cpu_rd_acc    : std_logic;                       -- CPU read of the DDR region
+  signal mon_acc       : std_logic;                       -- monitor SRAM access pending
+  signal cpu_wr_strobe : std_logic;                       -- CPU write strobe to DDR region
+  signal sram_busy     : std_logic := '0';                -- req issued, awaiting ack
+  signal sram_complete : std_logic := '0';                -- current read/monitor access done
+  signal sram_stall    : std_logic;                       -- hold CPU for RAM
+  signal sram_rd_addr  : std_logic_vector(14 downto 0) := (others => '0');  -- served CPU read addr
+  signal serving_mon   : std_logic := '0';                -- current access is the monitor's
+  signal serving_write : std_logic := '0';                -- current in-flight op is a write drain
+  signal sram_wr_pending : std_logic := '0';              -- a CPU write awaits drain
+  signal sram_wr_addr    : std_logic_vector(14 downto 0) := (others => '0');
+  signal sram_wr_data    : data_t := (others => '0');
+  signal sram_wr_overflow : std_logic := '0';             -- debug: write lost (should never set)
   signal rom_addr_mux : std_logic_vector(13 downto 0);
   signal rom_load_we_mux   : std_logic;
   signal rom_load_addr_mux : std_logic_vector(13 downto 0);
@@ -221,8 +254,27 @@ begin
   end process;
 
   cpu_bus_we <= cpu_we and not cpu_enable;
+
+  -- External main-RAM (DDR3) access classification.
+  cpu_rd_acc    <= '1' when monitor_hold = '0' and dev_sel = DEV_SRAM and zp_cs = '0'
+                            and cpu_we = '0' else '0';
+  cpu_wr_strobe <= '1' when monitor_hold = '0' and cpu_bus_we = '1'
+                            and dev_sel = DEV_SRAM and zp_cs = '0' else '0';
+  mon_acc       <= '1' when monitor_hold = '1' and mon_mem_state = M_SRAM_WAIT else '0';
+
+  -- Stall the CPU while: its read has not completed; a write is queued/draining
+  -- (so reads see committed data and a second write cannot be lost); or any
+  -- bridge op is in flight.
+  sram_stall <= '1' when (cpu_rd_acc = '1' and sram_complete = '0')
+                      or sram_wr_pending = '1'
+                      or sram_busy = '1'
+                else '0';
+
   cpu_rdy    <= not vic_stealing and not vic_stealing_d and
-                not vram_wr_pending and not bitmap_wr_pending and not monitor_hold;
+                not vram_wr_pending and not bitmap_wr_pending and not monitor_hold
+                and not sram_stall;
+
+  sram_dout  <= sram_ext_dout;
   cpu_irq_n  <= not (via_irq or uart_irq or usb_irq);
   usb_cs     <= '1' when monitor_hold = '0' and dev_sel = DEV_USB else '0';
 
@@ -492,10 +544,101 @@ begin
     port map (clk => clk, we => zp_we_mux,
               addr => zp_addr_mux, din => zp_din_mux, dout => zp_dout);
 
-  sram_i : entity work.sync_ram
-    generic map (ADDR_WIDTH => 15, ASYNC_READ => false)
-    port map (clk => clk, we => sram_we_mux,
-              addr => sram_addr_mux, din => sram_din_mux, dout => sram_dout);
+  -- Main RAM is external DDR3 via ddr3_byte_bridge (instantiated at board top).
+  -- This controller drives the bridge req/ack byte port:
+  --   * CPU writes are captured into a one-deep latch the instant the strobe
+  --     fires and drained to the bridge with priority (never lost / stretched).
+  --   * CPU reads and monitor accesses issue a request and complete on ack;
+  --     the requester stalls (cpu_rdy / mon FSM) until then.
+  sram_acc_ctrl : process(clk)
+  begin
+    if rising_edge(clk) then
+      if reset_n = '0' then
+        sram_busy        <= '0';
+        sram_complete    <= '0';
+        serving_mon      <= '0';
+        serving_write    <= '0';
+        sram_ext_req     <= '0';
+        sram_ext_we      <= '0';
+        sram_ext_addr    <= (others => '0');
+        sram_ext_din     <= (others => '0');
+        sram_rd_addr     <= (others => '0');
+        sram_wr_pending  <= '0';
+        sram_wr_addr     <= (others => '0');
+        sram_wr_data     <= (others => '0');
+        sram_wr_overflow <= '0';
+      else
+        sram_ext_req <= '0';
+
+        -- Capture a CPU write the moment its strobe fires (independent of FSM
+        -- state).  Spacing of 6502 stores far exceeds DDR latency, so the
+        -- one-deep latch never overflows in practice; flag it if it ever does.
+        if cpu_wr_strobe = '1' then
+          if sram_wr_pending = '0' then
+            sram_wr_pending <= '1';
+            sram_wr_addr    <= cpu_addr(14 downto 0);
+            sram_wr_data    <= cpu_dout;
+          else
+            sram_wr_overflow <= '1';
+          end if;
+        end if;
+
+        if sram_busy = '0' then
+          if sram_complete = '0' then
+            if sram_wr_pending = '1' then
+              -- drain queued write first (priority)
+              sram_ext_req <= '1';
+              sram_ext_we  <= '1';
+              sram_ext_addr <= sram_wr_addr;
+              sram_ext_din  <= sram_wr_data;
+              sram_busy    <= '1';
+              serving_mon  <= '0';
+              serving_write <= '1';
+            elsif cpu_rd_acc = '1' then
+              sram_ext_req  <= '1';
+              sram_ext_we   <= '0';
+              sram_ext_addr <= cpu_addr(14 downto 0);
+              sram_rd_addr  <= cpu_addr(14 downto 0);
+              sram_busy     <= '1';
+              serving_mon   <= '0';
+              serving_write <= '0';
+            elsif mon_acc = '1' then
+              sram_ext_req  <= '1';
+              sram_ext_we   <= mon_we_lat;
+              sram_ext_addr <= mon_addr_lat(14 downto 0);
+              sram_ext_din  <= mon_wdata_lat;
+              sram_busy     <= '1';
+              serving_mon   <= '1';
+              serving_write <= '0';
+            end if;
+          end if;
+        else
+          if sram_ext_ack = '1' then
+            sram_busy <= '0';
+            if serving_write = '1' then
+              -- write drain finished
+              sram_wr_pending <= '0';
+            else
+              -- CPU read or monitor access finished
+              sram_complete <= '1';
+            end if;
+          end if;
+        end if;
+
+        -- Release the completion flag once the requester has moved on.
+        if sram_complete = '1' then
+          if serving_mon = '1' then
+            if mon_acc = '0' then
+              sram_complete <= '0';
+              serving_mon   <= '0';
+            end if;
+          elsif cpu_rd_acc = '0' or cpu_addr(14 downto 0) /= sram_rd_addr then
+            sram_complete <= '0';
+          end if;
+        end if;
+      end if;
+    end if;
+  end process;
 
   rom_i : entity work.boot_shadow_rom
     generic map (ADDR_WIDTH => 14)
@@ -659,9 +802,12 @@ begin
             mon_rdata_reg <= zp_dout;
             mon_mem_state <= M_READY;
           when M_SRAM_WAIT =>
-            mon_mem_state <= M_SRAM_READY;
+            -- DDR3-backed: hold until the bridge access completes.
+            if sram_complete = '1' then
+              mon_mem_state <= M_SRAM_READY;
+            end if;
           when M_SRAM_READY =>
-            mon_rdata_reg <= sram_dout;
+            mon_rdata_reg <= sram_dout;  -- held by the bridge
             mon_mem_state <= M_READY;
           when M_ROM_RD_WAIT =>
             mon_mem_state <= M_ROM_RD_READY;

@@ -7,7 +7,7 @@ Target: Sipeed Tang Primer 20K (Gowin GW2A-LV18PG256C8/I7)
 | Resource       | Value                        |
 |----------------|------------------------------|
 | FPGA           | Gowin GW2A-18C / `GW2A-LV18PG256C8/I7` |
-| SDRAM          | 64 MB (onboard)              |
+| DDR3 SDRAM     | 64 MB (onboard) — backs the 6502 main RAM via the Gowin DDR3 IP |
 | Clock          | 27 MHz oscillator; PLL derives 54 MHz SBC / 27 MHz pixel / 135 MHz TMDS |
 | UART           | CH340 USB-UART / pins `M11/T13` |
 | Video          | HDMI out                     |
@@ -67,9 +67,10 @@ Current bring-up status:
 - PS/2 keyboard input works via PMOD 0 — keystrokes are injected into the
   UART receive path so EhBASIC and the monitor see them without software changes.
 
-The Tang boot core currently uses internal BSRAM for main RAM instead of the
-on-board SDRAM. Pressing KEY1 enters the FPGA UART monitor, holds the 6502 CPU,
-and switches HDMI back to the diagnostic screen while monitor operations run.
+The 6502 main RAM is the on-board **DDR3** (via the Gowin DDR3 Memory Interface
+IP); only the zero page stays in BRAM for speed. See *Main RAM in DDR3* below.
+Pressing KEY1 enters the FPGA UART monitor, holds the 6502 CPU, and switches HDMI
+back to the diagnostic screen while monitor operations run.
 
 ### Buttons (reset / monitor)
 
@@ -78,7 +79,15 @@ The two on-board push buttons are active-low with internal pull-ups:
 | Button                 | FPGA pin | Function                               |
 |------------------------|----------|----------------------------------------|
 | **KEY0** (dock **S0**) | `T10`    | Reset button (see below)               |
-| **KEY1** (dock **S1**) | `T3`     | Enter UART monitor / hold the 6502 CPU |
+| **KEY1** (rewired)     | `T6`     | Enter UART monitor / hold the 6502 CPU |
+
+> **DDR3 bank conflict:** DDR3 occupies I/O banks 4, 5 and 6 (forced to
+> SSTL15 / 1.5 V). The dock buttons S1–S5 all live in those banks (S1=`T3` is in
+> Bank 4), so only S0 (`T10`, Bank 3) survives. `key[1]` is therefore moved to
+> the free Bank-3 pin **`T6`** on PMOD0 (next to the PS/2 pins `T7`/`T8`). To use
+> the monitor button, wire a momentary button from that header pin to GND; with
+> nothing connected the internal pull-up reads it inactive, so the board still
+> works (just without a monitor button).
 
 KEY0 is a dual-action reset, debounced and synchronised in the 54 MHz `clk_sys`
 domain:
@@ -212,7 +221,46 @@ Quick test from BASIC:
 50 POKE 34869,0   : REM gate off
 ```
 
+## Main RAM in DDR3
+
+The 6502's 32 KB main RAM lives in the on-board **DDR3** SDRAM, freeing ~16 BSRAM
+blocks (the design was at 34/46 = 74 %). Only the zero page (`$0000–$01FF`) stays
+in BRAM, where its single-cycle latency matters most for stack/zero-page-heavy
+6502 code.
+
+How it fits together:
+
+- **Gowin DDR3 Memory Interface IP** (`project/src/ddr3_memory_interface/`) +
+  its memory-clock PLL (`project/src/gowin_rpll/`) — generated IP, copied from
+  the Sipeed `TangPrimer-20K-example/DDR-test`. The IP user interface is 128-bit
+  and runs in its own 100 MHz clock domain (`clk_x1`); the memory clock is
+  ~400 MHz (DDR-800).
+- **`rtl/ddr3_byte_bridge.vhd`** — adapts the 6502 single-byte bus (54 MHz
+  `clk_sys`) to the IP: a req/ack clock-domain crossing, single-burst (BL8)
+  access with the byte address split into a 16-byte line + lane, byte writes via
+  the IP write-data mask (no read-modify-write), and a **power-on RAM self-test**
+  that fills and verifies the whole 32 KB before releasing the CPU.
+- The core (`sbc_t65_boot_monitor_top`) exposes a byte port (`sram_ext_*`) and
+  stalls the CPU (`cpu_rdy`) for the whole DDR access; the monitor SRAM path
+  waits the same way.
+
+The CPU is held until **both** the SD ROM load (`boot_done`) and DDR3
+calibration + self-test (`ram_ready`) complete. The boot/diagnostic screen shows
+the self-test status (`ram_test_*`); a mismatch there means the bridge address
+mapping, byte-lane order or write-mask polarity needs adjustment for the IP.
+
+> **Performance:** every non-zero-page RAM access now stalls the 6502 for the DDR
+> latency (CDC + IP). This is functionally transparent but lowers CPU throughput
+> versus the old single-cycle BSRAM.
+
 ## Build
+
+> **⚠️ GUI-only:** the Gowin DDR3 IP is supported only inside the **GOWIN FPGA
+> Designer** (GUI). The `make build` / `gw_sh build.tcl` script flow is no longer
+> the supported path for this board — open `project/tang_sbc.gprj` in the IDE and
+> run Place & Route (see *Opening in GOWIN FPGA Designer*). The IP `.v` files are
+> listed in `build.tcl` too, but the script flow may fail to build the encrypted
+> DDR3 PHY.
 
 ### Prerequisites
 
