@@ -16,6 +16,7 @@
 
         <!-- Peripherals -->
         <File path="../../../rtl/core/peripherals/via6522.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/peripherals/math_copro.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/peripherals/uart6551.vhd" type="file.vhdl" enable="1"/>

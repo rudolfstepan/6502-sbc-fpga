@@ -63,7 +63,8 @@ rtl/core/
 │   ├── peripherals/uart6551.vhd   — UART 6551: CPU TX/RX registers
 │   ├── peripherals/vic_vga.vhd    — VIC: bus stealing + VGA/HDMI pixel output
 │   ├── peripherals/sound_voice.vhd — single-voice synth (channel 0, $8830)
-│   └── peripherals/pt8211_dac.vhd  — PT8211 audio DAC I2S serializer
+│   ├── peripherals/pt8211_dac.vhd  — PT8211 audio DAC I2S serializer
+│   └── peripherals/math_copro.vhd  — math coprocessor: signed 32×32 fixed-point multiply ($88B0); see FPU.md
 
 third_party/alinx_sd/              — vendor SD-card SPI sector core
 ```

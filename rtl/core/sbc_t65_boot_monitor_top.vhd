@@ -108,6 +108,9 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vic_reg_dout : data_t;
   signal via_dout    : data_t;
   signal uart_dout   : data_t;
+  signal math_dout   : data_t;
+  signal math_cs     : std_logic;
+  signal math_we     : std_logic;
 
   -- 4-voice sound chip (sound_chip4). One chip-select per voice; the voices
   -- live at $8830, $8890, $889A, $88A4 (not all 16-aligned) so the register
@@ -285,6 +288,8 @@ begin
   vic_reg_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_REG else '0';
   via_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_VIA      else '0';
   uart_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_UART     else '0';
+  math_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
+  math_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
 
   -- Per-voice chip-selects, shared write strobe, and the register offset for
   -- whichever voice is currently addressed (cpu_addr - voice base).
@@ -417,7 +422,7 @@ begin
 
   process(dev_sel, zp_cs, zp_dout, sram_dout, rom_dout, vram_dout, vic_reg_dout, via_dout,
           uart_dout, mon_jump_vector_active, mon_jump_vector, cpu_addr, bitmap_dout,
-          sound_dout)
+          sound_dout, math_dout)
   begin
     case dev_sel is
       when DEV_SRAM =>
@@ -448,6 +453,8 @@ begin
         cpu_din <= bitmap_dout;
       when DEV_SOUND0 | DEV_SOUND1 | DEV_SOUND2 | DEV_SOUND3 =>
         cpu_din <= sound_dout;
+      when DEV_MATH =>
+        cpu_din <= math_dout;
       when others =>
         cpu_din <= x"FF";
     end case;
@@ -675,6 +682,19 @@ begin
       porta_out => open,
       portb_out => via_portb,
       irq       => via_irq
+    );
+
+  -- Math coprocessor: signed 32x32 fixed-point multiplier ($88B0-$88BF).
+  -- Off-loads the fixed-point multiply that dominates Mandelbrot/DSP code.
+  math_i : entity work.math_copro
+    port map (
+      clk     => clk,
+      reset_n => cpu_reset_n,
+      cs      => math_cs,
+      we      => math_we,
+      addr    => cpu_addr(3 downto 0),
+      din     => cpu_dout,
+      dout    => math_dout
     );
 
   -- ── Sound: 4-voice synth (ADSR + 5 waveforms) + PT8211 DAC ────────────

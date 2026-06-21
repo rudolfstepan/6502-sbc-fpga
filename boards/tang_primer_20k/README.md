@@ -268,6 +268,21 @@ occasionally marginal — no manual reset presses needed.
 > latency (CDC + IP). This is functionally transparent but lowers CPU throughput
 > versus the old single-cycle BSRAM.
 
+## Math coprocessor (FPU)
+
+A small memory-mapped **signed 32×32 fixed-point multiplier** at `$88B0` turns the
+GW2A's hardware DSP blocks into a peripheral the 6502 can drive, off-loading the
+multiply that 8-bit fixed-point code spends all its time on. Default format is
+**8.24**; the shift is a register, so any Q-format works.
+
+Measured on this board: the Mandelbrot renderer ([`sw/mandelbrot_copro.s`](../../sw/mandelbrot_copro.s))
+drops from **~5–8 minutes** (software multiply, 4.12) to **~10 seconds** (8.24),
+with a sharper image.
+
+Verify the coprocessor on hardware with [`sw/copro_selftest.s`](../../sw/copro_selftest.s)
+(green screen + `COPRO 2.0*3.0=06000000 OK` over UART). Full register map, timing
+and 6502 usage: **[Math Coprocessor (FPU)](../../docs/FPU.md)**.
+
 ## Build
 
 > **⚠️ GUI-only:** the Gowin DDR3 IP is supported only inside the **GOWIN FPGA

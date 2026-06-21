@@ -64,6 +64,10 @@ package sbc_pkg is
   constant ADDR_SOUND3_BASE     : unsigned(15 downto 0) := x"88A4";
   constant ADDR_SOUND3_LAST     : unsigned(15 downto 0) := x"88AD";
 
+  -- Math coprocessor: signed 32x32 fixed-point multiplier (16 bytes)
+  constant ADDR_MATH_BASE       : unsigned(15 downto 0) := x"88B0";
+  constant ADDR_MATH_LAST       : unsigned(15 downto 0) := x"88BF";
+
   -- VIC Sprite data: Sprite pattern storage (256 bytes)
   constant ADDR_VIC_SPD_BASE    : unsigned(15 downto 0) := x"8900";
   constant ADDR_VIC_SPD_LAST    : unsigned(15 downto 0) := x"89FF";
@@ -98,6 +102,7 @@ package sbc_pkg is
     DEV_VIC_SPD,   -- Sprite pattern data
     DEV_VIC_REG,   -- VIC control registers
     DEV_VIC_BMP,   -- Bitmap frame buffer
+    DEV_MATH,      -- Fixed-point math coprocessor
     DEV_ROM        -- Read-only firmware
   );
 

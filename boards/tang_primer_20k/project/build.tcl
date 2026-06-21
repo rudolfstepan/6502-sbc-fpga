@@ -6,6 +6,7 @@ add_file -type vhdl {../../../third_party/t65/rtl/T65_MCode.vhd}
 add_file -type vhdl {../../../third_party/t65/rtl/T65_ALU.vhd}
 add_file -type vhdl {../../../third_party/t65/rtl/T65.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/via6522.vhd}
+add_file -type vhdl {../../../rtl/core/peripherals/math_copro.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/uart_tx_ser.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/uart_rx_ser.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/uart6551.vhd}

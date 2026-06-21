@@ -61,6 +61,7 @@ failure while the CPU remains held.
 | $8800-$880F | 16 B | VIA 6522 | Port B bit 0 -> board LED 1 after boot |
 | $8810-$8813 | 4 B | UART 6551 | CPU UART registers |
 | $8830-$8839 | 10 B | Sound channel 0 | Single-voice synth → PT8211 DAC (Tang dock); see [Sound Chip](./SOUND.md) |
+| $88B0-$88BF | 16 B | Math coprocessor (FPU) | Signed 32×32 fixed-point multiply (8.24); see [Math Coprocessor](./FPU.md) |
 | $C000-$FFFF | 16 KB | Shadow ROM RAM | Loaded from SD or patched by UART monitor |
 
 ---

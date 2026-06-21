@@ -63,6 +63,9 @@ begin
     -- 0x88A4-0x88AD: Sound synthesizer channel 3 (10 bytes)
     elsif in_range(addr, ADDR_SOUND3_BASE, ADDR_SOUND3_LAST) then
       sel <= DEV_SOUND3;
+    -- 0x88B0-0x88BF: Math coprocessor (signed 32x32 fixed-point multiply)
+    elsif in_range(addr, ADDR_MATH_BASE, ADDR_MATH_LAST) then
+      sel <= DEV_MATH;
     -- 0x8900-0x89FF: VIC sprite pattern data storage (256 bytes)
     elsif in_range(addr, ADDR_VIC_SPD_BASE, ADDR_VIC_SPD_LAST) then
       sel <= DEV_VIC_SPD;
