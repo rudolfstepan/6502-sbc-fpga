@@ -3,7 +3,7 @@
 Send an EhBASIC .bas program line-by-line over UART.
 
 Usage:
-  python fpga/tools/upload_basic_uart.py mandelbrot.bas --port COM15
+  python tools/upload_basic_uart.py examples/siddemo.bas --port COM15 --new --run
 
 Assumption:
   EhBASIC is already running on the FPGA and waiting at its prompt.
@@ -128,8 +128,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
 
     parser.add_argument("file", help=".bas file to send")
-    parser.add_argument("--port", default=DEFAULT_PORT, help="serial port, default COM15")
-    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="baud rate, default 230400")
+    parser.add_argument("--port", default=DEFAULT_PORT, help=f"serial port, default {DEFAULT_PORT}")
+    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"baud rate, default {DEFAULT_BAUD}")
     parser.add_argument("--encoding", default="ascii", help="source file encoding, default ascii")
 
     parser.add_argument("--line-delay", type=float, default=0.08, help="delay after each BASIC line")

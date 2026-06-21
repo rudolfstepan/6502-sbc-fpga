@@ -50,9 +50,10 @@ the SBC is `270/5 = 54 MHz`, and OSER10 PCLK is derived directly from its FCLK a
 `135/5 = 27 MHz`. The direct FCLK/PCLK relationship is required for stable HDMI.
 
 On reset the FPGA shows the boot/status diagnostic screen while it initializes
-the on-board microSD/SDIO slot in SPI mode and loads the 16 KB ROM image into
-shadow ROM. After a successful load the CPU is released and HDMI switches to the
-SBC VIC output.
+the on-board microSD/SDIO slot in SPI mode and loads the 16 KB physical image
+into shadow ROM. The CPU sees `$A000-$CFFF` and `$F000-$FFFF`; `$D000-$EFFF`
+remains free for I/O, including SID at `$D400-$D418`. After a successful load
+the CPU is released and HDMI switches to the SBC VIC output.
 
 Current bring-up status:
 
@@ -67,8 +68,12 @@ Current bring-up status:
 - PS/2 keyboard input works via PMOD 0 — keystrokes are injected into the
   UART receive path so EhBASIC and the monitor see them without software changes.
 
-The 6502 main RAM is the on-board **DDR3** (via the Gowin DDR3 Memory Interface
-IP); only the zero page stays in BRAM for speed. See *Main RAM in DDR3* below.
+The lower 16 KB of 6502 RAM (`$0000-$3FFF`) is BRAM; the remaining main-RAM
+addresses use the on-board **DDR3** through the Gowin DDR3 Memory Interface IP.
+See *Main RAM in DDR3* below.
+The address range `$6000-$7FFF` is intercepted by a dedicated 8-KB bitmap RAM;
+its first 8000 bytes hold the visible image. EhBASIC's configured
+`$0200-$3FFF` workspace remains unaffected.
 Pressing KEY1 enters the FPGA UART monitor, holds the 6502 CPU, and switches HDMI
 back to the diagnostic screen while monitor operations run.
 
@@ -112,7 +117,7 @@ through both reset types.
 > `dk_video` examples, whose reset is `T10`). An earlier `T5` assignment was not
 > the physical button and produced a dead reset key.
 
-The CH340 UART is connected to the SBC UART at 230400 8N1 on FPGA pins `M11`
+The CH340 UART is connected to the SBC UART at 115200 8N1 on FPGA pins `M11`
 (`uart_tx`) and `T13` (`uart_rx`). On Windows this appears as a COM port such as
 `COM12` and is used for normal SBC input and output. The USB-OTG connector for
 peripherals is separate from this UART path.

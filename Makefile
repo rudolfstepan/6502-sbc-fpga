@@ -23,6 +23,7 @@ RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/peripherals/vic_pixel_gen.vhd rtl/core/peripherals/vic_vga.vhd \
       rtl/core/peripherals/sound_voice.vhd rtl/core/peripherals/pt8211_dac.vhd \
       rtl/core/peripherals/sound_voice_full.vhd rtl/core/peripherals/sound_chip4.vhd \
+      rtl/core/peripherals/sid6581.vhd \
       rtl/core/boot/boot_debug_uart.vhd rtl/core/boot/boot_vga_debug.vhd \
       rtl/core/boot/boot_sdram_test.vhd rtl/core/boot/uart_debug_monitor.vhd \
       rtl/core/cpu/t65_adapter.vhd rtl/core/cpu6502_slot.vhd rtl/core/sbc_top.vhd \

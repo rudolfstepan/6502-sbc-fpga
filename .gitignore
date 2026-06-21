@@ -60,3 +60,13 @@ sw/*.bin
 sw/*.lst
 sw/*.map
 sw/*.o
+sw/*.rom
+
+# Local SID-analysis build products
+tools/sid_dump_full.exe
+tools/world_record_2_full.raw
+
+# Local assistant/editor state and Python bytecode caches
+.claude/
+__pycache__/
+*.py[cod]

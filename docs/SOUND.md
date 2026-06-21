@@ -189,6 +189,20 @@ matching the emulator. ATTACK/DECAY/RELEASE are in units of 8 ms; SUSTAIN is a
 0–255 level; duration is in ms; frequency in Hz (0 → 440 default, clamped
 20–12000).
 
+For SID-style pulse waves, three compatibility registers extend the otherwise
+unchanged voice layout:
+
+| Address | Register | Function |
+| --- | --- | --- |
+| `$883B` | PULSE0 | Voice 0 pulse width, upper 8 bits of the SID 12-bit value |
+| `$883C` | PULSE1 | Voice 1 pulse width, upper 8 bits of the SID 12-bit value |
+| `$883D` | PULSE2 | Voice 2 pulse width, upper 8 bits of the SID 12-bit value |
+
+`$80` selects 50% duty cycle and is the reset default. The pulse output is
+DC-balanced as its duty cycle changes, avoiding amplifier clicks during PWM.
+The converted SID ROM updates these registers at the original 50 Hz player
+rate; sine, sawtooth, triangle, and noise voices are unaffected.
+
 ### Implementation notes
 
 - **Sine** uses a hard-coded 256-entry signed LUT (`SINE`), indexed by the top 8
@@ -198,6 +212,8 @@ matching the emulator. ATTACK/DECAY/RELEASE are in units of 8 ms; SUSTAIN is a
 - **Envelope** is time-based (mirrors `envelope_at()` in the C code): a 1 ms time
   base drives a small ATK/DEC/SUS/REL state machine, and each ramp uses a
   division-free Bresenham accumulator (≤1 envelope step per clock).
+- **Pulse** uses a 12-bit phase comparator. Software-visible 8-bit pulse-width
+  values provide 256 duty-cycle steps and inexpensive frame-rate PWM.
 - **Mixer** sums the four signed voices; each voice is pre-scaled by `>>10`
   (volume/255 · env/255 · 0.25 headroom), so four max-volume voices sum without
   clipping. A hard clip guards corner cases.
@@ -207,21 +223,22 @@ matching the emulator. ATTACK/DECAY/RELEASE are in units of 8 ms; SUSTAIN is a
 ### Status
 
 Verified in simulation by [`sim/tb/tb_sound_chip4.vhd`](../sim/tb/tb_sound_chip4.vhd)
-(envelope attack, waveform swing, multi-voice mix, duration auto-stop) and **wired
-into the Tang Primer 20K board** in `sbc_t65_boot_monitor_top.vhd`, replacing the
-bring-up `sound_voice`. The four voices are selected by `DEV_SOUND0..3`
-(`$8830`, `$8890`, `$889A`, `$88A4`); because those bases are not all 16-aligned,
-the top computes each voice's register offset as `cpu_addr - base`. The mixed
-`sample_out` feeds `pt8211_dac`. Build sources are listed in
-`boards/tang_primer_20k/project/build.tcl` and `tang_sbc.gprj`.
+(envelope attack, waveform swing, multi-voice mix, duration auto-stop). It was
+previously wired into the Tang top at `$8830`, `$8890`, `$889A`, and `$88A4`.
+The current Tang bitstream instantiates `sid6581.vhd` instead and retains only
+the free-running millisecond counter at `$883A` for player timing. The legacy
+four-voice RTL remains in the repository for other targets and experiments.
 
-### Demo ROM (`soundtest.rom`)
+### Legacy demo ROM (`soundtest.rom`)
 
 [`fpga/sw/soundtest.s`](../sw/soundtest.s) is a standalone 6502 demo ROM that
 exercises all four voices — each waveform on voice 0, an ADSR swell, and a
 4-voice chord — and writes a "SOUND TEST" title to the HDMI text screen. It
-builds to a 16 KB image (`$C000-$FFFF`) and uploads through the UART monitor
-exactly like the EhBASIC ROM:
+currently retains the legacy contiguous `$C000-$FFFF` linker layout. It cannot
+be uploaded into the current Tang split-ROM map because it crosses the
+`$D000-$EFFF` I/O hole. Relink it like `soundsid.rom` before using it on the
+current bitstream. The commands below apply only to a legacy single-window
+build:
 
 ```sh
 make -C fpga/sw soundtest          # -> fpga/sw/soundtest.rom (16 KB)
@@ -235,6 +252,62 @@ make -C fpga/sw upload-soundtest
 
 The ROM's reset vector points at `$C000`, so it also runs from a cold boot if
 written to the SD card (wrap it with `fpga/tools/make_sd_boot_image.py`).
+
+## Native SID playback
+
+`sid6581.vhd` exposes the standard MOS 6581 register window at `$D400–$D418`.
+It implements the three oscillators, 12-bit pulse width, triangle, saw, pulse
+and noise waveforms, gate transitions, ADSR envelopes and master volume. On the
+Tang Primer build it replaces the legacy four-voice synthesizer: running both
+simultaneously exhausted the device's global clock networks and destabilized
+DDR3 PHY calibration. The legacy RTL remains available for other targets.
+
+`soundsid.rom` no longer contains a lossy 50 Hz register conversion. It embeds
+the original 4000-byte PSID payload, copies it to its native `$1000` load
+address, calls its `$1000` init routine, and invokes `$1006` every 20 ms. Thus
+all frequency, pulse-width, control and ADSR writes reach the hardware exactly
+as produced by the original player. This tune does not use the SID filter,
+oscillator sync or ring modulation; those functions are not yet implemented.
+
+The wrapper is linked at `$A000`; its embedded payload ends at `$B04A`, safely
+below the I/O hole. A padding window at `$F000-$FFF9` and vectors at
+`$FFFA-$FFFF` complete the 16 KB image in physical shadow-RAM order. Upload it
+with the split-image mode:
+
+```sh
+python tools/upload_monitor_hex.py roms/soundsid.rom --split-rom \
+       --port COM15 --baud 115200 --run --verbose
+# or build and upload:
+make -C sw upload-soundsid
+```
+
+On Windows, `roms\upload\soundsid.bat` uploads the already-built image with the
+same settings.
+
+Regenerate the wrapper source with:
+
+```sh
+python tools/build_native_sid_rom.py path/to/tune.sid sw/soundsid.s
+make -C sw soundsid
+```
+
+See [Split ROM and Native SID Update](./SPLIT_ROM_SID_UPDATE.md) for the full
+memory-map migration and compatibility notes.
+
+### EhBASIC SID demo
+
+[`examples/siddemo.bas`](../examples/siddemo.bas) drives the SID registers
+directly from EhBASIC. It demonstrates triangle, sawtooth and pulse waveforms,
+packed SID ADSR values, a three-voice chord, and a short melody. Frequencies in
+hertz are converted to PAL SID phase increments with
+`INT(hz * 16777216 / 985248)`.
+
+With EhBASIC running at its prompt:
+
+```powershell
+python tools\upload_basic_uart.py examples\siddemo.bas --port COM15 `
+       --baud 115200 --new --run --verbose
+```
 
 ## See Also
 

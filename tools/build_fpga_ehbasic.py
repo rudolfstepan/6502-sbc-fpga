@@ -26,7 +26,7 @@ Optional flags:
 
 Usage:
   python fpga/tools/build_fpga_ehbasic.py
-  python fpga/tools/build_fpga_ehbasic.py --upload --port COM15 --baud 230400 --run --verbose
+  python tools/build_fpga_ehbasic.py --upload --port COM15 --baud 115200 --run --verbose
 """
 from __future__ import annotations
 
@@ -41,15 +41,19 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-ROOT        = Path(__file__).resolve().parent.parent.parent
-CACHE_ASM   = ROOT / "tools" / "ehbasic_port" / ".cache" / "basic.asm"
-KERNEL_ROM  = ROOT / "roms" / "kernel.rom"
-WRAPPER_S   = ROOT / "fpga" / "sw" / "ehbasic_fpga.s"
-LINKER_CFG  = ROOT / "fpga" / "sw" / "ehbasic_fpga.cfg"
-OUT_DIR     = ROOT / "fpga" / "roms"
+# This is the standalone 6502-sbc-fpga repo.  Wrapper/output live here; the
+# EhBASIC source cache and kernel.rom are pulled from the sibling emulator repo
+# (6502-sbc-emulator) that sits next to this one under the same parent.
+ROOT        = Path(__file__).resolve().parent.parent          # 6502-sbc-fpga
+SIBLING     = ROOT.parent / "6502-sbc-emulator"               # build-input source
+CACHE_ASM   = SIBLING / "tools" / "ehbasic_port" / ".cache" / "basic.asm"
+KERNEL_ROM  = SIBLING / "roms" / "kernel.rom"
+WRAPPER_S   = ROOT / "sw" / "ehbasic_fpga.s"
+LINKER_CFG  = ROOT / "sw" / "ehbasic_fpga.cfg"
+OUT_DIR     = ROOT / "roms"
 OUT_ROM     = OUT_DIR / "fpga_ehbasic_16kb.rom"
 OUT_IMG     = OUT_DIR / "fpga_ehbasic_16kb.img"
-SD_IMG_TOOL = ROOT / "fpga" / "tools" / "make_sd_boot_image.py"
+SD_IMG_TOOL = ROOT / "tools" / "make_sd_boot_image.py"
 
 KERNEL_SIZE  = 0x1000   # 4 KB
 EHBASIC_SIZE = 0x3000   # 12 KB
@@ -91,11 +95,12 @@ def patch_basic_asm(src: Path, dst: Path) -> None:
         sys.exit("ERROR: could not find '*= $C000' in basic.asm — wrong source?")
     print("  patched: removed *=$C000 origin")
 
-    # 2. Set Ram_top = $8000 (FPGA SRAM ends at $7FFF)
-    text, n = re.subn(r"(Ram_top\s*=\s*)\$C000", r"\g<1>$8000", text, count=1)
+    # 2. Set Ram_top = $4000.  BASIC's whole working RAM ($0200-$3FFF) then lives
+    # in the on-chip 16 KB BRAM window, never touching DDR3 (single-cycle, reliable).
+    text, n = re.subn(r"(Ram_top\s*=\s*)\$C000", r"\g<1>$4000", text, count=1)
     if n == 0:
         sys.exit("ERROR: could not find 'Ram_top = $C000' in basic.asm")
-    print("  patched: Ram_top $C000 -> $8000")
+    print("  patched: Ram_top $C000 -> $4000")
 
     # 2b. Relocate I/O vectors to ZP BRAM to avoid SDRAM indirect timing issue.
     # JMP (VEC_OUT) reads $E4/$E5 from ZP BRAM (single cycle) instead of
@@ -150,7 +155,7 @@ def patch_basic_asm(src: Path, dst: Path) -> None:
     if old_mem_prompt not in text:
         sys.exit("ERROR: could not find memory-size prompt block in basic.asm")
     text = text.replace(old_mem_prompt, new_mem_prompt, 1)
-    print("  patched: skipped interactive Memory size prompt (Ram_top=$8000)")
+    print("  patched: skipped interactive Memory size prompt (Ram_top=$4000)")
 
     # 3. Bracketed immediates  #[expr] -> #(expr)
     text, cnt = re.subn(r"#\[([^\]]+)\]", r"#(\1)", text)
@@ -287,19 +292,28 @@ def main() -> None:
         )
     kernel_padded = (kernel_data + bytes([0xEA] * KERNEL_SIZE))[:KERNEL_SIZE]
 
-    # Combine: kernel ($C000-$CFFF) || ehbasic ($D000-$FFFF) = 16 KB
-    image = kernel_padded + ehbasic_data
+    # Combine into the 16 KB ROM image in rom_offset() order:
+    #   offset $0000-$2FFF = EhBASIC ($A000-$CFFF)
+    #   offset $3000-$3FFF = Kernel  ($F000-$FFFF)
+    image = ehbasic_data + kernel_padded
     assert len(image) == TOTAL_SIZE
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     OUT_ROM.write_bytes(image)
 
+    # Per-window segments for the UART monitor upload.  The $D000-$DFFF I/O hole
+    # means the ROM can no longer be uploaded as one contiguous block.
+    OUT_BASIC  = OUT_DIR / "fpga_ehbasic_A000.bin"
+    OUT_KERNEL = OUT_DIR / "fpga_kernel_F000.bin"
+    OUT_BASIC.write_bytes(ehbasic_data)
+    OUT_KERNEL.write_bytes(kernel_padded)
+
     print(f"\nOutput: {OUT_ROM}")
     print(f"  Total: {len(image)} bytes ({len(image):#06x})")
-    print(f"  Kernel  : {KERNEL_SIZE} bytes @ $C000-$CFFF")
-    print(f"  EhBASIC : {EHBASIC_SIZE} bytes @ $D000-$FFFF")
-    print(f"  Ram_top : $8000 (~31.5 KB BASIC RAM at $0200-$7FFF)")
-    print(f"  Vectors : VEC_CC=$EA VEC_IN=$E2 VEC_OUT=$E4 VEC_LD=$E6 VEC_SV=$E8 (ZP BRAM)")
+    print(f"  EhBASIC : {EHBASIC_SIZE} bytes @ $A000-$CFFF  ({OUT_BASIC.name})")
+    print(f"  Kernel  : {KERNEL_SIZE} bytes @ $F000-$FFFF  ({OUT_KERNEL.name})")
+    print(f"  Ram_top : $4000 (~15.5 KB BASIC RAM at $0200-$3FFF, all BRAM)")
+    print(f"  Vectors : kernel $FFFA -> EhBASIC $A000/$A003/$A006 (reset/irq/nmi)")
 
     if args.sd_image:
         print("\nBuilding SD boot image ...")
@@ -314,20 +328,21 @@ def main() -> None:
         print("  Write to SD card (Windows):")
         print(f"    tools\\write_sd.bat {OUT_IMG.name}")
 
-    print("\nUpload command (UART monitor):")
+    print("\nUpload (UART monitor) — kernel first, then EhBASIC + run:")
     print(
-        f"  python fpga/tools/upload_monitor_hex.py {OUT_ROM.name} "
-        f"--port COM15 --baud 230400 --address 0xC000 --run --verbose"
+        f"  python tools/upload_monitor_hex.py {OUT_KERNEL.name} "
+        f"--port COM15 --baud 115200 --address 0xF000"
     )
-    print("  (run from the project root; press KEY0 on the board first)")
+    print(
+        f"  python tools/upload_monitor_hex.py {OUT_BASIC.name}  "
+        f"--port COM15 --baud 115200 --address 0xA000 --run"
+    )
+    print("  (run from roms/; press KEY0 first; G A000 = reset entry, mirrors cold boot)")
 
     if args.upload:
-        uploader = ROOT / "fpga" / "tools" / "upload_monitor_hex.py"
+        uploader = ROOT / "tools" / "upload_monitor_hex.py"
         cmd = [
-            sys.executable, str(uploader),
-            str(OUT_ROM),
-            "--port",    args.port,
-            "--address", "0xC000",
+            sys.executable, str(uploader), "--ehbasic", "--port", args.port,
         ]
         if args.baud:
             cmd.extend(["--baud", str(args.baud)])
@@ -335,7 +350,8 @@ def main() -> None:
             cmd.append("--run")
         if args.verbose:
             cmd.append("--verbose")
-        print(f"\nUploading to {args.port} ...")
+
+        print(f"\nUploading Kernel -> $F000, then EhBASIC -> $A000 on {args.port} ...")
         subprocess.run(cmd, check=True)
 
     print("\nDone.")

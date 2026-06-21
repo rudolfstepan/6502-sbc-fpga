@@ -47,9 +47,26 @@ architecture rtl of sound_chip4 is
   signal v_dout   : dout_arr;
   signal v_sample : sample_arr;
   signal v_active : std_logic_vector(3 downto 0);
+  signal pulse_width : dout_arr := (others => x"80");
   signal ms_div_count : natural range 0 to MS_DIV-1 := 0;
   signal ms_counter   : unsigned(7 downto 0) := (others => '0');
 begin
+
+  -- SID compatibility extension in voice-0's spare register space:
+  -- $883B/$883C/$883D set the upper eight bits of the 12-bit pulse width for
+  -- voices 0/1/2. $80 is the traditional 50% duty cycle.
+  pulse_reg_proc : process(clk)
+    variable idx : integer range 0 to 2;
+  begin
+    if rising_edge(clk) then
+      if reset_n = '0' then
+        pulse_width <= (others => x"80");
+      elsif cs(0) = '1' and we = '1' and unsigned(addr) >= 11 and unsigned(addr) <= 13 then
+        idx := to_integer(unsigned(addr)) - 11;
+        pulse_width(idx) <= din;
+      end if;
+    end if;
+  end process;
 
   -- CPU-independent timebase.  Voice 0 offset 10 ($883A) exposes the low
   -- byte of a free-running millisecond counter for tempo/delay generation.
@@ -79,6 +96,7 @@ begin
         addr       => addr,
         din        => din,
         dout       => v_dout(i),
+        pulse_width => pulse_width(i),
         sample_out => v_sample(i),
         active     => v_active(i)
       );
@@ -86,6 +104,8 @@ begin
 
   -- read mux: return the selected voice's register, else $FF
   dout <= std_logic_vector(ms_counter) when cs(0) = '1' and addr = "1010" else
+          pulse_width(to_integer(unsigned(addr)) - 11)
+            when cs(0) = '1' and unsigned(addr) >= 11 and unsigned(addr) <= 13 else
           v_dout(0) when cs(0) = '1' else
           v_dout(1) when cs(1) = '1' else
           v_dout(2) when cs(2) = '1' else

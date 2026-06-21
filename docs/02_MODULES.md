@@ -29,7 +29,7 @@ rtl/core/
 │   ├── cpu/t65_adapter.vhd        — T65 CPU wrapper (+ RDY bus-steal port)
 │   │   └── third_party/t65/       — external T65 6502 core
 │   ├── mem/sync_ram.vhd           — ZP/stack RAM and text VRAM
-│   ├── mem/boot_shadow_rom.vhd    — writable 16 KB ROM window at $C000-$FFFF
+│   ├── mem/boot_shadow_rom.vhd    — writable 16 KB physical shadow-ROM RAM
 │   ├── mem/sdram_if.vhd           — byte interface to board SDRAM controller
 │   ├── mem/sdram_ctrl.vhd         — board SDRAM command/data controller
 │   ├── mem/char_rom.vhd           — 8×8 character patterns
@@ -50,19 +50,19 @@ boards/tang_primer_20k/rtl/
 rtl/core/
 ├── sbc_pkg.vhd                    — shared types, memory map, constants
 ├── bus_decode.vhd                 — address → device selection
-├── sbc_t65_boot_monitor_top.vhd  — SBC core with internal BSRAM + shadow ROM
+├── sbc_t65_boot_monitor_top.vhd  — SBC core with DDR3 main RAM + split shadow ROM
 │   ├── boot/boot_debug_uart.vhd   — serial boot-status output
 │   ├── boot/boot_vga_debug.vhd    — HDMI boot/status screen
 │   ├── boot/sd_rom_loader.v       — SD-sector loader into shadow ROM
 │   ├── boot/uart_debug_monitor.vhd — UART machine monitor and hex loader
 │   ├── cpu/t65_adapter.vhd        — T65 CPU wrapper
-│   ├── mem/sync_ram.vhd           — ZP/stack RAM, main RAM, and text VRAM
-│   ├── mem/boot_shadow_rom.vhd    — writable 16 KB ROM window at $C000-$FFFF
+│   ├── mem/sync_ram.vhd           — ZP/stack RAM and text VRAM
+│   ├── mem/boot_shadow_rom.vhd    — 16 KB physical RAM mapped at $A000/$F000
 │   ├── mem/char_rom.vhd           — 8×8 character patterns
 │   ├── peripherals/via6522.vhd    — VIA 6522: Timer 1 IRQ + Port B
 │   ├── peripherals/uart6551.vhd   — UART 6551: CPU TX/RX registers
 │   ├── peripherals/vic_vga.vhd    — VIC: bus stealing + VGA/HDMI pixel output
-│   ├── peripherals/sound_voice.vhd — single-voice synth (channel 0, $8830)
+│   ├── peripherals/sid6581.vhd     — native SID-compatible register block ($D400)
 │   ├── peripherals/pt8211_dac.vhd  — PT8211 audio DAC I2S serializer
 │   └── peripherals/math_copro.vhd  — math coprocessor: signed 32×32 fixed-point multiply ($88B0); see FPU.md
 
@@ -98,14 +98,17 @@ fpga/sw/
 fpga/tools/
 ├── build_fpga_ehbasic.py         — patches + assembles EhBASIC; links with kernel
 │                                   --sd-image  also produces SD card boot image
-└── upload_monitor_hex.py         — UART monitor upload for any .rom file
+└── upload_monitor_hex.py         — UART monitor upload; --ehbasic and --split-rom modes
 
 fpga/roms/
-├── fpga_ehbasic_16kb.rom         — 16 KB output: kernel ($C000) + EhBASIC ($D000)
+├── fpga_ehbasic_16kb.rom         — 16 KB physical image: EhBASIC ($A000) + kernel ($F000)
+├── fpga_ehbasic_A000.bin         — 12 KB live-upload segment ($A000-$CFFF)
+├── fpga_kernel_F000.bin          — 4 KB live-upload segment ($F000-$FFFF)
+├── soundsid.rom                  — standalone split image, entry $A000, vectors $FFFA
 └── fpga_ehbasic_16kb.img         — raw SD boot image (512 B header + 16 KB payload)
 
 tools/kernel/
-└── kernel.s                      — 4 KB kernel ROM ($C000-$CFFF)
+└── kernel.s                      — 4 KB kernel ROM ($F000-$FFFF)
                                     jump table, CHROUT/CHRIN, CLRSCR, SCROLL
                                     to_upper: a-z → A-Z in CHRIN_NB and CHROUT
 ```
@@ -113,10 +116,10 @@ tools/kernel/
 Build commands (from project root):
 
 ```bash
-python fpga/tools/build_fpga_ehbasic.py            # ROM only
-python fpga/tools/build_fpga_ehbasic.py --sd-image # ROM + SD boot image
-python fpga/tools/build_fpga_ehbasic.py --upload --run --verbose  # ROM + UART upload
-make -C fpga/sw sd-ehbasic                         # same as --sd-image via make
+python tools/build_fpga_ehbasic.py            # ROM and segment files
+python tools/build_fpga_ehbasic.py --sd-image # ROM + SD boot image
+python tools/build_fpga_ehbasic.py --upload --run --verbose  # two-segment UART upload
+make -C sw sd-ehbasic                         # same as --sd-image via make
 ```
 
 ### Character ROM generator
@@ -308,7 +311,8 @@ latency pipeline during bus stealing.
 
 ### `mem/boot_shadow_rom.vhd` — SD/Monitor-Loaded ROM RAM
 
-16 KB RAM for the CPU ROM window `$C000-$FFFF`.
+16 KB physical RAM. In the current Tang build, `rom_offset()` maps its first
+12 KB to CPU `$A000-$CFFF` and its final 4 KB to `$F000-$FFFF`.
 
 Two write sources share the load port in `sbc_t65_sdram_boot_top`:
 

@@ -74,8 +74,9 @@ It targets the Sipeed Tang Primer 20K / Gowin GW2A-18. The current board top is
 `boards/tang_primer_20k/rtl/tang20k_sbc_top.vhd`. It brings up HDMI (DVI-style
 TMDS, 27 MHz pixel clock, CEA-861 480p timing for standard 640×480 @ 59.94 Hz),
 displays the boot/status diagnostic screen first, initializes the on-board
-microSD/SDIO slot in SPI mode, loads the 16 KB `$C000-$FFFF` ROM image into
-shadow ROM, and releases the T65 CPU after a successful load.
+microSD/SDIO slot in SPI mode, loads a 16 KB physical shadow-ROM image, and
+releases the T65 CPU after a successful load. The current CPU mapping is
+`$A000-$CFFF` plus `$F000-$FFFF`; `$D000-$EFFF` remains available for I/O.
 
 Current verified bring-up:
 
@@ -87,10 +88,20 @@ Current verified bring-up:
 - Without a card in the on-board microSD slot, boot debug output correctly
   reports that SD initialization/read cannot complete.
 
-The Tang path currently uses internal BSRAM for main RAM instead of the on-board
-SDRAM. The CH340 UART runs at `230400 8N1`; the USB-OTG connector is separate and
+The Tang path uses the on-board DDR3 for main RAM, with zero page kept in BRAM.
+The CH340 UART runs at `115200 8N1`; the USB-OTG connector is separate and
 is not the SBC UART. The on-board microSD slot is used in SPI mode on
 `N10/N11/R14/M8` as documented in `boards/tang_primer_20k/README.md`.
+
+EhBASIC and standalone ROMs are uploaded through the split-map modes:
+
+```powershell
+python tools\upload_monitor_hex.py --ehbasic --port COM15 --baud 115200 --run
+python tools\upload_monitor_hex.py roms\soundsid.rom --split-rom --port COM15 --baud 115200 --run
+```
+
+See [Split ROM and Native SID Update](docs/SPLIT_ROM_SID_UPDATE.md) for what
+changed and how to migrate old `$C000` ROMs.
 
 USB HID keyboard input via the nand2mario `usb_hid_host` bit-bang core was
 attempted but USB enumeration did not complete reliably (see
@@ -198,7 +209,26 @@ The SD image is persistent across FPGA resets. The UART monitor upload is a
 development shortcut that writes the same shadow-ROM RAM after boot and is lost
 on reset/reprogramming.
 
-## Memory Map
+## Memory Maps
+
+### Current Tang Primer 20K
+
+```text
+$0000-$3FFF   BRAM main RAM (EhBASIC workspace included)
+$4000-$5FFF   DDR3 main RAM
+$6000-$7FFF   VIC bitmap RAM (8 KB; 8000 bytes visible)
+$8000-$87FF   VIC text/color RAM
+$8800-$88BF   VIA, UART, sound timer, and math-coprocessor I/O
+$9000-$900F   VIC control registers
+$A000-$CFFF   Shadow ROM application window (EhBASIC/standalone ROM)
+$D400-$D418   SID-compatible registers
+$F000-$FFFF   Shadow ROM kernel/vector window
+```
+
+The physical shadow image is still 16 KB: offsets `$0000-$2FFF` map to
+`$A000-$CFFF`, and `$3000-$3FFF` map to `$F000-$FFFF`.
+
+### Legacy/PIX16 reference
 
 ```text
 $0000-$7FFF   SRAM
@@ -214,7 +244,7 @@ $889A-$88A3   SOUND Voice 2
 $88A4-$88AD   SOUND Voice 3
 $8900-$89FF   VIC sprite pixel data
 $9000-$900F   VIC control registers
-$9010-$AF4F   VIC bitmap RAM
+$9010-$AF4F   VIC bitmap RAM (legacy map)
 $C000-$FFFF   ROM
 ```
 

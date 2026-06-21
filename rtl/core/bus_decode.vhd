@@ -27,8 +27,13 @@ begin
     -- Check each address range in priority order (lowest to highest)
     -- The CPU will use this signal to enable the appropriate peripheral
 
-    -- 0x0000-0x7FFF: Main system RAM (32KB)
-    if in_range(addr, ADDR_SRAM_BASE, ADDR_SRAM_LAST) then
+    -- 0x6000-0x7FFF: dedicated 8 KB bitmap RAM. The visible 320x200 bitmap
+    -- consumes $6000-$7F3F; the final 192 bytes are reserved. This check precedes
+    -- main RAM because the relocated framebuffer occupies part of its range.
+    if addr(15 downto 13) = "011" then
+      sel <= DEV_VIC_BMP;
+    -- Remaining 0x0000-0x7FFF addresses: main system RAM.
+    elsif in_range(addr, ADDR_SRAM_BASE, ADDR_SRAM_LAST) then
       sel <= DEV_SRAM;
     -- 0x8000-0x87FF: VIC text display memory (2KB)
     elsif in_range(addr, ADDR_VIC_TEXT_BASE, ADDR_VIC_TEXT_LAST) then
@@ -45,7 +50,7 @@ begin
     -- 0x8824-0x882F: Disk controller (12 bytes)
     elsif in_range(addr, ADDR_DISK_BASE, ADDR_DISK_LAST) then
       sel <= DEV_DISK;
-    -- 0x8830-0x883A: Sound channel 0 plus free-running millisecond counter
+    -- 0x8830-0x883D: Sound channel 0, timer, and SID pulse-width extension
     elsif in_range(addr, ADDR_SOUND0_BASE, ADDR_SOUND0_LAST) then
       sel <= DEV_SOUND0;
     -- 0x8840-0x844F: VIC hardware blitter (16 bytes)
@@ -72,13 +77,15 @@ begin
     -- 0x9000-0x900F: VIC control and status registers (16 bytes)
     elsif in_range(addr, ADDR_VIC_REG_BASE, ADDR_VIC_REG_LAST) then
       sel <= DEV_VIC_REG;
-    -- 0x9010-0xAF4F: VIC bitmap frame buffer - video RAM (40KB)
-    elsif in_range(addr, ADDR_VIC_BMP_BASE, ADDR_VIC_BMP_LAST) then
-      sel <= DEV_VIC_BMP;
-    -- 0xC000-0xFFFF: Read-only firmware and system ROM (16KB)
-    elsif in_range(addr, ADDR_ROM_BASE, ADDR_ROM_LAST) then
+    -- 0xD400-0xD418: SID registers (cleanly in the I/O region, no ROM overlap).
+    elsif in_range(addr, ADDR_SID_BASE, ADDR_SID_LAST) then
+      sel <= DEV_SID;
+    -- 0xA000-0xCFFF: EhBASIC ROM (12KB)
+    elsif in_range(addr, ADDR_BASROM_BASE, ADDR_BASROM_LAST) then
+      sel <= DEV_ROM;
+    -- 0xF000-0xFFFF: Kernel ROM (4KB, includes the $FFFA reset/IRQ/NMI vectors)
+    elsif in_range(addr, ADDR_KERNROM_BASE, ADDR_KERNROM_LAST) then
       sel <= DEV_ROM;
     end if;
   end process;
 end architecture;
-

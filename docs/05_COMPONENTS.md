@@ -376,6 +376,14 @@ INIT_FILE  => ROM_INIT_FILE     -- Hex file path
 CPU address 0xC000-0xFFFF → ROM[0x0000-0x3FFF]
 ```
 
+This is the legacy contiguous mapping of `rom.vhd`. The current Tang design
+uses `boot_shadow_rom.vhd` plus `rom_offset()` instead:
+
+```text
+CPU $A000-$CFFF → shadow ROM[$0000-$2FFF]
+CPU $F000-$FFFF → shadow ROM[$3000-$3FFF]
+```
+
 **Reset Vector** (CPU startup):
 - CPU reads address 0xFFFC-0xFFFD on reset
 - ROM[0x3FFC] = reset vector low byte

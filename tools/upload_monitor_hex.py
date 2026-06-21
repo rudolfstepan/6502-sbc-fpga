@@ -6,6 +6,12 @@ Default workflow:
   1. Press the hardware monitor button on the board.
   2. Run: python fpga/tools/upload_monitor_hex.py --build-demo --run
 
+EhBASIC workflow (split around the $D000-$DFFF I/O window):
+  python tools/upload_monitor_hex.py --ehbasic --run
+
+Standalone split-ROM workflow (for example soundsid.rom):
+  python tools/upload_monitor_hex.py roms/soundsid.rom --split-rom --run
+
 The monitor command used is:
   L <address>
   <hex bytes...>
@@ -24,6 +30,11 @@ DEFAULT_PORT = "COM12"
 DEFAULT_BAUD = 115200
 DEFAULT_ADDR = 0xC000
 DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "roms" / "upload_demo.rom"
+ROMS_DIR = Path(__file__).resolve().parent.parent / "roms"
+EHBASIC_SEGMENTS = (
+    (ROMS_DIR / "fpga_kernel_F000.bin", 0xF000),
+    (ROMS_DIR / "fpga_ehbasic_A000.bin", 0xA000),
+)
 
 
 def require_pyserial():
@@ -73,15 +84,87 @@ def write_line(port, text: str, delay: float) -> None:
         time.sleep(delay)
 
 
-def upload(args: argparse.Namespace) -> None:
-    serial = require_pyserial()
-    image = Path(args.image)
+def check_monitor_response(response: bytes, operation: str) -> None:
+    """Stop instead of reporting success when the FPGA monitor rejected a command."""
+    text = response.decode("ascii", errors="replace")
+    if "MEM/IO ONLY" in text or "\r\n?\r\n" in text:
+        raise SystemExit(f"ERROR: monitor rejected {operation}: {text.strip()}")
+
+
+def load_image(image: Path, length: int | None = None) -> bytes:
     data = image.read_bytes()
-    if args.length is not None:
-        data = data[: args.length]
+    if length is not None:
+        data = data[:length]
 
     if not data:
         raise SystemExit(f"ERROR: image is empty: {image}")
+    return data
+
+
+def upload_segment(
+    port, image: Path, address: int, args: argparse.Namespace, data: bytes | None = None
+) -> None:
+    if data is None:
+        data = load_image(image, args.length if not args.ehbasic else None)
+
+    print(f"Starting monitor upload: {image.name} -> ${address:04X}, {len(data)} bytes")
+    write_line(port, f"L {address:04X}", args.command_delay)
+    if args.wait_load:
+        response = read_some(port, args.wait_load)
+        if args.verbose and response:
+            print(response.decode("ascii", errors="replace"), end="")
+        check_monitor_response(response, f"L {address:04X}")
+
+    sent = 0
+    for line in hex_lines(data, args.bytes_per_line):
+        # Data lines are fire-and-forget; the final "." is where the monitor
+        # reports OK/ERR after the last byte has been committed.
+        write_line(port, line, args.line_delay)
+        sent += min(args.bytes_per_line, len(data) - sent)
+        if args.progress and (sent == len(data) or sent % args.progress == 0):
+            print(f"  {sent:5d}/{len(data)} bytes")
+
+    write_line(port, ".", args.command_delay)
+    response = read_some(port, args.wait_done)
+    if args.verbose and response:
+        print(response.decode("ascii", errors="replace"), end="")
+    check_monitor_response(response, f"upload at ${address:04X}")
+
+
+def upload(args: argparse.Namespace) -> None:
+    serial = require_pyserial()
+    if args.ehbasic:
+        segments = tuple((image, address, None) for image, address in EHBASIC_SEGMENTS)
+        run_address = 0xA000
+        missing = [str(image) for image, _, _ in segments if not image.is_file()]
+        if missing:
+            raise SystemExit(
+                "ERROR: EhBASIC segment(s) not found; run "
+                "tools/build_fpga_ehbasic.py first:\n  " + "\n  ".join(missing)
+            )
+    elif args.split_rom:
+        image = Path(args.image)
+        data = load_image(image)
+        if len(data) != 0x4000:
+            raise SystemExit(
+                f"ERROR: --split-rom requires a 16 KB image, got {len(data)} bytes: {image}"
+            )
+        # Upload the high window first, then the entry window. The image uses
+        # boot_shadow_rom physical order, matching rom_offset().
+        segments = (
+            (image, 0xF000, data[0x3000:0x4000]),
+            (image, 0xA000, data[0x0000:0x3000]),
+        )
+        run_address = 0xA000
+    else:
+        image = Path(args.image)
+        if args.address == 0xC000 and image.is_file() and image.stat().st_size == 0x4000:
+            raise SystemExit(
+                "ERROR: a contiguous 16 KB upload at $C000 crosses the $D000-$EFFF "
+                "I/O hole; rebuild for the split ROM map and use --split-rom"
+            )
+        segments = ((image, args.address, None),)
+        run_address = args.address
 
     print(f"Opening {args.port} @ {args.baud} baud")
     with serial.Serial(args.port, args.baud, timeout=0.05, write_timeout=2) as port:
@@ -90,30 +173,12 @@ def upload(args: argparse.Namespace) -> None:
         if banner and args.verbose:
             print(banner.decode("ascii", errors="replace"), end="")
 
-        print(f"Starting monitor upload: ${args.address:04X}, {len(data)} bytes")
-        write_line(port, f"L {args.address:04X}", args.command_delay)
-        if args.wait_load:
-            response = read_some(port, args.wait_load)
-            if args.verbose and response:
-                print(response.decode("ascii", errors="replace"), end="")
-
-        sent = 0
-        for line in hex_lines(data, args.bytes_per_line):
-            # Data lines are fire-and-forget; the final "." is where the monitor
-            # reports OK/ERR after the last byte has been committed.
-            write_line(port, line, args.line_delay)
-            sent += min(args.bytes_per_line, len(data) - sent)
-            if args.progress and (sent == len(data) or sent % args.progress == 0):
-                print(f"  {sent:5d}/{len(data)} bytes")
-
-        write_line(port, ".", args.command_delay)
-        response = read_some(port, args.wait_done)
-        if args.verbose and response:
-            print(response.decode("ascii", errors="replace"), end="")
+        for image, address, data in segments:
+            upload_segment(port, image, address, args, data)
 
         if args.run:
-            print(f"Starting CPU at ${args.address:04X}")
-            write_line(port, f"G {args.address:04X}", args.command_delay)
+            print(f"Starting CPU at ${run_address:04X}")
+            write_line(port, f"G {run_address:04X}", args.command_delay)
             response = read_some(port, args.wait_done)
             if args.verbose and response:
                 print(response.decode("ascii", errors="replace"), end="")
@@ -124,8 +189,8 @@ def upload(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", nargs="?", default=DEFAULT_IMAGE, help="binary image to upload")
-    parser.add_argument("--port", default=DEFAULT_PORT, help="serial port, default COM15")
-    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="baud rate, default 230400")
+    parser.add_argument("--port", default=DEFAULT_PORT, help=f"serial port, default {DEFAULT_PORT}")
+    parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"baud rate, default {DEFAULT_BAUD}")
     parser.add_argument("--address", type=lambda s: int(s, 0), default=DEFAULT_ADDR, help="load address")
     parser.add_argument("--length", type=lambda s: int(s, 0), help="limit upload length")
     parser.add_argument("--bytes-per-line", type=int, default=32, help="hex bytes per monitor line")
@@ -136,6 +201,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-done", type=float, default=0.8, help="seconds to read after . or G")
     parser.add_argument("--progress", type=int, default=1024, help="progress interval in bytes, 0 disables")
     parser.add_argument("--run", action="store_true", help="send G <address> after upload")
+    parser.add_argument(
+        "--ehbasic", action="store_true",
+        help="upload kernel to $F000, then EhBASIC to $A000 (use --run to start at $A000)",
+    )
+    parser.add_argument(
+        "--split-rom", action="store_true",
+        help="upload a 16 KB split-map image to $F000 and $A000, then run at $A000",
+    )
     parser.add_argument("--build-demo", action="store_true", help="generate the default demo ROM first")
     parser.add_argument("--verbose", action="store_true", help="print monitor responses")
     return parser.parse_args()
@@ -143,6 +216,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.ehbasic and args.split_rom:
+        raise SystemExit("ERROR: --ehbasic and --split-rom are mutually exclusive")
     if args.build_demo:
         build_demo()
     upload(args)

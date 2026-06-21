@@ -128,10 +128,10 @@ begin
   -- non-steal cycle. The CPU is stalled via cpu_rdy until then, so no POKE is lost.
   bitmap_cpu_we <= cpu_bus_we when dev_sel = DEV_VIC_BMP else '0';
 
-  bitmap_addr <= std_logic_vector(resize(unsigned(vic_addr) - x"9010", 13))
+  bitmap_addr <= std_logic_vector(resize(unsigned(vic_addr) - ADDR_VIC_BMP_BASE, 13))
                  when vic_stealing = '1' and vic_fetch_bitmap = '1' else
                  bitmap_wr_addr when bitmap_wr_pending = '1' and vic_stealing = '0' else
-                 std_logic_vector(resize(unsigned(cpu_addr) - x"9010", 13));
+                 std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
   bitmap_we   <= '1' when bitmap_wr_pending = '1' and vic_stealing = '0' else
                  '0' when vic_stealing = '1' else bitmap_cpu_we;
   bitmap_din_mux <= bitmap_wr_data when bitmap_wr_pending = '1' and vic_stealing = '0'
@@ -148,7 +148,7 @@ begin
         bitmap_wr_pending <= '0';
       elsif bitmap_cpu_we = '1' and vic_stealing = '1' then
         bitmap_wr_pending <= '1';
-        bitmap_wr_addr    <= std_logic_vector(resize(unsigned(cpu_addr) - x"9010", 13));
+        bitmap_wr_addr    <= std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
         bitmap_wr_data    <= cpu_dout;
       end if;
     end if;

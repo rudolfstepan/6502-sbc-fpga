@@ -38,12 +38,12 @@ Das Fenster ist zweigeteilt: oben ein Notebook mit vier Tabs, unten ein scrollba
 
 ### Build EhBASIC ROM
 
-Ruft `build_fpga_ehbasic.py` auf und assembliert `ehbasic_fpga.s` + `kernel.rom` zu `fpga/roms/fpga_ehbasic_16kb.rom` (16 KB, `$C000–$FFFF`).
+Ruft `build_fpga_ehbasic.py` auf und assembliert `ehbasic_fpga.s` + `kernel.rom` zu einem physischen 16-KB-Image. EhBASIC liegt bei `$A000–$CFFF`, der Kernel bei `$F000–$FFFF`; zusätzlich entstehen zwei Upload-Segmente.
 
 | Option | Flag | Beschreibung |
 |---|---|---|
 | Upload to board | `--upload --port PORT` | Lädt das ROM nach dem Build per UART-Monitor hoch |
-| Run after upload | `--run` | Sendet `G C000` an den Monitor |
+| Run after upload | `--run` | Startet nach beiden Segmenten mit `G A000` |
 | Also generate SD image | `--sd-image` | Erzeugt zusätzlich ein SD-Boot-Image (`.img`) |
 | Verbose | `--verbose` | Zeigt Monitor-Antworten im Konsolenbereich |
 | Port | `--port` | Serieller Port, z. B. `COM15` |
@@ -71,7 +71,13 @@ Ruft `make_upload_demo_rom.py` ohne weitere Argumente auf.  Erzeugt `upload_demo
 
 Ruft `upload_monitor_hex.py` (oder `upload_monitor_hex_enter.py` wenn *Send ENTER* aktiviert) auf.
 
-> **Voraussetzung:** Zuerst **KEY0** auf dem Board drücken, um den Monitor-Modus zu aktivieren.
+> **Voraussetzung:** Zuerst die Monitor-Taste drücken (**KEY1** beim aktuellen Tang-Aufbau).
+
+> **Split-ROM-Hinweis:** Der generische Upload-Tab übergibt weiterhin genau eine
+> Adresse und ist daher nicht für das kombinierte EhBASIC-Image oder
+> `soundsid.rom` geeignet. EhBASIC über den Build-Tab hochladen; Soundsid derzeit
+> per CLI mit `--split-rom`. Ein zusammenhängender 16-KB-Upload ab `$C000` wird
+> vom Uploader absichtlich abgelehnt.
 
 | Feld / Option | Flag | Beschreibung |
 |---|---|---|
@@ -135,7 +141,7 @@ Ruft `news_to_uart.py` auf.  Holt RSS/Atom-Schlagzeilen und sendet sie fortlaufe
 | Feld / Option | Flag | Beschreibung |
 |---|---|---|
 | Port | `--port` | Serieller Port |
-| Baud | `--baud` | Baudrate, Standard `230400` |
+| Baud | `--baud` | Baudrate, Standard `115200` |
 | Interval (s) | `--interval` | Pause zwischen zwei Schlagzeilen in Sekunden |
 | Refresh (s) | `--refresh` | Feed-Aktualisierungsintervall in Sekunden |
 | Send one batch and exit | `--once` | Einmalig senden, dann beenden |

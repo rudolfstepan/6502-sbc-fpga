@@ -184,7 +184,7 @@ architecture rtl of uart_debug_monitor is
     u := unsigned(a);
     return u <= ADDR_SRAM_LAST or
            (u >= ADDR_VIC_TEXT_BASE and u <= ADDR_UART_LAST) or
-           u >= ADDR_ROM_BASE;
+           is_rom_addr(a);
   end function;
 
   function is_monitor_range(a : addr_t; b : addr_t) return boolean is
@@ -201,7 +201,9 @@ architecture rtl of uart_debug_monitor is
     if bu < au then
       return false;
     end if;
-    return bu <= ADDR_UART_LAST or au >= ADDR_ROM_BASE;
+    return bu <= ADDR_UART_LAST or
+           (au >= ADDR_BASROM_BASE and bu <= ADDR_BASROM_LAST) or
+           (au >= ADDR_KERNROM_BASE and bu <= ADDR_KERNROM_LAST);
   end function;
 
   function monitor_span_end(a : addr_t; extra : natural) return addr_t is
@@ -210,8 +212,10 @@ architecture rtl of uart_debug_monitor is
     variable sum : unsigned(15 downto 0);
   begin
     au := unsigned(a);
-    if au >= ADDR_ROM_BASE then
-      lim := ADDR_ROM_LAST;
+    if au >= ADDR_KERNROM_BASE then
+      lim := ADDR_KERNROM_LAST;
+    elsif au >= ADDR_BASROM_BASE and au <= ADDR_BASROM_LAST then
+      lim := ADDR_BASROM_LAST;
     else
       lim := ADDR_UART_LAST;
     end if;

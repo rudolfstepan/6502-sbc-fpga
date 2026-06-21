@@ -158,6 +158,28 @@ MUL_SHIFT = MUL+12
 macro and uses it for the three products per Mandelbrot iteration
 (`zr²`, `zi²`, `zr·zi`).
 
+The current standalone image is linked for the split ROM map: code starts at
+`$A000`, vectors remain at `$FFFA-$FFFF`, and bitmap output uses the relocated
+`$6000-$7FFF` framebuffer. Build and upload it with:
+
+```powershell
+make -C sw mandelbrot-copro
+python tools\upload_monitor_hex.py roms\mandelbrot_copro.bin --split-rom `
+       --port COM15 --baud 115200 --run --verbose
+```
+
+For direct Windows uploads, use `roms\upload\mandelbrot_copro.bat`.
+
+The software-multiply comparison image uses the same ROM and bitmap layout:
+
+```powershell
+make -C sw mandelbrot-bitmap
+python tools\upload_monitor_hex.py roms\mandelbrot_bitmap.rom --split-rom `
+       --port COM15 --baud 115200 --run --verbose
+```
+
+The corresponding Windows shortcut is `roms\upload\mandelbrot_bitmap.bat`.
+
 ## Integration
 
 The unit follows the same memory-mapped pattern as the VIA/UART:

@@ -283,13 +283,13 @@ begin
 
   -- Bus-Steal-Ausgaenge (kombinatorisch)
   -- Phase 0 Text:   Zeichencodes aus $8000+
-  -- Phase 0 Bitmap: Pixeldaten aus $9010+
+  -- Phase 0 Bitmap: Pixeldaten aus ADDR_VIC_BMP_BASE ($6000)
   -- Phase 1:        Farben aus $8400+ (beide Modi identisch)
   vic_stealing <= fetching;
   vic_fetch_bitmap <= fetching and (not fetch_phase) and bitmap_mode;
 
   vic_addr <= std_logic_vector(
-      to_unsigned(16#9010# + fetch_bmp_line * 40 + fetch_col, 16))
+      to_unsigned(to_integer(ADDR_VIC_BMP_BASE) + fetch_bmp_line * 40 + fetch_col, 16))
     when fetching = '1' and fetch_phase = '0' and bitmap_mode = '1' else
              std_logic_vector(
       to_unsigned(16#8000# + fetch_row * 40 + fetch_col, 16))

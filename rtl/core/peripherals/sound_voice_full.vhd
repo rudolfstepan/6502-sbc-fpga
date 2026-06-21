@@ -44,6 +44,7 @@ entity sound_voice_full is
     addr     : in  std_logic_vector(3 downto 0);  -- register offset 0..9
     din      : in  data_t;
     dout     : out data_t;
+    pulse_width : in data_t := x"80";  -- upper 8 bits of 12-bit SID pulse width
 
     sample_out : out std_logic_vector(15 downto 0);  -- signed, per-voice
     active     : out std_logic                        -- '1' while note is sounding
@@ -352,6 +353,8 @@ begin
   ------------------------------------------------------------------------
   out_proc : process(clk)
     variable p8   : integer range 0 to 255;
+    variable p12  : integer range 0 to 4095;
+    variable pw   : integer range 0 to 4095;
     variable raw  : signed(9 downto 0);   -- ±128 nominal full-scale
     variable amp  : signed(18 downto 0);  -- raw * env
     variable amp2 : signed(27 downto 0);  -- * volume
@@ -361,9 +364,14 @@ begin
         sample_out <= (others => '0');
       else
         p8 := to_integer(phase(PHASE_BITS-1 downto PHASE_BITS-8));
+        p12 := to_integer(phase(PHASE_BITS-1 downto PHASE_BITS-12));
+        pw := to_integer(unsigned(pulse_width)) * 16;
         case l_wave is
-          when "001" =>  -- square
-            if p8 < 128 then raw := to_signed(127, 10); else raw := to_signed(-128, 10); end if;
+          when "001" =>  -- SID-style pulse with 50 Hz pulse-width modulation
+            -- Asymmetric levels remove the waveform's duty-cycle-dependent DC
+            -- component while preserving approximately square-wave loudness.
+            if p12 < pw then raw := to_signed((4096-pw)/16, 10);
+            else             raw := to_signed(-pw/16, 10); end if;
           when "010" =>  -- sawtooth: +127 -> -128 over the period
             raw := to_signed(127 - p8, 10);
           when "011" =>  -- triangle

@@ -119,12 +119,18 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal sound_we     : std_logic;
   signal sound_addr   : std_logic_vector(3 downto 0);
   signal sound_dout   : data_t;
-  signal sound_sample : std_logic_vector(15 downto 0);
+  signal ms_div       : integer range 0 to CLK_HZ/1000 - 1 := 0;
+  signal ms_count     : unsigned(7 downto 0) := (others => '0');
+  signal sid_cs       : std_logic;
+  signal sid_we       : std_logic;
+  signal sid_dout     : data_t;
+  signal sid_sample   : std_logic_vector(15 downto 0);
+  signal sid_addr     : std_logic_vector(4 downto 0);
 
   signal zp_cs       : std_logic;
   signal zp_we       : std_logic;
   signal zp_we_mux   : std_logic;
-  signal zp_addr_mux : std_logic_vector(8 downto 0);
+  signal zp_addr_mux : std_logic_vector(13 downto 0);
   signal zp_din_mux  : data_t;
   signal sram_we     : std_logic;
   signal sram_we_mux : std_logic;
@@ -224,6 +230,7 @@ architecture rtl of sbc_t65_boot_monitor_top is
     M_SRAM_WAIT, M_SRAM_READY,
     M_ROM_RD_WAIT, M_ROM_RD_READY, M_ROM_WR_WAIT,
     M_VRAM_RD_WAIT, M_VRAM_RD_READY, M_VRAM_WR_WAIT,
+    M_BITMAP_RD_WAIT, M_BITMAP_RD_READY, M_BITMAP_WR_WAIT,
     M_VIA_WAIT, M_VIA_READY,
     M_UART_WAIT, M_UART_READY,
     M_READY
@@ -281,7 +288,9 @@ begin
   cpu_irq_n  <= not (via_irq or uart_irq or usb_irq);
   usb_cs     <= '1' when monitor_hold = '0' and dev_sel = DEV_USB else '0';
 
-  zp_cs   <= '1' when dev_sel = DEV_SRAM and cpu_addr(15 downto 9) = "0000000" else '0';
+  -- Low 16 KB ($0000-$3FFF) is on-chip BRAM (single-cycle, reliable): zero page,
+  -- stack, and EhBASIC's whole working RAM live here.  $4000-$7FFF is DDR3.
+  zp_cs   <= '1' when dev_sel = DEV_SRAM and cpu_addr(15 downto 14) = "00" else '0';
   zp_we   <= cpu_bus_we when monitor_hold = '0' and zp_cs = '1' else '0';
   sram_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_SRAM and zp_cs = '0' else '0';
   vram_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_TEXT else '0';
@@ -290,6 +299,9 @@ begin
   uart_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_UART     else '0';
   math_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
   math_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
+  sid_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_SID      else '0';
+  sid_we  <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_SID      else '0';
+  sid_addr <= std_logic_vector(resize(unsigned(cpu_addr) - ADDR_SID_BASE, 5));
 
   -- Per-voice chip-selects, shared write strobe, and the register offset for
   -- whichever voice is currently addressed (cpu_addr - voice base).
@@ -307,8 +319,8 @@ begin
     (others => '0');
 
   zp_we_mux   <= '1' when monitor_hold = '1' and mon_mem_state = M_ZP_WAIT and mon_we_lat = '1' else zp_we;
-  zp_addr_mux <= mon_addr_lat(8 downto 0) when monitor_hold = '1' and
-                 (mon_mem_state = M_ZP_WAIT or mon_mem_state = M_ZP_READY) else cpu_addr(8 downto 0);
+  zp_addr_mux <= mon_addr_lat(13 downto 0) when monitor_hold = '1' and
+                 (mon_mem_state = M_ZP_WAIT or mon_mem_state = M_ZP_READY) else cpu_addr(13 downto 0);
   zp_din_mux  <= mon_wdata_lat when monitor_hold = '1' and mon_mem_state = M_ZP_WAIT else cpu_dout;
 
   sram_we_mux <= '1' when monitor_hold = '1' and mon_mem_state = M_SRAM_WAIT and mon_we_lat = '1' else sram_we;
@@ -316,12 +328,12 @@ begin
                    (mon_mem_state = M_SRAM_WAIT or mon_mem_state = M_SRAM_READY) else cpu_addr(14 downto 0);
   sram_din_mux <= mon_wdata_lat when monitor_hold = '1' and mon_mem_state = M_SRAM_WAIT else cpu_dout;
 
-  rom_addr_mux <= mon_addr_lat(13 downto 0) when monitor_hold = '1' and
+  rom_addr_mux <= rom_offset(mon_addr_lat) when monitor_hold = '1' and
                   (mon_mem_state = M_ROM_RD_WAIT or mon_mem_state = M_ROM_RD_READY) else
-                  cpu_addr(13 downto 0);
+                  rom_offset(cpu_addr);
   rom_load_we_mux <= '1' when monitor_hold = '1' and mon_mem_state = M_ROM_WR_WAIT and mon_we_lat = '1' else
                      rom_load_we;
-  rom_load_addr_mux <= mon_addr_lat(13 downto 0) when monitor_hold = '1' and mon_mem_state = M_ROM_WR_WAIT else
+  rom_load_addr_mux <= rom_offset(mon_addr_lat) when monitor_hold = '1' and mon_mem_state = M_ROM_WR_WAIT else
                        rom_load_addr;
   rom_load_data_mux <= mon_wdata_lat when monitor_hold = '1' and mon_mem_state = M_ROM_WR_WAIT else
                        rom_load_data;
@@ -342,13 +354,19 @@ begin
   -- stalled via cpu_rdy until the deferred write completes, so no POKE is lost.
   bitmap_cpu_we <= cpu_bus_we when dev_sel = DEV_VIC_BMP else '0';
 
-  bitmap_addr <= std_logic_vector(resize(unsigned(vic_addr) - x"9010", 13))
+  bitmap_addr <= std_logic_vector(resize(unsigned(mon_addr_lat) - ADDR_VIC_BMP_BASE, 13))
+                 when monitor_hold = '1' and
+                   (mon_mem_state = M_BITMAP_RD_WAIT or mon_mem_state = M_BITMAP_RD_READY or
+                    mon_mem_state = M_BITMAP_WR_WAIT) else
+                 std_logic_vector(resize(unsigned(vic_addr) - ADDR_VIC_BMP_BASE, 13))
                  when vic_stealing = '1' and vic_fetch_bitmap = '1' else
                  bitmap_wr_addr when bitmap_wr_pending = '1' and vic_stealing = '0' else
-                 std_logic_vector(resize(unsigned(cpu_addr) - x"9010", 13));
-  bitmap_we   <= '1' when bitmap_wr_pending = '1' and vic_stealing = '0' else
+                 std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
+  bitmap_we   <= '1' when monitor_hold = '1' and mon_mem_state = M_BITMAP_WR_WAIT and mon_we_lat = '1' else
+                 '1' when bitmap_wr_pending = '1' and vic_stealing = '0' else
                  '0' when vic_stealing = '1' else bitmap_cpu_we;
-  bitmap_din_mux <= bitmap_wr_data when bitmap_wr_pending = '1' and vic_stealing = '0'
+  bitmap_din_mux <= mon_wdata_lat when monitor_hold = '1' and mon_mem_state = M_BITMAP_WR_WAIT else
+                    bitmap_wr_data when bitmap_wr_pending = '1' and vic_stealing = '0'
                     else cpu_dout;
 
   process(clk)
@@ -362,7 +380,7 @@ begin
         bitmap_wr_pending <= '0';
       elsif bitmap_cpu_we = '1' and vic_stealing = '1' then
         bitmap_wr_pending <= '1';
-        bitmap_wr_addr    <= std_logic_vector(resize(unsigned(cpu_addr) - x"9010", 13));
+        bitmap_wr_addr    <= std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
         bitmap_wr_data    <= cpu_dout;
       end if;
     end if;
@@ -422,7 +440,7 @@ begin
 
   process(dev_sel, zp_cs, zp_dout, sram_dout, rom_dout, vram_dout, vic_reg_dout, via_dout,
           uart_dout, mon_jump_vector_active, mon_jump_vector, cpu_addr, bitmap_dout,
-          sound_dout, math_dout)
+          sound_dout, math_dout, sid_dout)
   begin
     case dev_sel is
       when DEV_SRAM =>
@@ -455,6 +473,10 @@ begin
         cpu_din <= sound_dout;
       when DEV_MATH =>
         cpu_din <= math_dout;
+      when DEV_SID =>
+        -- SID now lives in the free I/O region ($D400), no longer overlapping the
+        -- ROM, so reads return the SID register file again.
+        cpu_din <= sid_dout;
       when others =>
         cpu_din <= x"FF";
     end case;
@@ -547,7 +569,7 @@ begin
     );
 
   zp_ram_i : entity work.sync_ram
-    generic map (ADDR_WIDTH => 9, ASYNC_READ => false)
+    generic map (ADDR_WIDTH => 14, ASYNC_READ => false)
     port map (clk => clk, we => zp_we_mux,
               addr => zp_addr_mux, din => zp_din_mux, dout => zp_dout);
 
@@ -698,18 +720,46 @@ begin
     );
 
   -- ── Sound: 4-voice synth (ADSR + 5 waveforms) + PT8211 DAC ────────────
-  sound_i : entity work.sound_chip4
+  -- The Tang build uses the native SID core as its sole synthesizer. Keeping
+  -- sound_chip4 in parallel caused Gowin to promote several envelope-control
+  -- nets to scarce PRIMARY/LW clock resources, starving the DDR3 PHY clock
+  -- network and making calibration placement-dependent.
+  --
+  -- sound_chip4 also provided the free-running millisecond counter at $883A that
+  -- the SID player polls for tempo. Without it $883A read $FF, the player's
+  -- "20 ms elapsed?" test never passed, and the play routine was never called
+  -- (init only -> silence). Provide that one counter directly here; all other
+  -- sound-region reads return $FF.
+  ms_timebase : process(clk)
+  begin
+    if rising_edge(clk) then
+      if cpu_reset_n = '0' then
+        ms_div   <= 0;
+        ms_count <= (others => '0');
+      elsif ms_div = CLK_HZ/1000 - 1 then
+        ms_div   <= 0;
+        ms_count <= ms_count + 1;
+      else
+        ms_div <= ms_div + 1;
+      end if;
+    end if;
+  end process;
+
+  sound_dout <= std_logic_vector(ms_count)
+                  when dev_sel = DEV_SOUND0 and cpu_addr(3 downto 0) = "1010"
+                  else x"FF";
+
+  sid_i : entity work.sid6581
     generic map (CLK_HZ => CLK_HZ)
     port map (
       clk        => clk,
       reset_n    => cpu_reset_n,
-      cs         => sound_cs,
-      we         => sound_we,
-      addr       => sound_addr,
+      cs         => sid_cs,
+      we         => sid_we,
+      addr       => sid_addr,
       din        => cpu_dout,
-      dout       => sound_dout,
-      sample_out => sound_sample,
-      active     => open
+      dout       => sid_dout,
+      sample_out => sid_sample
     );
 
   dac_i : entity work.pt8211_dac
@@ -717,7 +767,7 @@ begin
     port map (
       clk     => clk,
       reset_n => cpu_reset_n,
-      sample  => sound_sample,
+      sample  => sid_sample,
       dac_bck => dac_bck,
       dac_ws  => dac_ws,
       dac_din => dac_din
@@ -785,7 +835,13 @@ begin
               mon_addr_lat <= monitor_mem_addr;
               mon_wdata_lat <= monitor_mem_wdata;
               mon_we_lat <= monitor_mem_we;
-              if unsigned(monitor_mem_addr) >= ADDR_ROM_BASE then
+              if in_range(monitor_mem_addr, ADDR_VIC_BMP_BASE, ADDR_VIC_BMP_LAST) then
+                if monitor_mem_we = '1' then
+                  mon_mem_state <= M_BITMAP_WR_WAIT;
+                else
+                  mon_mem_state <= M_BITMAP_RD_WAIT;
+                end if;
+              elsif is_rom_addr(monitor_mem_addr) then
                 if monitor_mem_we = '1' then
                   mon_mem_state <= M_ROM_WR_WAIT;
                 else
@@ -807,7 +863,7 @@ begin
               elsif monitor_mem_addr(15) = '1' then
                 mon_rdata_reg <= x"FF";
                 mon_mem_state <= M_READY;
-              elsif monitor_mem_addr(15 downto 9) = "0000000" then
+              elsif monitor_mem_addr(15 downto 14) = "00" then
                 mon_mem_state <= M_ZP_WAIT;
               elsif monitor_mem_we = '1' then
                 mon_mem_state <= M_SRAM_WAIT;
@@ -842,6 +898,13 @@ begin
             mon_rdata_reg <= vram_dout;
             mon_mem_state <= M_READY;
           when M_VRAM_WR_WAIT =>
+            mon_mem_state <= M_READY;
+          when M_BITMAP_RD_WAIT =>
+            mon_mem_state <= M_BITMAP_RD_READY;
+          when M_BITMAP_RD_READY =>
+            mon_rdata_reg <= bitmap_dout;
+            mon_mem_state <= M_READY;
+          when M_BITMAP_WR_WAIT =>
             mon_mem_state <= M_READY;
           when M_VIA_WAIT =>
             mon_mem_state <= M_VIA_READY;

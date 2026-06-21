@@ -15,6 +15,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[Simulation](./06_SIMULATION.md)** - Running and analyzing simulations
 - **[Development Guide](./07_DEVELOPMENT.md)** - Contributing and development workflow
 - **[UART Monitor](./UART_MONITOR.md)** - Hardware monitor commands and live ROM upload over UART
+- **[Split ROM and Native SID Update](./SPLIT_ROM_SID_UPDATE.md)** - New memory map, EhBASIC/Soundsid layout, and uploader migration
 - **[SD Bootloader](./SD_BOOTLOADER_PLAN.md)** - SD-card shadow-ROM boot flow
 - **[FPGA Tools GUI](./FPGA_TOOLS_GUI.md)** - Graphical launcher for all Python build/upload/utility tools
 - **[FPGA Image Captures](./images/README.md)** - Real HDMI screenshots captured from FPGA hardware
@@ -37,6 +38,7 @@ fpga/
 │   ├── 06_SIMULATION.md    Simulation guide
 │   ├── 07_DEVELOPMENT.md   Development guide
 │   ├── UART_MONITOR.md     UART hardware monitor and ROM upload
+│   ├── SPLIT_ROM_SID_UPDATE.md Split ROM and native SID migration
 │   ├── SD_BOOTLOADER_PLAN.md SD-card shadow-ROM boot flow
 │   ├── FPGA_TOOLS_GUI.md   Graphical launcher for Python tools
 │   ├── images/             Real FPGA HDMI screenshots captured through a video grabber
@@ -65,7 +67,7 @@ The FPGA maintains 100% software compatibility with the C emulator:
 - 8-bit data bus
 - Same memory map with peripherals at identical addresses
 - IRQ logic combining VIA, UART, and VIC interrupts
-- SD boot top loads the 16 KB `$C000-$FFFF` ROM window into shadow RAM
+- Current Tang builds map the 16 KB shadow RAM as `$A000-$CFFF` plus `$F000-$FFFF`, leaving `$D000-$EFFF` for I/O
 - UART hardware monitor can inspect/patch RAM, VRAM, I/O, and shadow ROM
 
 ### Design Approach

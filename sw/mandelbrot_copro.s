@@ -10,13 +10,13 @@
 ; writes + four reads to the hardware DSP multiplier — and 8.24
 ; gives a far sharper image than the old 4.12.
 ;
-; Build (reuse the standalone $C000 config):
+; Build (split-map application at $A000, vectors at $FFFA):
 ;   ca65 --cpu 65c02 -o mandelbrot_copro.o mandelbrot_copro.s
-;   ld65 -C mandelbrot_bitmap.cfg -o mandelbrot_copro.bin mandelbrot_copro.o
+;   ld65 -C mandelbrot_bitmap.cfg -o ../roms/mandelbrot_copro.bin mandelbrot_copro.o
 ;
 ; Upload:
-;   python tools/upload_monitor_hex.py mandelbrot_copro.bin \
-;       --port COM15 --baud 230400 --address 0xC000 --run
+;   python tools/upload_monitor_hex.py roms/mandelbrot_copro.bin \
+;       --split-rom --port COM15 --baud 115200 --run
 ; ============================================================
 
 ; --- Hardware registers ---
@@ -37,7 +37,7 @@ MUL_RES     = MUL+8
 MUL_SHIFT   = MUL+12
 
 ; --- Memory map ---
-BMP_BASE    = $9010         ; bitmap RAM (8000 bytes)
+BMP_BASE    = $6000         ; bitmap RAM (8 KB, first 8000 bytes visible)
 COL_BASE    = $8400         ; color RAM (1000 bytes)
 
 ; --- Mandelbrot constants (8.24 fixed-point) ---

@@ -1,17 +1,17 @@
 ; ============================================================
 ; Mandelbrot Set — 320x200 Bitmap, 16 C64 Colors
-; Standalone ROM for $C000-$FFFF (replaces EhBASIC)
+; Standalone split-map ROM: application at $A000, vectors at $FFFA
 ;
 ; 4.12 signed fixed-point arithmetic (range -8.0 .. +7.999)
 ; 20 iterations, ~5-8 min on 1 MHz 6502
 ;
 ; Build:
 ;   ca65 --cpu 65c02 -o mandelbrot_bitmap.o mandelbrot_bitmap.s
-;   ld65 -C mandelbrot_bitmap.cfg -o mandelbrot_bitmap.bin mandelbrot_bitmap.o
+;   ld65 -C mandelbrot_bitmap.cfg -o ../roms/mandelbrot_bitmap.rom mandelbrot_bitmap.o
 ;
-; Upload (pad to 16 KB with kernel or standalone):
-;   python fpga/tools/upload_monitor_hex.py mandelbrot_bitmap.bin \
-;       --port COM15 --baud 230400 --address 0xC000 --run
+; Upload:
+;   python tools/upload_monitor_hex.py roms/mandelbrot_bitmap.rom \
+;       --split-rom --port COM15 --baud 115200 --run
 ; ============================================================
 
 ; --- Hardware registers ---
@@ -21,7 +21,7 @@ UART_SR     = $8811
 UART_RDRF   = $08
 
 ; --- Memory map ---
-BMP_BASE    = $9010         ; bitmap RAM (8000 bytes)
+BMP_BASE    = $6000         ; bitmap RAM (8 KB, first 8000 bytes visible)
 COL_BASE    = $8400         ; color RAM (1000 bytes)
 
 ; --- Mandelbrot constants (4.12 fixed-point) ---

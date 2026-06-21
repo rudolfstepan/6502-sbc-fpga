@@ -3,7 +3,9 @@
 The SD boot bitstream includes a small hardware monitor that can take over the
 6502 bus through the board UART. It is meant for bring-up and firmware
 development: inspect memory, patch bytes, disassemble small ranges, and upload a
-new 16 KB ROM image into the shadow-ROM RAM without rewriting the SD card.
+new ROM data into the shadow-ROM RAM without rewriting the SD card. The current
+Tang build exposes that RAM through two CPU windows rather than one contiguous
+window.
 
 ## Hardware Entry
 
@@ -21,7 +23,7 @@ PIX16:
 Tang Primer 20K:
 
 1. Program the Tang with the `tang20k_sbc_top` bitstream.
-2. Open the CH340 UART, for example Windows `COM12`, at `230400 8N1`.
+2. Open the CH340 UART, for example Windows `COM15`, at `115200 8N1`.
 3. Press hardware button `KEY1`.
 
 In both cases:
@@ -58,9 +60,9 @@ Examples:
 
 ```text
 M 8000 80FF
-D C000 C040
+D A000 A040
 E 8050 41
-L C000
+L A000
 ```
 
 ## Accessible Address Ranges
@@ -71,25 +73,31 @@ Currently supported ranges are:
 
 | Range | Target |
 | --- | --- |
-| `$0000-$7FFF` | Main RAM. `$0000-$01FF` is internal zero-page/stack RAM. PIX16 uses SDRAM for the rest; the current Tang bring-up core uses internal BSRAM. |
+| `$0000-$3FFF` | Internal BRAM main memory, including zero page, stack, and EhBASIC workspace. |
+| `$4000-$5FFF` | External DDR3 main RAM. |
+| `$6000-$7FFF` | Dedicated 8 KB VIC bitmap RAM; `$6000-$7F3F` contains visible pixels, the final 192 bytes are reserved. |
 | `$8000-$87FF` | VIC text VRAM. Writes are visible immediately on VGA. |
 | `$8800-$880F` | VIA 6522 registers. Port B bit 0 is connected to board LED 1 after boot. |
 | `$8810-$8813` | UART 6551 registers. |
-| `$C000-$FFFF` | 16 KB shadow ROM RAM. This is writable by the monitor for live ROM upload. |
+| `$A000-$CFFF` | 12 KB shadow ROM: application/EhBASIC window. |
+| `$F000-$FFFF` | 4 KB shadow ROM: kernel/vector window. |
 
-The current top intentionally blocks unmapped/stub video register ranges such as
-bitmap, sprites, and blitter RAM because they are not physically implemented in
-this hardware path yet.
+`$D000-$EFFF` is not ROM in the current Tang map. It is reserved for I/O;
+notably, the SID-compatible registers occupy `$D400-$D418`. A loader operation
+must not cross from `$CFFF` into this hole.
+
+Sprite and blitter ranges remain unavailable where no physical implementation
+exists. Bitmap RAM is implemented separately at `$6000-$7FFF`.
 
 ## Hex Loader Mode
 
 `L addr` switches the monitor into a raw hex-byte input mode:
 
 ```text
-. L C000
+. L A000
 LOAD HEX . END
 > A9 20 8D 00 80
-> 4C 00 C0
+> 4C 00 A0
 > .
 OK
 .
@@ -116,38 +124,49 @@ Default settings:
 | Setting | Value |
 | --- | --- |
 | Port | `COM15` on PIX16 examples; Tang has been tested as `COM12` |
-| Baud | `230400` on PIX16 and Tang |
-| Load address | `$C000` |
+| Baud | `115200` in the current Tang bitstream |
+| Load address | `$C000` for a legacy single segment; explicit modes are preferred for split images |
 | Image | `fpga/roms/upload_demo.rom` |
 
-Common workflow:
+EhBASIC uploads the kernel first and the BASIC window second, then starts at
+`$A000`:
 
 ```sh
-python fpga/tools/upload_monitor_hex.py --port COM15 --baud 230400 --run --verbose
+python tools/upload_monitor_hex.py --ehbasic --port COM15 --baud 115200 --run --verbose
 ```
 
-Regenerate the bundled demo ROM first:
+The same operation, including rebuilding EhBASIC, is available through:
 
 ```sh
-python fpga/tools/upload_monitor_hex.py --build-demo --port COM15 --baud 230400 --run --verbose
+python tools/build_fpga_ehbasic.py --upload --port COM15 --baud 115200 --run --verbose
 ```
 
-Upload a custom binary:
+Standalone 16 KB images built in physical split-ROM order use `--split-rom`.
+The uploader sends bytes `$3000-$3FFF` to `$F000`, then bytes `$0000-$2FFF`
+to `$A000`, and `--run` starts at `$A000`:
 
 ```sh
-python fpga/tools/upload_monitor_hex.py path/to/my.rom --port COM15 --baud 230400 --address 0xC000 --run
+python tools/upload_monitor_hex.py roms/soundsid.rom --split-rom \
+       --port COM15 --baud 115200 --run --verbose
 ```
+
+The old command `--address 0xC000` is invalid for a contiguous 16 KB image in
+the split map because it would overwrite the I/O hole. The uploader detects
+this case before opening the serial port. It also reports monitor-side
+`MEM/IO ONLY` and `?` responses instead of claiming that the upload completed.
 
 If the upload fails with an access error, another serial terminal still has the
 COM port open. Close the terminal and run the command again.
 
-## Demo ROM Generator
+## Legacy Demo ROM Generator
 
 `fpga/tools/make_upload_demo_rom.py` creates a simple 16 KB ROM at
 `fpga/roms/upload_demo.rom`. It is hand-assembled by a tiny Python builder so it
 has no cc65 dependency.
 
-The ROM is mapped for CPU addresses `$C000-$FFFF` and does the following:
+The bundled demo still uses the legacy contiguous `$C000-$FFFF` layout. It is
+useful on the corresponding PIX16/legacy configuration, but must be relinked
+before use with the current Tang split map. It does the following:
 
 1. Initialize stack and VIA Port B.
 2. Clear the 2 KB text VRAM.
@@ -176,7 +195,7 @@ There are two firmware update paths:
 Use the SD image for stable firmware snapshots and the UART monitor for quick
 ROM experiments.
 
-## Useful Checks
+## Legacy Demo Checks
 
 After upload and `G C000`, the UART should print the demo banner once:
 

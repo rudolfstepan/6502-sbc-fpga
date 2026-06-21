@@ -24,6 +24,12 @@ $ScriptDir   = $PSScriptRoot
 $BoardDir    = Join-Path $ScriptDir 'boards\tang_primer_20k'
 $ProjectDir  = Join-Path $BoardDir  'project'
 $Bitstream   = Join-Path $ProjectDir 'impl\pnr\tang_sbc.fs'
+$DeviceCfg   = Join-Path $ProjectDir 'impl\pnr\device.cfg'
+$DeviceCfgText = if (Test-Path $DeviceCfg) {
+    [IO.File]::ReadAllText($DeviceCfg)
+} else {
+    $null
+}
 
 # Locate gw_sh — check PATH first, then common install location
 $GwSh = (Get-Command gw_sh -ErrorAction SilentlyContinue)?.Source
@@ -36,8 +42,13 @@ if (-not $GwSh) {
 
 if (-not $NoClean) {
     Write-Host "Cleaning Gowin build outputs ..."
+    # impl/pnr/device.cfg is a versioned input, not a disposable output.  It
+    # carries the dual-purpose-pin and VCC/VCCX settings needed by the DDR3
+    # implementation.  Deleting all of impl made Gowin recreate a reduced file
+    # without those voltage settings, after which DDR calibration could fail.
     $CleanPaths = @(
-        (Join-Path $ProjectDir 'impl'),
+        (Join-Path $ProjectDir 'impl\gwsynthesis'),
+        (Join-Path $ProjectDir 'impl\temp'),
         (Join-Path $ProjectDir 'tmp'),
         (Join-Path $ProjectDir '.cache')
     )
@@ -45,6 +56,12 @@ if (-not $NoClean) {
         if (Test-Path $Path) {
             Remove-Item -LiteralPath $Path -Recurse -Force
         }
+    }
+    $PnrDir = Join-Path $ProjectDir 'impl\pnr'
+    if (Test-Path $PnrDir) {
+        Get-ChildItem -LiteralPath $PnrDir -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'device.cfg' } |
+            Remove-Item -Recurse -Force
     }
     Get-ChildItem -LiteralPath $ProjectDir -Force -File -ErrorAction SilentlyContinue |
         Where-Object {
@@ -70,6 +87,12 @@ try {
     }
 } finally {
     Pop-Location
+    # gw_sh rewrites device.cfg even when it was supplied as an input. Restore
+    # the versioned configuration so the next GUI or CLI build starts with the
+    # intended VCC/VCCX and dual-purpose-pin settings.
+    if ($null -ne $DeviceCfgText) {
+        [IO.File]::WriteAllText($DeviceCfg, $DeviceCfgText)
+    }
 }
 
 if (-not (Test-Path $Bitstream)) {

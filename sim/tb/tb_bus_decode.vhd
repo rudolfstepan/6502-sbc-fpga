@@ -32,9 +32,13 @@ begin
     addr <= x"88A4"; wait for 1 ns; assert sel = DEV_SOUND3 report "SOUND3 decode failed" severity failure;
     addr <= x"8900"; wait for 1 ns; assert sel = DEV_VIC_SPD report "VIC sprite data decode failed" severity failure;
     addr <= x"9000"; wait for 1 ns; assert sel = DEV_VIC_REG report "VIC register decode failed" severity failure;
-    addr <= x"9010"; wait for 1 ns; assert sel = DEV_VIC_BMP report "VIC bitmap decode failed" severity failure;
+    addr <= x"5FFF"; wait for 1 ns; assert sel = DEV_SRAM report "SRAM below bitmap failed" severity failure;
+    addr <= x"6000"; wait for 1 ns; assert sel = DEV_VIC_BMP report "VIC bitmap base decode failed" severity failure;
+    addr <= x"7F3F"; wait for 1 ns; assert sel = DEV_VIC_BMP report "VIC visible bitmap end decode failed" severity failure;
+    addr <= x"7FFF"; wait for 1 ns; assert sel = DEV_VIC_BMP report "VIC bitmap window end decode failed" severity failure;
     addr <= x"C000"; wait for 1 ns; assert sel = DEV_ROM report "ROM decode failed" severity failure;
-    addr <= x"B000"; wait for 1 ns; assert sel = DEV_NONE report "unmapped decode failed" severity failure;
+    addr <= x"B000"; wait for 1 ns; assert sel = DEV_ROM report "BASIC ROM decode failed" severity failure;
+    addr <= x"D000"; wait for 1 ns; assert sel = DEV_NONE report "I/O hole decode failed" severity failure;
 
     report "tb_bus_decode passed";
     finish;

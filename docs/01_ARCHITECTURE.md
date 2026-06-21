@@ -2,7 +2,7 @@
 
 ## System Design
 
-The 6502 SBC FPGA is a synthesizable hardware implementation of a 6502-based single-board computer targeting real FPGA boards. The active PIX16 path is `pix16_sbc_sd_boot_top`: T65 CPU, SDRAM-backed RAM, SD-loaded 16 KB shadow ROM, VGA text output, VIA, UART, boot status screen, RAM self-test, and a UART hardware monitor. The active Tang Primer 20K bring-up path is `tang20k_sbc_top`: HDMI boot/status output, CH340 UART, KEY1 monitor entry, on-board microSD ROM loading, and an internal-BSRAM main RAM core for now. The older `sbc_minimal_top` remains useful as a compact VGA/T65 smoke-test design.
+The 6502 SBC FPGA is a synthesizable hardware implementation of a 6502-based single-board computer targeting real FPGA boards. The active PIX16 path is `pix16_sbc_sd_boot_top`: T65 CPU, SDRAM-backed RAM, SD-loaded 16 KB shadow ROM, VGA text output, VIA, UART, boot status screen, RAM self-test, and a UART hardware monitor. The active Tang Primer 20K path is `tang20k_sbc_top`: HDMI boot/status output, CH340 UART, KEY1 monitor entry, on-board microSD ROM loading, DDR3-backed main RAM with BRAM zero page, split shadow-ROM windows, and native SID-compatible audio. The older `sbc_minimal_top` remains useful as a compact VGA/T65 smoke-test design.
 
 ---
 
@@ -40,10 +40,10 @@ and shadow-ROM concept with Tang-specific board glue:
 ```text
 Tang Primer 20K board
   -> HDMI/DVI output through tang20k_hdmi_tx
-  -> CH340 UART at 230400 8N1
+  -> CH340 UART at 115200 8N1
   -> on-board microSD/SDIO slot in SPI mode on N10/N11/R14/M8
   -> sd_rom_loader writes the 16 KB ROM window into boot_shadow_rom
-  -> sbc_t65_boot_monitor_top uses internal BSRAM main RAM during bring-up
+  -> sbc_t65_boot_monitor_top uses DDR3 main RAM with BRAM zero page/stack
   -> KEY1 enters the UART monitor and holds the CPU
 ```
 
@@ -55,14 +55,21 @@ failure while the CPU remains held.
 
 | Address Range | Size | Device | Notes |
 | --- | --- | --- | --- |
-| $0000-$01FF | 512 B | Internal FPGA RAM | Zero page and stack, no external wait states |
-| $0200-$7FFF | ~31.5 KB | Main RAM | PIX16 uses SDRAM-backed RAM; current Tang bring-up uses internal BSRAM |
+| $0000-$3FFF | 16 KB | Internal FPGA RAM | Zero page, stack, and EhBASIC workspace |
+| $4000-$5FFF | 8 KB | Main RAM | External DDR3 in the current Tang build |
+| $6000-$7FFF | 8 KB | VIC bitmap RAM | 320x200, 1 bit per pixel; final 192 bytes reserved |
 | $8000-$87FF | 2 KB | VIC text/color VRAM | $8000–$83E7 chars, $8400–$87E7 colors; shared by CPU/monitor/VIC |
 | $8800-$880F | 16 B | VIA 6522 | Port B bit 0 -> board LED 1 after boot |
 | $8810-$8813 | 4 B | UART 6551 | CPU UART registers |
-| $8830-$8839 | 10 B | Sound channel 0 | Single-voice synth → PT8211 DAC (Tang dock); see [Sound Chip](./SOUND.md) |
+| $883A | 1 B | Millisecond counter | Timing source retained for native SID playback |
 | $88B0-$88BF | 16 B | Math coprocessor (FPU) | Signed 32×32 fixed-point multiply (8.24); see [Math Coprocessor](./FPU.md) |
-| $C000-$FFFF | 16 KB | Shadow ROM RAM | Loaded from SD or patched by UART monitor |
+| $A000-$CFFF | 12 KB | Shadow ROM application window | EhBASIC or standalone application |
+| $D000-$EFFF | 8 KB | I/O / reserved | SID at $D400-$D418; not shadow ROM |
+| $F000-$FFFF | 4 KB | Shadow ROM kernel window | Kernel and hardware vectors |
+
+The two ROM windows share one physical 16 KB `boot_shadow_rom`. Image offsets
+`$0000-$2FFF` map to CPU `$A000-$CFFF`; offsets `$3000-$3FFF` map to
+`$F000-$FFFF`. See [Split ROM and Native SID Update](./SPLIT_ROM_SID_UPDATE.md).
 
 ---
 
@@ -161,10 +168,10 @@ the display is active.
 
 The ROM is mirrored across the full $C000–$FFFF range via `cpu_addr[10:0]` indexing.
 
-The bus decoder still reports `$0000-$7FFF` as `DEV_SRAM`. The active top-levels
-physically intercept `$0000-$01FF` and route it to a small internal RAM before the
-main RAM path. This keeps 6502 zero-page, stack, IRQ entry, `JSR/RTS`, and
-read-modify-write traffic off SDRAM and away from external wait states.
+The bus decoder reports `$6000-$7FFF` as `DEV_VIC_BMP` before applying the
+broader main-RAM rule. In the current Tang top, `$0000-$3FFF` is routed to
+internal BRAM and `$4000-$5FFF` to DDR3. This keeps EhBASIC, zero-page, stack,
+IRQ entry, `JSR/RTS`, and read-modify-write traffic off external memory.
 
 IRQ sources are OR-combined: `cpu_irq_n = NOT (via_irq OR uart_irq)`.
 
@@ -220,28 +227,34 @@ color palette reference.
 
 The VIC supports a 320×200 pixel bitmap mode (1 bit per pixel, 2× scaled to
 640×400 on VGA). Bitmap data is stored in a dedicated 8 KB block RAM mapped at
-`$9010–$AF4F`. Bitmap mode is activated by writing `$01` to the MODE register
+`$6000–$7F3F`. Bitmap mode is activated by writing `$01` to the MODE register
 (`$9000`).
 
 During bitmap mode, the bus-stealing FSM fetches 40 bitmap bytes per scanline
-(from `$9010 + bmp_line*40`) in phase 0, and 40 color bytes (from `$8400 +
+(from `$6000 + bmp_line*40`) in phase 0, and 40 color bytes (from `$8400 +
 color_row*40`) in phase 1. The bitmap byte is used directly as the pixel pattern
 — no char ROM lookup or reverse-video processing. Each 8×8 pixel cell shares one
 color attribute from color RAM, providing 16-color foreground/background per cell.
 
-**Pixel formula:** `address = $9010 + Y*40 + INT(X/8)`, bit = `7 - (X AND 7)`
+**Pixel formula:** `address = $6000 + Y*40 + INT(X/8)`, bit = `7 - (X AND 7)`
 (MSB-first, C64 convention).
 
 **BASIC usage:**
 
 ```basic
 POKE 36864, 1                          : REM bitmap mode on
-A=36880+Y*40+INT(X/8)                  : REM pixel address
+A=24576+Y*40+INT(X/8)                  : REM pixel address ($6000)
 POKE A, PEEK(A) OR 2^(7-(X AND 7))    : REM set pixel
 POKE 36864, 0                          : REM back to text
 ```
 
-See [examples/bitmaptest.bas](../../examples/bitmaptest.bas) for a full demo.
+See [examples/bitmaptest.bas](../examples/bitmaptest.bas) for a full demo. With
+EhBASIC waiting at its prompt, upload and run it with:
+
+```powershell
+python tools\upload_basic_uart.py examples\bitmaptest.bas --port COM15 `
+       --baud 115200 --new --run --verbose
+```
 
 The FPGA BASIC example [examples/petscii_gfx.bas](../../examples/petscii_gfx.bas)
 is intentionally a pure VRAM `POKE` demo. It avoids `PRINT CHR$(96)` for graphics
@@ -312,21 +325,22 @@ It is present in the project but not synthesized for the PIX16 board (Implementa
 └────────────────────────────────────────────────────────────┘
 ```
 
-### Full Memory Map
+### Current Tang Primer 20K Memory Map
 
 | Address Range | Size | Device |
 | --- | --- | --- |
-| $0000–$7FFF | 32 KB | SRAM |
+| $0000–$3FFF | 16 KB | BRAM main RAM |
+| $4000–$5FFF | 8 KB | DDR3 main RAM |
+| $6000–$7FFF | 8 KB | Dedicated VIC bitmap RAM; first 8000 bytes visible |
 | $8000–$87FF | 2 KB | VIC Text RAM |
 | $8800–$880F | 16 B | VIA 6522 |
 | $8810–$8813 | 4 B | UART 6551 |
-| $8820–$882F | 16 B | Disk (stub) |
-| $8830–$88AD | 40 B | Sound ch 0–3 (stub) |
-| $8850–$888F | 64 B | VIC Sprites (stub) |
-| $8900–$89FF | 256 B | VIC Sprite Data (stub) |
+| $883A | 1 B | Free-running millisecond counter |
+| $88B0–$88BF | 16 B | Math coprocessor |
 | $9000–$900F | 16 B | VIC Control Regs |
-| $9010–$AF4F | 40 KB | VIC Bitmap (stub) |
-| $C000–$FFFF | 16 KB | ROM |
+| $A000–$CFFF | 12 KB | Shadow ROM application window |
+| $D400–$D418 | 25 B | SID-compatible audio registers |
+| $F000–$FFFF | 4 KB | Shadow ROM kernel/vector window |
 
 ---
 

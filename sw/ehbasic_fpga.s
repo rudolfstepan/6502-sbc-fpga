@@ -13,8 +13,10 @@
 ; Vectors are in ZP BRAM, NOT page-2 SDRAM.  JMP (VEC_OUT) reads from
 ; ZP BRAM (single-cycle, no wait states) — avoids SDRAM timing window.
 ;
-; RAM available to BASIC: $0200-$7FFF (~31.5 KB)
-;   Ram_top is patched to $8000 by build_fpga_ehbasic.py
+; RAM available to BASIC: $0200-$3FFF (~15.5 KB)
+;   Ram_top is patched to $4000 by build_fpga_ehbasic.py
+;   $0000-$3FFF is on-chip 16 KB BRAM (single-cycle, reliable); $4000-$7FFF is
+;   DDR3 and intentionally kept out of BASIC's reach until the bridge is fixed.
 ;   (above $7FFF: VIC VRAM $8000, VIA $8800, UART $8810, etc.)
 ;
 ; Disk commands LOAD/SAVE are stubbed — disk device not wired
@@ -35,11 +37,11 @@
 ;       --port COM15 --baud 230400 --address 0xC000 --run --verbose
 ; ============================================================
 
-; Kernel jump table (kernel ROM at $C000-$CFFF)
-KERNAL_CHROUT   = $C003     ; write char A to VIC + mirror to UART
-KERNAL_CHRIN    = $C006     ; blocking read + echo (uppercase)
-KERNAL_CHRIN_NB = $C009     ; non-blocking: A=char, C=1 ready
-KERNAL_CLRSCR   = $C00C     ; clear VIC screen, home cursor
+; Kernel jump table (kernel ROM relocated to $F000-$FFFF)
+KERNAL_CHROUT   = $F003     ; write char A to VIC + mirror to UART
+KERNAL_CHRIN    = $F006     ; blocking read + echo (uppercase)
+KERNAL_CHRIN_NB = $F009     ; non-blocking: A=char, C=1 ready
+KERNAL_CLRSCR   = $F00C     ; clear VIC screen, home cursor
 KERNAL_PENDING_CHAR = $02F7
 KERNAL_PENDING_FLAG = $02F8
 
@@ -65,8 +67,19 @@ IRQ_FLAG_ZP = $DF
 .segment "EHBASIC"
 
 ; ============================================================
-; RESET_ENTRY — CPU reset vector lands here (via kernel INIT
-; at $C000 which sets up VIA/VIC then JSRs to $D000).
+; Fixed entry jump table at the very start of EhBASIC ($A000).
+; The kernel ROM owns the $FFFA vectors and points them here, so these
+; three addresses must stay fixed:
+;   $A000 RESET, $A003 IRQ, $A006 NMI.
+; ============================================================
+ENTRY_TABLE:
+    jmp RESET_ENTRY             ; $A000  <- kernel RESET vector
+    jmp IRQ_CODE               ; $A003  <- kernel IRQ vector
+    jmp NMI_CODE               ; $A006  <- kernel NMI vector
+
+; ============================================================
+; RESET_ENTRY — CPU reset lands at $A000 (jmp here).  The kernel is a
+; callable library only; it does no boot setup itself.
 ; ============================================================
 RESET_ENTRY:
     sei
@@ -251,10 +264,8 @@ uc_done:
 .include "basic.asm"
 
 ; ============================================================
-; 6502 interrupt vectors — must land at $FFFA-$FFFF.
-; Both handlers live in ROM (shadow BRAM) — no SDRAM, no wait states.
+; The 6502 interrupt vectors ($FFFA-$FFFF) now live in the KERNEL ROM
+; ($F000-$FFFF) and point at the fixed ENTRY_TABLE above
+; ($A000/$A003/$A006).  EhBASIC therefore no longer defines a VECTORS
+; segment.
 ; ============================================================
-.segment "VECTORS"
-    .word   NMI_CODE            ; $FFFA NMI vector -> ROM handler
-    .word   RESET_ENTRY         ; $FFFC RESET vector
-    .word   IRQ_CODE            ; $FFFE IRQ vector -> ROM handler
