@@ -105,7 +105,8 @@ architecture rtl of ddr3_byte_bridge is
   signal op_fin   : std_logic := '0';   -- 1-clk: op complete
 
   -- ---- clk_x1 top-mode FSM (self-test then serve) --------------------------
-  type mode_state_t is (M_WAIT_CALIB, M_FILL, M_FILL_OP, M_CHECK, M_CHECK_OP, M_SERVE_IDLE, M_SERVE_OP);
+  type mode_state_t is (M_WAIT_CALIB, M_FILL, M_FILL_OP, M_CHECK, M_CHECK_OP,
+                        M_CLEAR, M_CLEAR_OP, M_SERVE_IDLE, M_SERVE_OP);
   signal mode_state : mode_state_t := M_WAIT_CALIB;
   signal test_addr  : unsigned(ADDR_BITS-1 downto 0) := (others => '0');
   signal ready_x1   : std_logic := '0';
@@ -351,14 +352,38 @@ begin
               t_actual_x1   <= op_dout;
             end if;
             if test_addr = to_unsigned(2**ADDR_BITS-1, ADDR_BITS) then
-              t_done_x1   <= '1';
-              t_active_x1 <= '0';
-              t_phase_x1  <= x"3";
-              ready_x1    <= '1';        -- release CPU (even on error: status shows it)
-              mode_state  <= M_SERVE_IDLE;
+              -- validation finished; now zero the whole window so a full
+              -- (long-press) reset starts the 6502 with clean RAM, leaving
+              -- nothing from a previous session behind.
+              test_addr  <= (others => '0');
+              t_phase_x1 <= x"4";        -- clear
+              mode_state <= M_CLEAR;
             else
               test_addr  <= test_addr + 1;
               mode_state <= M_CHECK;
+            end if;
+          end if;
+
+        -- ---- zero-clear: wipe all RAM before releasing the CPU ------------
+        when M_CLEAR =>
+          if op_busy = '0' then
+            op_we    <= '1';
+            op_addr  <= std_logic_vector(test_addr);
+            op_din   <= (others => '0');
+            op_start <= '1';
+            mode_state <= M_CLEAR_OP;
+          end if;
+        when M_CLEAR_OP =>
+          if op_fin = '1' then
+            if test_addr = to_unsigned(2**ADDR_BITS-1, ADDR_BITS) then
+              t_done_x1   <= '1';
+              t_active_x1 <= '0';
+              t_phase_x1  <= x"3";       -- done
+              ready_x1    <= '1';        -- release CPU: RAM validated and cleared
+              mode_state  <= M_SERVE_IDLE;
+            else
+              test_addr  <= test_addr + 1;
+              mode_state <= M_CLEAR;
             end if;
           end if;
 

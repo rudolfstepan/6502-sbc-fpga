@@ -12,9 +12,9 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog
 
-ROOT  = Path(__file__).resolve().parent.parent.parent
-TOOLS = ROOT / "fpga" / "tools"
-ROMS  = ROOT / "fpga" / "roms"
+ROOT  = Path(__file__).resolve().parent.parent
+TOOLS = ROOT / "tools"
+ROMS  = ROOT / "roms"
 
 # ── Catppuccin Mocha palette ───────────────────────────────────────────────
 BG      = "#1e1e2e"

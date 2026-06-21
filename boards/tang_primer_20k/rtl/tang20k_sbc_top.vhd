@@ -6,10 +6,13 @@
 -- Video: vic_vga runs at CLK_DIV=1 (27 MHz pixel), 858x525 total (CEA 480p),
 --   giving 640x480 @ 31.47 kHz H / 59.94 Hz V.  Encoded to DVI TMDS over HDMI.
 --
--- KEY[0] = T5  (LVCMOS33, active-low reset button):
+-- KEY[0] = T10 (dock S0, LVCMOS33, active-low reset button):
 --                short press  -> CPU soft reset (restart program, keep ROM/boot)
 --                long press >1s -> full board reset (re-run SD boot loader)
--- KEY[1] = T3  (LVCMOS33, active-low UART monitor enter / CPU hold)
+-- KEY[1] = T6  (PMOD0, LVCMOS33, active-low UART monitor enter / CPU hold).
+--                The dock S1 button (T3) is unusable with DDR3 (T3 is in DDR
+--                Bank 4 @ 1.5 V), so wire an external momentary button from the
+--                T6 header pin to GND; the internal pull-up reads '1' otherwise.
 -- LED[0]/LED[1] show boot status until boot_done, then LED[3:0] follow VIA PB[3:0].
 library ieee;
 use ieee.std_logic_1164.all;
@@ -304,7 +307,16 @@ architecture rtl of tang20k_sbc_top is
   signal app_cmd_rdy        : std_logic;
   signal app_addr27         : std_logic_vector(26 downto 0);
   signal app_addr28         : std_logic_vector(27 downto 0);
-  signal ddr_pll_reset      : std_logic;
+  -- DDR3 controller reset + calibration auto-retry (sequenced on clk_27mhz, the
+  -- IP's own reference clock -- no PLL-derived fabric clock is loaded).
+  constant DDR_RST_HOLD     : integer := 1023;        -- reset assert width (~38 us @ 27 MHz)
+  constant DDR_CAL_WAIT     : integer := 540_000;     -- calibration timeout (~20 ms @ 27 MHz)
+  type ddr_rst_state_t is (DR_ASSERT, DR_WAIT_CAL);
+  signal ddr_rst_state      : ddr_rst_state_t := DR_ASSERT;
+  signal ddr_rst_n          : std_logic := '0';       -- DDR3 controller reset
+  signal ddr_lock_sync      : std_logic_vector(1 downto 0) := (others => '0');
+  signal ddr_cal_sync       : std_logic_vector(1 downto 0) := (others => '0');
+  signal ddr_rst_cnt        : integer range 0 to DDR_CAL_WAIT := 0;
   -- Reference DDR3 IP uses zero for a single 128-bit user-interface beat.
   signal app_wren           : std_logic;
   signal app_wdata          : std_logic_vector(127 downto 0);
@@ -687,14 +699,64 @@ begin
   -- ── DDR3 main RAM ───────────────────────────────────────────────────────
   -- Single-rank board: chip-select tied low (matches Sipeed DDR-test example).
   ddr_cs        <= '0';
-  ddr_pll_reset <= not reset_n;
   app_addr28    <= '0' & app_addr27;
+  -- DDR3 bring-up sequenced like the known-good Sipeed DDR reference, with an
+  -- automatic calibration retry:
+  --  * the DDR memory PLL free-runs (reset tied '0' in the port map below) so it
+  --    locks immediately at power-on, independent of the HDMI PLL and the button.
+  --  * the controller reset is held a margin after the memory PLL locks, then
+  --    released synchronously on clk_27mhz -- the IP's own reference clock.  This
+  --    sequencer runs on the board oscillator only; it loads no PLL-derived
+  --    fabric clock, so the exclusive PLL placement stays intact.
+  --  * if calibration does not complete within DDR_CAL_WAIT, the controller reset
+  --    is re-asserted and calibration retried automatically -- Gowin DDR3 bring-up
+  --    is occasionally marginal at power-on, so this replaces the manual reset
+  --    presses that were otherwise needed before the RAM test would finish.
+  --  * a long-press full reset re-asserts the controller reset without disturbing
+  --    the free-running memory PLL.
+  ddr_reset_seq : process(clk_27mhz)
+  begin
+    if rising_edge(clk_27mhz) then
+      ddr_lock_sync <= ddr_lock_sync(0) & ddr_pll_lock;
+      ddr_cal_sync  <= ddr_cal_sync(0)  & ddr_calib_complete;
+
+      if ddr_lock_sync(1) = '0' or long_reset = '1' then
+        -- no stable memory clock yet, or a long-press full reset: hold reset
+        ddr_rst_state <= DR_ASSERT;
+        ddr_rst_cnt   <= 0;
+        ddr_rst_n     <= '0';
+      else
+        case ddr_rst_state is
+          when DR_ASSERT =>
+            ddr_rst_n <= '0';
+            if ddr_rst_cnt = DDR_RST_HOLD then
+              ddr_rst_cnt   <= 0;
+              ddr_rst_n     <= '1';
+              ddr_rst_state <= DR_WAIT_CAL;
+            else
+              ddr_rst_cnt <= ddr_rst_cnt + 1;
+            end if;
+
+          when DR_WAIT_CAL =>
+            ddr_rst_n <= '1';
+            if ddr_cal_sync(1) = '1' then
+              ddr_rst_cnt <= 0;                 -- calibrated: stay released
+            elsif ddr_rst_cnt = DDR_CAL_WAIT then
+              ddr_rst_cnt   <= 0;
+              ddr_rst_state <= DR_ASSERT;       -- timeout: re-assert and retry
+            else
+              ddr_rst_cnt <= ddr_rst_cnt + 1;
+            end if;
+        end case;
+      end if;
+    end if;
+  end process;
 
   ddr_mem_pll_i : Gowin_rPLL
     port map (
       clkout => ddr_memory_clk,   -- ~400 MHz (DDR-800)
       lock   => ddr_pll_lock,
-      reset  => ddr_pll_reset,
+      reset  => '0',              -- free-running: lock ASAP, like the Sipeed reference
       clkin  => clk_27mhz
     );
 
@@ -703,7 +765,7 @@ begin
       clk                 => clk_27mhz,
       memory_clk          => ddr_memory_clk,
       pll_lock            => ddr_pll_lock,
-      rst_n               => reset_n,
+      rst_n               => ddr_rst_n,
       app_burst_number    => (others => '0'), -- one 128-bit user-interface beat
       cmd_ready           => app_cmd_rdy,
       cmd                 => app_cmd,

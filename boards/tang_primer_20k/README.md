@@ -92,14 +92,17 @@ The two on-board push buttons are active-low with internal pull-ups:
 KEY0 is a dual-action reset, debounced and synchronised in the 54 MHz `clk_sys`
 domain:
 
-- **Short press** → **CPU soft reset**. Only the 6502 is held in reset and then
-  restarts via its reset vector. `boot_done`, the shadow ROM, and SRAM are kept,
-  so a program uploaded over the UART monitor restarts in place — the SD boot
-  loader is *not* re-run. This is the reset to use during normal operation.
-- **Long press (>1 s)** → **full board reset**. Asserts the global `reset_n`,
-  which also resets the SD ROM loader and reloads the ROM from the SD card. If
-  there is no valid SD boot image, the CPU stays held afterwards (no `boot_done`),
-  so use the short press for UART-uploaded ROMs.
+- **Short press** → **CPU soft reset** (*warm start*). Only the 6502 is held in
+  reset and then restarts via its reset vector. `boot_done`, the shadow ROM, and
+  the DDR3 main RAM are kept, so a program uploaded over the UART monitor restarts
+  in place — the SD boot loader is *not* re-run and RAM is *not* cleared. This is
+  the reset to use during normal operation.
+- **Long press (>1 s)** → **full board reset** (*cold start*). Asserts the global
+  `reset_n`, which also resets the SD ROM loader and reloads the ROM from the SD
+  card, and re-runs DDR3 calibration + the RAM self-test. The whole 32 KB main RAM
+  is **zero-cleared** before the CPU is released, so nothing from the previous
+  session survives. If there is no valid SD boot image, the CPU stays held
+  afterwards (no `boot_done`), so use the short press for UART-uploaded ROMs.
 
 The HDMI PLL is intentionally **not** gated by the reset button, so `clk_sys`
 keeps running (the debounce/long-press timer needs it) and the picture stays up
@@ -238,8 +241,10 @@ How it fits together:
 - **`rtl/ddr3_byte_bridge.vhd`** — adapts the 6502 single-byte bus (54 MHz
   `clk_sys`) to the IP: a req/ack clock-domain crossing, single-burst (BL8)
   access with the byte address split into a 16-byte line + lane, byte writes via
-  the IP write-data mask (no read-modify-write), and a **power-on RAM self-test**
-  that fills and verifies the whole 32 KB before releasing the CPU.
+  the IP write-data mask (no read-modify-write), and a **RAM bring-up** that
+  fills and verifies the whole 32 KB with a per-address pattern (validating
+  address mapping, lane order and mask polarity), then **zero-clears** it before
+  releasing the CPU — so every cold start begins with clean RAM.
 - The core (`sbc_t65_boot_monitor_top`) exposes a byte port (`sram_ext_*`) and
   stalls the CPU (`cpu_rdy`) for the whole DDR access; the monitor SRAM path
   waits the same way.
@@ -248,6 +253,16 @@ The CPU is held until **both** the SD ROM load (`boot_done`) and DDR3
 calibration + self-test (`ram_ready`) complete. The boot/diagnostic screen shows
 the self-test status (`ram_test_*`); a mismatch there means the bridge address
 mapping, byte-lane order or write-mask polarity needs adjustment for the IP.
+
+**Reset / calibration sequencing** (in `tang20k_sbc_top.vhd`): the DDR3 memory
+PLL free-runs (reset tied low) so it locks immediately at power-on, exactly like
+the Sipeed reference. The controller `rst_n` is then held until that PLL has
+locked and released synchronously on the 27 MHz reference clock — sequenced on
+the board oscillator only, so no PLL-derived fabric clock is loaded and the
+exclusive `PLL_L[0]` / `PLL_R[0]` placement stays intact. If calibration does not
+complete within ~20 ms it is **retried automatically** (the controller reset is
+re-pulsed), so the board comes up hands-free even when DDR3 bring-up is
+occasionally marginal — no manual reset presses needed.
 
 > **Performance:** every non-zero-page RAM access now stalls the 6502 for the DDR
 > latency (CDC + IP). This is functionally transparent but lowers CPU throughput
