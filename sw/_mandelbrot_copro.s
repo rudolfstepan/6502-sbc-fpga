@@ -1,7 +1,5 @@
 ; ============================================================
 ; Mandelbrot Set — 320x200 Bitmap, 16 C64 Colors
-; Enhanced graphics edition: square-pixel view, higher iteration depth,
-; and stable 8x8 color-cell accumulation.
 ; Coprocessor edition: uses the memory-mapped math coprocessor
 ; ($88B0) for the signed fixed-point multiply.
 ;
@@ -41,14 +39,13 @@ BMP_BASE    = $9010         ; bitmap RAM (8000 bytes)
 COL_BASE    = $8400         ; color RAM (1000 bytes)
 
 ; --- Mandelbrot constants (8.24 fixed-point) ---
-; View: real -2.2..+1.0 (width 3.2), imag -1.0..+1.0 (height 2.0)
-; This matches the 320:200 aspect ratio: both axes use a 0.01 pixel step.
-X_LEFT      = $FDCCCCCD     ; -2.2 in 8.24
-CI_START    = $FF000000     ; -1.0 in 8.24
-SX_STEP     = $00028F5C     ; 3.2/320 * 2^24 ~= 167772
-SY_STEP     = $00028F5C     ; 2.0/200 * 2^24 ~= 167772
+; View: real -2.0..+1.0 (width 3.0), imag -1.2..+1.2 (height 2.4)
+X_LEFT      = $FE000000     ; -2.0
+CI_START    = $FECCCCCD     ; -1.2
+SX_STEP     = $00026666     ; 3.0/320 * 2^24 ~ 157286
+SY_STEP     = $0003126F     ; 2.4/200 * 2^24 ~ 201327
 ESCAPE_INT  = $04           ; |z|^2 >= 4.0 -> integer byte (bits 24-31) >= 4
-MAX_ITER    = 32            ; more contour detail than the old 20
+MAX_ITER    = 20
 
 ; ============================================================
 .segment "ZEROPAGE"
@@ -64,8 +61,7 @@ SUM:        .res 4          ; zr^2 + zi^2
 PTR:        .res 2          ; generic 16-bit pointer (clear loops)
 ITER:       .res 1          ; iteration counter
 BITS:       .res 1          ; accumulated 8-pixel byte
-ESCIT:      .res 1          ; escape iteration count for current pixel
-PAGES:      .res 1          ; page counter for post-processing loops
+LASTCOL:    .res 1          ; last escape color in current cell
 PY:         .res 1          ; pixel Y (0-199)
 PXB:        .res 1          ; byte X (0-39)
 PIX:        .res 1          ; pixel index within byte (0-7)
@@ -185,15 +181,12 @@ clr_bmp:
     dex
     bne clr_bmp
 
-    ; --- Clear color RAM as temporary 8x8-cell iteration buffer ---
-    ; During rendering each color cell stores the maximum escape iteration
-    ; seen in its 8x8 tile. After the render pass, this is translated
-    ; through color_table into final palette values.
+    ; --- Fill color RAM with white-on-black ($01), 1024 bytes ---
     lda #<COL_BASE
     sta PTR
     lda #>COL_BASE
     sta PTR+1
-    lda #0
+    lda #$01
     ldy #0
     ldx #4
 clr_col:
@@ -235,6 +228,7 @@ row_loop:
 byte_loop:
     lda #0
     sta BITS
+    sta LASTCOL
 
     ; --- for 8 pixels within this byte ---
     lda #0
@@ -349,22 +343,13 @@ escaped:
     ora BITS
     sta BITS
 
-    ; --- Accumulate best color score for this 8x8 color cell ---
-    ; Color RAM is 40x25 while the bitmap is 320x200.  The old version
-    ; stored the last escaped pixel color for each byte row, so later rows
-    ; overwrote earlier detail.  Here we keep the maximum escape iteration
-    ; for the whole 8x8 cell, then map it to a palette color after rendering.
+    ; --- Set color from iteration count ---
     lda #MAX_ITER
     sec
     sbc ITER                ; A = iterations used (1..MAX_ITER)
-    sta ESCIT
-    ldy PXB
-    lda (COLLO),y           ; existing max iteration for this 8x8 cell
-    cmp ESCIT
-    bcs :+                  ; keep existing if existing >= new
-    lda ESCIT
-    sta (COLLO),y
-:
+    tax
+    lda color_table,x
+    sta LASTCOL
 
 next_pixel:
     ; --- Advance CR by SX ---
@@ -383,6 +368,13 @@ next_pixel:
     ldy PXB
     sta (BMPLO),y
 skip_bmp:
+
+    ; --- Store color to color RAM ---
+    lda LASTCOL
+    beq skip_col
+    ldy PXB
+    sta (COLLO),y
+skip_col:
 
     ; --- Next byte column ---
     inc PXB
@@ -428,27 +420,6 @@ skip_bmp:
 :
 
     ; ============================================================
-    ; Convert accumulated per-cell iteration counts to final palette colors
-    ; ============================================================
-    lda #<COL_BASE
-    sta PTR
-    lda #>COL_BASE
-    sta PTR+1
-    lda #4                  ; 4 pages = 1024 bytes, harmlessly covers 40x25 plus padding
-    sta PAGES
-    ldy #0
-map_colors:
-    lda (PTR),y             ; 0..MAX_ITER
-    tax
-    lda color_table,x
-    sta (PTR),y
-    iny
-    bne map_colors
-    inc PTR+1
-    dec PAGES
-    bne map_colors
-
-    ; ============================================================
     ; Done — wait for UART key, then text mode
     ; ============================================================
 wait_key:
@@ -470,12 +441,9 @@ halt:
 mask_table:
     .byte $80, $40, $20, $10, $08, $04, $02, $01
 
-; Color gradient: escape iteration count -> C64 palette index
-; Entry 0 is used for untouched cells.  Entries 1..32 form a smoother
-; cold-to-hot contour ramp.  The bitmap still decides which pixels are lit;
-; this table only chooses the color of each 8x8 cell.
+; Color gradient: iteration count -> C64 palette index
 color_table:
-    .byte 0                 ; 0: no escaped pixels in this cell
+    .byte 0                 ; 0: unused
     .byte 6                 ; 1: blue
     .byte 6                 ; 2: blue
     .byte 14                ; 3: light blue
@@ -483,31 +451,19 @@ color_table:
     .byte 3                 ; 5: cyan
     .byte 3                 ; 6: cyan
     .byte 13                ; 7: light green
-    .byte 13                ; 8: light green
-    .byte 5                 ; 9: green
-    .byte 5                 ; 10: green
-    .byte 7                 ; 11: yellow
-    .byte 7                 ; 12: yellow
-    .byte 10                ; 13: light red
-    .byte 10                ; 14: light red
-    .byte 2                 ; 15: red
-    .byte 2                 ; 16: red
-    .byte 8                 ; 17: orange
-    .byte 8                 ; 18: orange
-    .byte 9                 ; 19: brown
-    .byte 9                 ; 20: brown
-    .byte 4                 ; 21: purple
-    .byte 4                 ; 22: purple
-    .byte 12                ; 23: gray
-    .byte 12                ; 24: gray
-    .byte 15                ; 25: light gray
-    .byte 15                ; 26: light gray
-    .byte 1                 ; 27: white
-    .byte 1                 ; 28: white
-    .byte 11                ; 29: dark gray
-    .byte 11                ; 30: dark gray
-    .byte 0                 ; 31: black near boundary
-    .byte 1                 ; 32: white highlight
+    .byte 5                 ; 8: green
+    .byte 7                 ; 9: yellow
+    .byte 7                 ; 10: yellow
+    .byte 10                ; 11: light red
+    .byte 2                 ; 12: red
+    .byte 8                 ; 13: orange
+    .byte 9                 ; 14: brown
+    .byte 4                 ; 15: purple
+    .byte 12                ; 16: gray
+    .byte 15                ; 17: light gray
+    .byte 1                 ; 18: white
+    .byte 11                ; 19: dark gray
+    .byte 11                ; 20: dark gray
 
 ; ============================================================
 .segment "VECTORS"

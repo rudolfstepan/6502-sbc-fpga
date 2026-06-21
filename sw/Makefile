@@ -86,7 +86,32 @@ sd-ehbasic: $(KERNEL_ROM)
 upload-demo: $(ROM_BIN)
 	$(PYTHON) upload_rom_demo.py --run --verbose
 
+
+# ── Mandelbrot FPU/Coprocessor demo ROM (16 KB @ $C000) ────────────────────
+MANDELBROT_S   = mandelbrot_copro.s
+MANDELBROT_O   = mandelbrot_copro.o
+MANDELBROT_ROM = mandelbrot_copro.bin
+MANDELBROT_CFG = mandelbrot_bitmap.cfg
+MANDELBROT_BAS = mandelbrot_copro_loader.bas
+
+$(MANDELBROT_O): $(MANDELBROT_S)
+	$(CA65) --cpu 65c02 -t none -l mandelbrot_copro.lst $< -o $@
+
+$(MANDELBROT_ROM): $(MANDELBROT_O) $(MANDELBROT_CFG)
+	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_copro.map
+	@echo "ROM ready: $(MANDELBROT_ROM)  (upload with --address 0xC000)"
+
+mandelbrot: $(MANDELBROT_ROM)
+
+upload-mandelbrot: $(MANDELBROT_ROM)
+	$(PYTHON) ../tools/upload_monitor_hex.py $(MANDELBROT_ROM) --address 0xC000 --run --verbose
+
+mandelbrot-loader: $(MANDELBROT_ROM)
+	$(PYTHON) ./bin_to_basic_sparse_loader.py $(MANDELBROT_ROM) $(MANDELBROT_BAS) --addr 0xC000 --sys 0xC000 --bytes-per-line 16 --min-skip 32 --drop-vectors --crlf
+	@echo "BASIC loader ready: $(MANDELBROT_BAS)"
+
 clean:
 	-del /Q rom_demo.o $(ROM_BIN) rom_demo.lst rom_demo.map 2>NUL || true
 	-del /Q soundtest.o $(SOUNDTEST_ROM) soundtest.lst soundtest.map 2>NUL || true
 	-del /Q soundsid.o $(SOUNDSID_ROM) soundsid.lst soundsid.map 2>NUL || true
+	-del /Q $(MANDELBROT_O) $(MANDELBROT_ROM) mandelbrot_copro.lst mandelbrot_copro.map $(MANDELBROT_BAS) 2>NUL || true
