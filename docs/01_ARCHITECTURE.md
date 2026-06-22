@@ -2,7 +2,7 @@
 
 ## System Design
 
-The 6502 SBC FPGA is a synthesizable hardware implementation of a 6502-based single-board computer targeting real FPGA boards. The active PIX16 path is `pix16_sbc_sd_boot_top`: T65 CPU, SDRAM-backed RAM, SD-loaded 16 KB shadow ROM, VGA text output, VIA, UART, boot status screen, RAM self-test, and a UART hardware monitor. The active Tang Primer 20K path is `tang20k_sbc_top`: HDMI boot/status output, CH340 UART, KEY1 monitor entry, on-board microSD ROM loading, DDR3-backed main RAM with BRAM zero page, split shadow-ROM windows, and native SID-compatible audio. The older `sbc_minimal_top` remains useful as a compact VGA/T65 smoke-test design.
+The 6502 SBC FPGA is a synthesizable hardware implementation of a 6502-based single-board computer targeting real FPGA boards. The active PIX16 path is `pix16_sbc_sd_boot_top`: T65 CPU, SDRAM-backed RAM, SD-loaded 16 KB shadow ROM, VGA text output, VIA, UART, boot status screen, RAM self-test, and a UART hardware monitor. The active Tang Primer 20K path is `tang20k_sbc_top`: HDMI boot/status output, CH340 UART, KEY1 monitor entry, on-board microSD ROM loading, low-power BSRAM main RAM (with an optional DDR3 backend), split shadow-ROM windows, and native SID-compatible audio. The older `sbc_minimal_top` remains useful as a compact VGA/T65 smoke-test design.
 
 ---
 
@@ -43,7 +43,7 @@ Tang Primer 20K board
   -> CH340 UART at 115200 8N1
   -> on-board microSD/SDIO slot in SPI mode on N10/N11/R14/M8
   -> sd_rom_loader writes the 16 KB ROM window into boot_shadow_rom
-  -> sbc_t65_boot_monitor_top uses DDR3 main RAM with BRAM zero page/stack
+  -> sbc_t65_boot_monitor_top uses a selectable BSRAM/DDR3 byte backend
   -> KEY1 enters the UART monitor and holds the CPU
 ```
 
@@ -56,7 +56,7 @@ failure while the CPU remains held.
 | Address Range | Size | Device | Notes |
 | --- | --- | --- | --- |
 | $0000-$3FFF | 16 KB | Internal FPGA RAM | Zero page, stack, and EhBASIC workspace |
-| $4000-$5FFF | 8 KB | Main RAM | External DDR3 in the current Tang build |
+| $4000-$5FFF | 8 KB | Main RAM | BSRAM by default; optional external DDR3 backend |
 | $6000-$7FFF | 8 KB window | Banked VIC framebuffer | 16 KB; legacy 1-bpp, 160x100 RGB332, or 180x120 RGB222 |
 | $8000-$87FF | 2 KB | VIC text/color VRAM | $8000–$83E7 chars, $8400–$87E7 colors; shared by CPU/monitor/VIC |
 | $8800-$880F | 16 B | VIA 6522 | Port B bit 0 -> board LED 1 after boot |
@@ -176,7 +176,8 @@ The ROM is mirrored across the full $C000–$FFFF range via `cpu_addr[10:0]` ind
 
 The bus decoder reports `$6000-$7FFF` as `DEV_VIC_BMP` before applying the
 broader main-RAM rule. In the current Tang top, `$0000-$3FFF` is routed to
-internal BRAM and `$4000-$5FFF` to DDR3. This keeps EhBASIC, zero-page, stack,
+internal BRAM and `$4000-$5FFF` to the selected board memory backend (BSRAM by
+default, optionally DDR3). This keeps EhBASIC, zero-page, stack,
 IRQ entry, `JSR/RTS`, and read-modify-write traffic off external memory.
 
 IRQ sources are OR-combined: `cpu_irq_n = NOT (via_irq OR uart_irq)`.
@@ -377,7 +378,7 @@ It is present in the project but not synthesized for the PIX16 board (Implementa
 | Address Range | Size | Device |
 | --- | --- | --- |
 | $0000–$3FFF | 16 KB | BRAM main RAM |
-| $4000–$5FFF | 8 KB | DDR3 main RAM |
+| $4000–$5FFF | 8 KB | BSRAM main RAM; optional DDR3 backend |
 | $6000–$7FFF | 8 KB window | Banked 16 KB VIC framebuffer |
 | $8000–$87FF | 2 KB | VIC Text RAM |
 | $8800–$880F | 16 B | VIA 6522 |

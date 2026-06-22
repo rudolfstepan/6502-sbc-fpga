@@ -20,7 +20,10 @@ use work.sbc_pkg.all;
 
 entity tang20k_sbc_top is
   generic (
-    BAUD          : positive := 115_200
+    BAUD          : positive := 115_200;
+    -- false (default): low-power 8 KiB BSRAM at $4000-$5FFF.
+    -- true: original Gowin DDR3 IP backend; retains the same CPU memory map.
+    USE_DDR3      : boolean := false
   );
   port (
     clk_27mhz  : in  std_logic;
@@ -297,7 +300,8 @@ architecture rtl of tang20k_sbc_top is
   signal usb_cap_data       : std_logic_vector(15 downto 0);
   signal usb_cap_ready      : std_logic;
 
-  -- DDR3 main RAM (Gowin IP + ddr3_byte_bridge)
+  -- Optional main-RAM backends. Both present the same byte req/ack interface to
+  -- the SBC core; static generate removes the unused backend during synthesis.
   signal ddr_memory_clk     : std_logic;
   signal ddr_pll_lock       : std_logic;
   signal ddr_clk_x1         : std_logic;   -- 100 MHz DDR3 user clock
@@ -394,8 +398,7 @@ begin
   sd_ncs <= sd_ncs_i;
   sd_dclk <= sd_dclk_i;
   sd_mosi <= sd_mosi_i;
-  -- Hold the CPU until both the SD ROM load (boot_done) and the DDR3 main RAM
-  -- (calibration + self-test, ram_ready) are ready.
+  -- Hold the CPU until both the SD ROM load and selected RAM backend are ready.
   sbc_boot_done   <= boot_done and ram_ready;
   boot_vga_active <= (not sbc_boot_done) or boot_error or monitor_active;
 
@@ -696,7 +699,8 @@ begin
       tmds_d_n   => tmds_d_n
     );
 
-  -- ── DDR3 main RAM ───────────────────────────────────────────────────────
+  -- ── Optional DDR3 main-RAM backend ──────────────────────────────────────
+  ddr_backend_g : if USE_DDR3 generate
   -- Single-rank board: chip-select tied low (matches Sipeed DDR-test example).
   ddr_cs        <= '0';
   app_addr28    <= '0' & app_addr27;
@@ -841,6 +845,54 @@ begin
       app_rdata           => app_rdata,
       app_rdata_valid     => app_rdata_valid
     );
+  end generate;
+
+  -- ── Default low-power BSRAM main-RAM backend ─────────────────────────────
+  bram_backend_g : if not USE_DDR3 generate
+    bram_bridge_i : entity work.bram_byte_bridge
+      generic map (BUS_ADDR_BITS => 15, RAM_ADDR_BITS => 13)
+      port map (
+        clk       => clk_sys,
+        reset_n   => reset_n,
+        req       => sram_ext_req,
+        we        => sram_ext_we,
+        addr      => sram_ext_addr,
+        din       => sram_ext_din,
+        dout      => sram_ext_dout,
+        ack       => sram_ext_ack,
+        ram_ready => ram_ready,
+        ram_test_active    => ram_test_active,
+        ram_test_done      => ram_test_done,
+        ram_test_error     => ram_test_error,
+        ram_test_phase     => ram_test_phase,
+        ram_test_addr      => ram_test_addr,
+        ram_test_fail_addr => ram_test_fail_addr,
+        ram_test_expected  => ram_test_expected,
+        ram_test_actual    => ram_test_actual
+      );
+
+    -- Keep the uninitialised DDR3 device in reset with clocks and termination
+    -- disabled. The bidirectional data/strobe pins remain high impedance.
+    ddr_addr    <= (others => '0');
+    ddr_bank    <= (others => '0');
+    ddr_cs      <= '1';
+    ddr_ras     <= '1';
+    ddr_cas     <= '1';
+    ddr_we      <= '1';
+    ddr_ck      <= '0';
+    ddr_ck_n    <= '1';
+    ddr_cke     <= '0';
+    ddr_odt     <= '0';
+    ddr_reset_n <= '0';
+    ddr_dm      <= (others => '1');
+    ddr_dq      <= (others => 'Z');
+    ddr_dqs     <= (others => 'Z');
+    ddr_dqs_n   <= (others => 'Z');
+
+    -- Reuse the existing boot LEDs as generic memory-backend-ready indicators.
+    ddr_pll_lock       <= ram_ready;
+    ddr_calib_complete <= ram_ready;
+  end generate;
 
   led(0) <= not (boot_done or sd_init_done) when boot_done = '0' else not via_portb(0);
   led(1) <= not (boot_error or sd_seen_read_end) when boot_done = '0' else not via_portb(1);

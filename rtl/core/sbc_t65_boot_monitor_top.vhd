@@ -288,8 +288,8 @@ begin
   cpu_irq_n  <= not (via_irq or uart_irq or usb_irq);
   usb_cs     <= '1' when monitor_hold = '0' and dev_sel = DEV_USB else '0';
 
-  -- Low 16 KB ($0000-$3FFF) is on-chip BRAM (single-cycle, reliable): zero page,
-  -- stack, and EhBASIC's whole working RAM live here.  $4000-$7FFF is DDR3.
+  -- Low 16 KB ($0000-$3FFF) is on-chip BRAM. $4000-$5FFF is served through
+  -- the board byte backend (BSRAM by default, optional DDR3); $6000-$7FFF is VIC.
   zp_cs   <= '1' when dev_sel = DEV_SRAM and cpu_addr(15 downto 14) = "00" else '0';
   zp_we   <= cpu_bus_we when monitor_hold = '0' and zp_cs = '1' else '0';
   sram_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_SRAM and zp_cs = '0' else '0';

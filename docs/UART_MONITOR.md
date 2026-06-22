@@ -74,7 +74,7 @@ Currently supported ranges are:
 | Range | Target |
 | --- | --- |
 | `$0000-$3FFF` | Internal BRAM main memory, including zero page, stack, and EhBASIC workspace. |
-| `$4000-$5FFF` | External DDR3 main RAM. |
+| `$4000-$5FFF` | Main RAM: BSRAM by default, optional DDR3 backend. |
 | `$6000-$7FFF` | 8 KB window into the banked 16 KB VIC framebuffer; MODE bit 2 selects the bank. |
 | `$8000-$87FF` | VIC text VRAM. Writes are visible immediately on VGA. |
 | `$8800-$880F` | VIA 6522 registers. Port B bit 0 is connected to board LED 1 after boot. |

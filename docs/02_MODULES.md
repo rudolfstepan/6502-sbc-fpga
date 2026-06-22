@@ -50,7 +50,7 @@ boards/tang_primer_20k/rtl/
 rtl/core/
 ├── sbc_pkg.vhd                    — shared types, memory map, constants
 ├── bus_decode.vhd                 — address → device selection
-├── sbc_t65_boot_monitor_top.vhd  — SBC core with DDR3 main RAM + split shadow ROM
+├── sbc_t65_boot_monitor_top.vhd  — SBC core with selectable RAM backend + split shadow ROM
 │   ├── boot/boot_debug_uart.vhd   — serial boot-status output
 │   ├── boot/boot_vga_debug.vhd    — HDMI boot/status screen
 │   ├── boot/sd_rom_loader.v       — SD-sector loader into shadow ROM

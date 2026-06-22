@@ -7,7 +7,7 @@ Target: Sipeed Tang Primer 20K (Gowin GW2A-LV18PG256C8/I7)
 | Resource       | Value                        |
 |----------------|------------------------------|
 | FPGA           | Gowin GW2A-18C / `GW2A-LV18PG256C8/I7` |
-| DDR3 SDRAM     | 64 MB (onboard) — backs the 6502 main RAM via the Gowin DDR3 IP |
+| DDR3 SDRAM     | 64 MB onboard; disabled by default, optional via `USE_DDR3` |
 | Clock          | 27 MHz oscillator; PLL derives 54 MHz SBC / 27 MHz pixel / 135 MHz TMDS |
 | UART           | CH340 USB-UART / pins `M11/T13` |
 | Video          | HDMI out                     |
@@ -42,8 +42,9 @@ monitors could not sync to.
 The SBC logic runs at 54 MHz. Its two-phase T65 bus advances the CPU every
 second system clock, giving a 27 MHz maximum 6502 bus rate before VIC stalls.
 The VIC uses `CLK_DIV=2`, so video timing remains at exactly 27 MHz.
-Continuous VIC prefetch steals 82 of 1716 system clocks per scan line (about
-4.8%), leaving an average CPU throughput of roughly 25.7 MHz.
+VIC prefetch steals 82 of 1716 system clocks per scan line in text/legacy mode,
+161 in RGB332, or 136 in RGB222. The corresponding bus overhead is about 4.8%,
+9.4%, or 7.9%.
 
 Clock derivation uses a single 270 MHz PLL root. TMDS FCLK is `270/2 = 135 MHz`,
 the SBC is `270/5 = 54 MHz`, and OSER10 PCLK is derived directly from its FCLK as
@@ -68,9 +69,9 @@ Current bring-up status:
 - PS/2 keyboard input works via PMOD 0 — keystrokes are injected into the
   UART receive path so EhBASIC and the monitor see them without software changes.
 
-The lower 16 KB of 6502 RAM (`$0000-$3FFF`) is BRAM; the remaining main-RAM
-addresses use the on-board **DDR3** through the Gowin DDR3 Memory Interface IP.
-See *Main RAM in DDR3* below.
+The full 24 KB CPU main-RAM range (`$0000-$5FFF`) uses on-chip BSRAM by default.
+The `$4000-$5FFF` portion can be switched back to the on-board DDR3 backend with
+the `USE_DDR3` board-top generic; see *Main RAM backends* below.
 The address range `$6000-$7FFF` is an 8-KB CPU window into a dedicated banked
 16-KB VIC framebuffer. VIC MODE bit 2 selects the CPU bank. The framebuffer
 supports legacy 320×200 1-bpp graphics, 160×100 RGB332, and packed 180×120
@@ -100,13 +101,13 @@ domain:
 
 - **Short press** → **CPU soft reset** (*warm start*). Only the 6502 is held in
   reset and then restarts via its reset vector. `boot_done`, the shadow ROM, and
-  the DDR3 main RAM are kept, so a program uploaded over the UART monitor restarts
+  main RAM are kept, so a program uploaded over the UART monitor restarts
   in place — the SD boot loader is *not* re-run and RAM is *not* cleared. This is
   the reset to use during normal operation.
 - **Long press (>1 s)** → **full board reset** (*cold start*). Asserts the global
   `reset_n`, which also resets the SD ROM loader and reloads the ROM from the SD
-  card, and re-runs DDR3 calibration + the RAM self-test. The whole 32 KB main RAM
-  is **zero-cleared** before the CPU is released, so nothing from the previous
+  card, and clears the selected `$4000-$5FFF` RAM backend. Main RAM is
+  **zero-cleared** before the CPU is released, so nothing from the previous
   session survives. If there is no valid SD boot image, the CPU stays held
   afterwards (no `boot_done`), so use the short press for UART-uploaded ROMs.
 
@@ -230,49 +231,61 @@ Quick test from BASIC:
 50 POKE 34869,0   : REM gate off
 ```
 
-## Main RAM in DDR3
+## Main RAM backends
 
-The 6502's 32 KB main RAM lives in the on-board **DDR3** SDRAM, freeing ~16 BSRAM
-blocks (the design was at 34/46 = 74 %). Only the zero page (`$0000–$01FF`) stays
-in BRAM, where its single-cycle latency matters most for stack/zero-page-heavy
-6502 code.
+`tang20k_sbc_top` exposes one stable `sram_ext_*` byte interface to the SBC core
+and selects its implementation statically with the `USE_DDR3` generic.
 
-How it fits together:
+### Default: low-power BSRAM (`USE_DDR3=false`)
 
-- **Gowin DDR3 Memory Interface IP** (`project/src/ddr3_memory_interface/`) +
-  its memory-clock PLL (`project/src/gowin_rpll/`) — generated IP, copied from
-  the Sipeed `TangPrimer-20K-example/DDR-test`. The IP user interface is 128-bit
-  and runs in its own 100 MHz clock domain (`clk_x1`); the memory clock is
-  ~400 MHz (DDR-800).
-- **`rtl/ddr3_byte_bridge.vhd`** — adapts the 6502 single-byte bus (54 MHz
-  `clk_sys`) to the IP: a req/ack clock-domain crossing, single-burst (BL8)
-  access with the byte address split into a 16-byte line + lane, byte writes via
-  the IP write-data mask (no read-modify-write), and a **RAM bring-up** that
-  fills and verifies the whole 32 KB with a per-address pattern (validating
-  address mapping, lane order and mask polarity), then **zero-clears** it before
-  releasing the CPU — so every cold start begins with clean RAM.
-- The core (`sbc_t65_boot_monitor_top`) exposes a byte port (`sram_ext_*`) and
-  stalls the CPU (`cpu_rdy`) for the whole DDR access; the monitor SRAM path
-  waits the same way.
+- `$0000-$3FFF` remains in the core's 16-KB BSRAM.
+- `bram_byte_bridge.vhd` provides another 8 KiB at `$4000-$5FFF`.
+- The bridge zero-clears its RAM after cold reset before asserting `ram_ready`.
+- The DDR PHY, 400-MHz memory PLL, DLL and DQS logic are absent from the netlist.
+- External DDR pins are held safe: `RESET_n=0`, `CKE=0`, `ODT=0`, static clock,
+  inactive commands, and high-impedance data/strobe pins.
 
-The CPU is held until **both** the SD ROM load (`boot_done`) and DDR3
-calibration + self-test (`ram_ready`) complete. The boot/diagnostic screen shows
-the self-test status (`ram_test_*`); a mismatch there means the bridge address
-mapping, byte-lane order or write-mask polarity needs adjustment for the IP.
+Measured from Gowin's vectorless reports for the same design:
 
-**Reset / calibration sequencing** (in `tang20k_sbc_top.vhd`): the DDR3 memory
-PLL free-runs (reset tied low) so it locks immediately at power-on, exactly like
-the Sipeed reference. The controller `rst_n` is then held until that PLL has
-locked and released synchronously on the 27 MHz reference clock — sequenced on
-the board oscillator only, so no PLL-derived fabric clock is loaded and the
-exclusive `PLL_L[0]` / `PLL_R[0]` placement stays intact. If calibration does not
-complete within ~20 ms it is **retried automatically** (the controller reset is
-re-pulsed), so the board comes up hands-free even when DDR3 bring-up is
-occasionally marginal — no manual reset presses needed.
+| Build | Power estimate | Dynamic | Junction @ 25 °C | BSRAM |
+|---|---:|---:|---:|---:|
+| DDR3 backend | 616.7 mW | 448.1 mW | 44.7 °C | 35/46 (76%) |
+| BSRAM backend | 323.6 mW | 153.8 mW | 35.4 °C | 31/46 (67%) |
 
-> **Performance:** every non-zero-page RAM access now stalls the 6502 for the DDR
-> latency (CDC + IP). This is functionally transparent but lowers CPU throughput
-> versus the old single-cycle BSRAM.
+The absolute values are estimates without VCD/SAIF activity, but the removal of
+the DDR clock domains and PHY is reflected directly in the synthesized netlist.
+
+### Optional DDR3 (`USE_DDR3=true`)
+
+The original Gowin DDR3 Memory Interface IP, 400-MHz PLL and
+`ddr3_byte_bridge.vhd` remain in the source tree. To restore them:
+
+1. Set the `USE_DDR3` generic in `tang20k_sbc_top.vhd` to `true` (or override it
+   in the Gowin project elaboration settings).
+2. In `constraints/tang20k_sbc.cst`, add `VREF=INTERNAL` to every `ddr_dq[*]`
+   `IO_PORT` line and restore this placement constraint before the HDMI PLL line:
+
+   ```text
+   INS_LOC "ddr_backend_g.ddr_mem_pll_i/rpll_inst" PLL_L[0] exclusive;
+   ```
+
+3. Append the DDR clock profile to `constraints/tang20k_sbc.sdc`:
+
+   ```tcl
+   create_clock -name ddr_clk_x1 -period 10  [get_nets {ddr_clk_x1}]
+   create_clock -name ddr_mem -period 2.5 [get_nets {ddr_memory_clk}]
+   set_clock_groups -asynchronous \
+     -group [get_clocks {ddr_clk_x1 ddr_mem}] -group [get_clocks {clk_27mhz}]
+   ```
+
+The re-enabled DDR profile has been synthesis/P&R tested after introducing the
+backend generic. Gowin accepts only one effective CST/SDC profile in this flow,
+so the DDR attributes must be restored in the base files rather than loaded as
+small overlay files.
+
+The DDR bridge performs fill/check/clear bring-up before `ram_ready`, and the CPU
+is stalled for each DDR access. The CPU-visible address map is identical in both
+backends, so ROMs and applications require no changes.
 
 ## Math coprocessor (FPU)
 
@@ -293,12 +306,10 @@ and 6502 usage: **[Math Coprocessor (FPU)](../../docs/FPU.md)**.
 
 ## Build
 
-> **⚠️ GUI-only:** the Gowin DDR3 IP is supported only inside the **GOWIN FPGA
-> Designer** (GUI). The `make build` / `gw_sh build.tcl` script flow is no longer
-> the supported path for this board — open `project/tang_sbc.gprj` in the IDE and
-> run Place & Route (see *Opening in GOWIN FPGA Designer*). The IP `.v` files are
-> listed in `build.tcl` too, but the script flow may fail to build the encrypted
-> DDR3 PHY.
+The default BSRAM build works through both `make_tang20k.ps1`/`gw_sh` and the
+Gowin GUI. The optional DDR3 profile may depend on the Gowin GUI and installed
+DDR3 IP support; restore the DDR attributes in the active CST/SDC files as
+described under *Optional DDR3* before P&R.
 
 ### Prerequisites
 

@@ -88,7 +88,8 @@ Current verified bring-up:
 - Without a card in the on-board microSD slot, boot debug output correctly
   reports that SD initialization/read cannot complete.
 
-The Tang path uses the on-board DDR3 for main RAM, with zero page kept in BRAM.
+The Tang path defaults to an all-BSRAM main-memory backend for lower power. The
+original DDR3 backend remains selectable with `USE_DDR3=true`.
 The CH340 UART runs at `115200 8N1`; the USB-OTG connector is separate and
 is not the SBC UART. The on-board microSD slot is used in SPI mode on
 `N10/N11/R14/M8` as documented in `boards/tang_primer_20k/README.md`.
@@ -215,7 +216,7 @@ on reset/reprogramming.
 
 ```text
 $0000-$3FFF   BRAM main RAM (EhBASIC workspace included)
-$4000-$5FFF   DDR3 main RAM
+$4000-$5FFF   8 KB BSRAM main RAM (optional DDR3 backend)
 $6000-$7FFF   8 KB CPU window into 16 KB banked VIC framebuffer
 $8000-$87FF   VIC text/color RAM
 $8800-$88BF   VIA, UART, sound timer, and math-coprocessor I/O

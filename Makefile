@@ -14,6 +14,7 @@ T65_RTL = third_party/t65/rtl/T65_Pack.vhd third_party/t65/rtl/T65_ALU.vhd \
 
 RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/mem/sync_ram.vhd rtl/core/mem/rom.vhd \
+      boards/tang_primer_20k/rtl/bram_byte_bridge.vhd \
       rtl/core/mem/boot_shadow_rom.vhd \
       rtl/core/mem/sdram_if.vhd rtl/core/mem/sdram_ctrl.vhd \
       rtl/core/mem/char_rom.vhd \
@@ -39,6 +40,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_vic_raster_irq.vhd sim/tb/tb_sbc_vic_display.vhd \
       sim/tb/tb_vic_color256.vhd \
       sim/tb/tb_vic_color64.vhd \
+      sim/tb/tb_bram_byte_bridge.vhd \
       sim/tb/tb_sound_voice.vhd sim/tb/tb_vram_steal_race.vhd \
       sim/tb/tb_vram_read_steal.vhd sim/tb/tb_sound_chip4.vhd
 
@@ -91,6 +93,8 @@ test: roms
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color256 $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_vic_color64
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color64 $(GHDL_RUN_FLAGS)
+	$(GHDL) -e $(GHDL_FLAGS) tb_bram_byte_bridge
+	$(GHDL) -r $(GHDL_FLAGS) tb_bram_byte_bridge $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_sound_voice
 	$(GHDL) -r $(GHDL_FLAGS) tb_sound_voice $(GHDL_RUN_FLAGS) --stop-time=5ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_vram_steal_race
