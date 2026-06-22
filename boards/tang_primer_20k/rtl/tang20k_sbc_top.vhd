@@ -49,6 +49,12 @@ entity tang20k_sbc_top is
     tmds_d_p   : out std_logic_vector(2 downto 0);
     tmds_d_n   : out std_logic_vector(2 downto 0);
 
+    -- Second SD card (data disk) on PMOD GPIO — directly SPI
+    sd2_dclk    : out std_logic;
+    sd2_ncs     : out std_logic;
+    sd2_mosi    : out std_logic;
+    sd2_miso    : in  std_logic;
+
     -- DDR3 SDRAM (on-board, drives main RAM via Gowin DDR3 Memory Interface IP)
     ddr_addr    : out   std_logic_vector(13 downto 0);
     ddr_bank    : out   std_logic_vector(2 downto 0);
@@ -289,6 +295,23 @@ architecture rtl of tang20k_sbc_top is
   signal monitor_jump_req   : std_logic;
   signal monitor_jump_addr  : addr_t;
   signal sd_seen_read_end   : std_logic := '0';
+
+  -- Second SD card (data disk) signals
+  signal sd2_init_done       : std_logic;
+  signal sd2_sec_read        : std_logic;
+  signal sd2_sec_read_addr   : std_logic_vector(31 downto 0);
+  signal sd2_sec_read_data   : data_t;
+  signal sd2_sec_read_valid  : std_logic;
+  signal sd2_sec_read_end    : std_logic;
+  signal sd2_sec_write       : std_logic;
+  signal sd2_sec_write_addr  : std_logic_vector(31 downto 0);
+  signal sd2_sec_write_data  : data_t;
+  signal sd2_sec_write_req   : std_logic;
+  signal sd2_sec_write_end   : std_logic;
+  signal sd2_ncs_i           : std_logic;
+  signal sd2_dclk_i          : std_logic;
+  signal sd2_mosi_i          : std_logic;
+
   signal usb_connected      : std_logic;
   signal usb_keycode        : std_logic_vector(7 downto 0);
   signal usb_modif          : std_logic_vector(7 downto 0);
@@ -398,6 +421,9 @@ begin
   sd_ncs <= sd_ncs_i;
   sd_dclk <= sd_dclk_i;
   sd_mosi <= sd_mosi_i;
+  sd2_ncs <= sd2_ncs_i;
+  sd2_dclk <= sd2_dclk_i;
+  sd2_mosi <= sd2_mosi_i;
   -- Hold the CPU until both the SD ROM load and selected RAM backend are ready.
   sbc_boot_done   <= boot_done and ram_ready;
   boot_vga_active <= (not sbc_boot_done) or boot_error or monitor_active;
@@ -470,6 +496,35 @@ begin
       debug_sec_state        => sd_sec_state,
       debug_cmd_state        => sd_cmd_state,
       debug_cmd_error        => sd_cmd_error
+    );
+
+  -- Second SD card (data disk) — same Alinx SPI core, separate GPIO pins.
+  sd2_i : sd_card_top
+    generic map (
+      SPI_LOW_SPEED_DIV  => 268,
+      SPI_HIGH_SPEED_DIV => 2
+    )
+    port map (
+      clk                    => clk_sys,
+      rst                    => rst,
+      SD_nCS                 => sd2_ncs_i,
+      SD_DCLK                => sd2_dclk_i,
+      SD_MOSI                => sd2_mosi_i,
+      SD_MISO                => sd2_miso,
+      sd_init_done           => sd2_init_done,
+      sd_sec_read            => sd2_sec_read,
+      sd_sec_read_addr       => sd2_sec_read_addr,
+      sd_sec_read_data       => sd2_sec_read_data,
+      sd_sec_read_data_valid => sd2_sec_read_valid,
+      sd_sec_read_end        => sd2_sec_read_end,
+      sd_sec_write           => sd2_sec_write,
+      sd_sec_write_addr      => sd2_sec_write_addr,
+      sd_sec_write_data      => sd2_sec_write_data,
+      sd_sec_write_data_req  => sd2_sec_write_req,
+      sd_sec_write_end       => sd2_sec_write_end,
+      debug_sec_state        => open,
+      debug_cmd_state        => open,
+      debug_cmd_error        => open
     );
 
   loader_i : sd_rom_loader
@@ -612,6 +667,17 @@ begin
       usb_cap_addr  => usb_cap_addr,
       usb_cap_data  => usb_cap_data,
       usb_cap_ready => usb_cap_ready,
+      sd2_init_done           => sd2_init_done,
+      sd2_sec_read            => sd2_sec_read,
+      sd2_sec_read_addr       => sd2_sec_read_addr,
+      sd2_sec_read_data       => sd2_sec_read_data,
+      sd2_sec_read_data_valid => sd2_sec_read_valid,
+      sd2_sec_read_end        => sd2_sec_read_end,
+      sd2_sec_write           => sd2_sec_write,
+      sd2_sec_write_addr      => sd2_sec_write_addr,
+      sd2_sec_write_data      => sd2_sec_write_data,
+      sd2_sec_write_data_req  => sd2_sec_write_req,
+      sd2_sec_write_end       => sd2_sec_write_end,
       dbg_cpu_addr  => open,
       dbg_cpu_data  => open,
       dbg_cpu_din   => open,

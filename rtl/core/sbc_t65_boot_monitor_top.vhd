@@ -78,6 +78,19 @@ entity sbc_t65_boot_monitor_top is
     usb_cap_data  : out std_logic_vector(15 downto 0);
     usb_cap_ready : out std_logic;
 
+    -- Second SD card (data disk) — directly exposed SPI signals
+    sd2_init_done           : in  std_logic := '0';
+    sd2_sec_read            : out std_logic;
+    sd2_sec_read_addr       : out std_logic_vector(31 downto 0);
+    sd2_sec_read_data       : in  data_t := (others => '0');
+    sd2_sec_read_data_valid : in  std_logic := '0';
+    sd2_sec_read_end        : in  std_logic := '0';
+    sd2_sec_write           : out std_logic;
+    sd2_sec_write_addr      : out std_logic_vector(31 downto 0);
+    sd2_sec_write_data      : out data_t;
+    sd2_sec_write_data_req  : in  std_logic := '0';
+    sd2_sec_write_end       : in  std_logic := '0';
+
     dbg_cpu_addr : out addr_t;
     dbg_cpu_data : out data_t;
     dbg_cpu_din  : out data_t;
@@ -206,6 +219,11 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal char_addr   : std_logic_vector(9 downto 0);
   signal char_data   : data_t;
 
+  signal disk_cs     : std_logic;
+  signal disk_we     : std_logic;
+  signal disk_dout   : data_t;
+  signal disk_irq    : std_logic;
+
   signal via_irq     : std_logic;
   signal uart_irq    : std_logic;
   signal usb_irq     : std_logic;
@@ -285,7 +303,7 @@ begin
                 and not sram_stall;
 
   sram_dout  <= sram_ext_dout;
-  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq);
+  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq or disk_irq);
   usb_cs     <= '1' when monitor_hold = '0' and dev_sel = DEV_USB else '0';
 
   -- Low 16 KB ($0000-$3FFF) is on-chip BRAM. $4000-$5FFF is served through
@@ -297,6 +315,8 @@ begin
   vic_reg_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_REG else '0';
   via_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_VIA      else '0';
   uart_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_UART     else '0';
+  disk_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_DISK     else '0';
+  disk_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_DISK     else '0';
   math_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
   math_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
   sid_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_SID      else '0';
@@ -443,7 +463,7 @@ begin
 
   process(dev_sel, zp_cs, zp_dout, sram_dout, rom_dout, vram_dout, vic_reg_dout, via_dout,
           uart_dout, mon_jump_vector_active, mon_jump_vector, cpu_addr, bitmap_dout,
-          sound_dout, math_dout, sid_dout)
+          sound_dout, math_dout, sid_dout, disk_dout)
   begin
     case dev_sel is
       when DEV_SRAM =>
@@ -470,6 +490,8 @@ begin
         cpu_din <= uart_dout;
       when DEV_USB =>
         cpu_din <= usb_dout;
+      when DEV_DISK =>
+        cpu_din <= disk_dout;
       when DEV_VIC_BMP =>
         cpu_din <= bitmap_dout;
       when DEV_SOUND0 | DEV_SOUND1 | DEV_SOUND2 | DEV_SOUND3 =>
@@ -720,6 +742,30 @@ begin
       addr    => cpu_addr(3 downto 0),
       din     => cpu_dout,
       dout    => math_dout
+    );
+
+  -- ── SD disk controller: 2nd SD card for runtime LOAD/SAVE ─────────────
+  disk_i : entity work.sd_disk_ctrl
+    port map (
+      clk                    => clk,
+      reset_n                => cpu_reset_n,
+      cs                     => disk_cs,
+      we                     => disk_we,
+      addr                   => cpu_addr,
+      din                    => cpu_dout,
+      dout                   => disk_dout,
+      irq                    => disk_irq,
+      sd_init_done           => sd2_init_done,
+      sd_sec_read            => sd2_sec_read,
+      sd_sec_read_addr       => sd2_sec_read_addr,
+      sd_sec_read_data       => sd2_sec_read_data,
+      sd_sec_read_data_valid => sd2_sec_read_data_valid,
+      sd_sec_read_end        => sd2_sec_read_end,
+      sd_sec_write           => sd2_sec_write,
+      sd_sec_write_addr      => sd2_sec_write_addr,
+      sd_sec_write_data      => sd2_sec_write_data,
+      sd_sec_write_data_req  => sd2_sec_write_data_req,
+      sd_sec_write_end       => sd2_sec_write_end
     );
 
   -- ── Sound: 4-voice synth (ADSR + 5 waveforms) + PT8211 DAC ────────────

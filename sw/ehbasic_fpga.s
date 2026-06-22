@@ -19,8 +19,20 @@
 ;   DDR3 and intentionally kept out of BASIC's reach until the bridge is fixed.
 ;   (above $7FFF: VIC VRAM $8000, VIA $8800, UART $8810, etc.)
 ;
-; Disk commands LOAD/SAVE are stubbed — disk device not wired
-; to the FPGA monitor path in this build.
+; Disk commands LOAD/SAVE use the second SD card (data disk).
+; C64-compatible disk format:
+;   Sector 0: BAM (Block Allocation Map) — simple: just sector counts
+;   Sector 1: Directory — single file entry (C64 style, 32 bytes)
+;   Sector 2+: Program data (raw BASIC memory, Smeml to Svarl)
+;
+; C64 Directory entry (32 bytes):
+;   +0   file type/status ($82 = PRG, bit 7 = not closed)
+;   +1-2 starting sector (LE, 16-bit)
+;   +3   track (always 1 for us, SD sectors are linear)
+;   +4-19 filename (16 bytes, space-padded)
+;   +20+ rest unused
+;
+; Usage: POKE 236,n does nothing. Just SAVE/LOAD.
 ;
 ; Diagnostic sequence on UART at startup (visible in terminal):
 ;   *     kernel CLRSCR alive
@@ -106,14 +118,14 @@ RESET_ENTRY:
     lda #>KERNAL_CHROUT
     sta VEC_OUT+1
 
-    lda #<EHB_DISK_STUB
+    lda #<EHB_DISK_LOAD
     sta VEC_LD
-    lda #>EHB_DISK_STUB
+    lda #>EHB_DISK_LOAD
     sta VEC_LD+1
 
-    lda #<EHB_DISK_STUB
+    lda #<EHB_DISK_SAVE
     sta VEC_SV
-    lda #>EHB_DISK_STUB
+    lda #>EHB_DISK_SAVE
     sta VEC_SV+1
 
     ; VEC_CC ($EA ZP BRAM) — CTRL-C check called from BASIC inner loop.
@@ -157,7 +169,7 @@ boot_banner:
     .byte $0D
     .byte " **** 6502 SBC BASIC V2 ****", $0D
     .byte " TANG PRIMER 20K FPGA SYSTEM", $0D
-    .byte " 6502 CPU  HDMI  UART  SD", $0D
+    .byte " 6502 CPU  HDMI  UART  SD DISK", $0D
     .byte 0
 
 ; ============================================================
@@ -185,22 +197,216 @@ NMI_CODE:
 IRQ_NMI_CODE_END:   ; (kept for size reference only)
 
 ; ============================================================
-; EHB_DISK_STUB — replaces LOAD and SAVE on FPGA.
-; No disk device is mapped through the UART monitor path.
+; SD Disk Controller hardware registers ($8824-$882F)
 ; ============================================================
-EHB_DISK_STUB:
+DISK_CMD    = $8824
+DISK_STATUS = $8825
+DISK_SECT0  = $8826
+DISK_SECT1  = $8827
+DISK_SECT2  = $8828
+DISK_SECT3  = $8829
+DISK_DATA   = $882A
+DISK_DPTRL  = $882B
+DISK_DPTRH  = $882C
+
+DISK_DST_L  = $F2       ; ZP temp: destination address
+DISK_DST_H  = $F3
+DISK_END_L  = $02F0     ; temp: end address
+DISK_END_H  = $02F1
+
+; ============================================================
+; EHB_DISK_LOAD — Load from sector 2 (512 bytes max)
+; ============================================================
+EHB_DISK_LOAD:
+    lda DISK_STATUS
+    and #$80
+    bne @ok
+    jmp disk_not_ready
+@ok:
+    lda #2
+    sta DISK_SECT0
+    stz DISK_SECT1
+    stz DISK_SECT2
+    stz DISK_SECT3
+    jsr disk_cmd_read
+    bcc @rd
+    jmp disk_error
+@rd:
+    stz DISK_DPTRL
+    stz DISK_DPTRH
+    lda DISK_DATA
+    sta DISK_END_L
+    lda DISK_DATA
+    sta DISK_END_H
+
+    lda Smeml
+    sta DISK_DST_L
+    lda Smemh
+    sta DISK_DST_H
+
+    ldy #0
+@loop:
+    lda DISK_DATA
+    sta (DISK_DST_L),y
+    iny
+    cpy DISK_END_L
+    bcc @loop
+    beq @check_hi
+    bcs @done
+
+@check_hi:
+    lda DISK_DST_H
+    cmp Smemh
+    bne @done
+    jmp @done
+
+@done:
+    lda DISK_END_L
+    clc
+    adc Smeml
+    sta Svarl
+    lda DISK_END_H
+    adc Smemh
+    sta Svarh
+
     ldx #0
-disk_stub_loop:
-    lda msg_no_disk,x
-    beq disk_stub_done
-    jsr EHB_UART_CHROUT
+@msg:
+    lda msg_loaded,x
+    beq @warm
+    jsr KERNAL_CHROUT
     inx
-    bne disk_stub_loop
-disk_stub_done:
+    bne @msg
+@warm:
+    jmp LAB_WARM
+
+; ============================================================
+; EHB_DISK_SAVE — Save to sector 2 (512 bytes max)
+; ============================================================
+EHB_DISK_SAVE:
+    lda DISK_STATUS
+    and #$80
+    bne @ok
+    jmp disk_not_ready
+@ok:
+    sec
+    lda Svarl
+    sbc Smeml
+    sta DISK_END_L
+    lda Svarh
+    sbc Smemh
+    sta DISK_END_H
+
+    lda #2
+    sta DISK_SECT0
+    stz DISK_SECT1
+    stz DISK_SECT2
+    stz DISK_SECT3
+
+    stz DISK_DPTRL
+    stz DISK_DPTRH
+    lda DISK_END_L
+    sta DISK_DATA
+    lda DISK_END_H
+    sta DISK_DATA
+
+    lda Smeml
+    sta DISK_DST_L
+    lda Smemh
+    sta DISK_DST_H
+
+    ldy #0
+@loop:
+    lda (DISK_DST_L),y
+    sta DISK_DATA
+    iny
+    cpy DISK_END_L
+    bcc @loop
+    beq @flush
+    bcs @flush
+
+@flush:
+    jsr disk_cmd_write
+    bcc @done
+    jmp disk_error
+
+@done:
+    ldx #0
+@msg:
+    lda msg_saved,x
+    beq @done2
+    jsr KERNAL_CHROUT
+    inx
+    bne @msg
+@done2:
     rts
 
-msg_no_disk:
-    .byte $0D, $0A, "?DISK NOT AVAILABLE", $0D, $0A, $00
+; ============================================================
+; Helper: read/write SD sector
+; ============================================================
+disk_cmd_read:
+    stz DISK_DPTRL
+    stz DISK_DPTRH
+    lda #$01
+    sta DISK_CMD
+@wait:
+    lda DISK_STATUS
+    lsr a
+    bcs @wait
+    lda DISK_STATUS
+    and #$02
+    beq @ok
+    sec
+    rts
+@ok:
+    clc
+    rts
+
+disk_cmd_write:
+    lda #$02
+    sta DISK_CMD
+@wait:
+    lda DISK_STATUS
+    lsr a
+    bcs @wait
+    lda DISK_STATUS
+    and #$02
+    beq @ok
+    sec
+    rts
+@ok:
+    clc
+    rts
+
+disk_not_ready:
+    ldx #0
+@lp:
+    lda msg_not_ready,x
+    beq @dn
+    jsr KERNAL_CHROUT
+    inx
+    bne @lp
+@dn:
+    rts
+
+disk_error:
+    ldx #0
+@lp:
+    lda msg_disk_err,x
+    beq @dn
+    jsr KERNAL_CHROUT
+    inx
+    bne @lp
+@dn:
+    rts
+
+msg_not_ready:
+    .byte $0D, "?SD CARD NOT READY", $0D, $00
+msg_disk_err:
+    .byte $0D, "?DISK I/O ERROR", $0D, $00
+msg_loaded:
+    .byte $0D, "LOADED", $0D, $00
+msg_saved:
+    .byte $0D, "SAVED", $0D, $00
 
 ; ============================================================
 ; EHB_CTRLC — EhBASIC STOP/Ctrl-C poll hook.

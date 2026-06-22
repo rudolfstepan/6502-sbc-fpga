@@ -65,6 +65,27 @@ IO_LOC "sd_miso" M8;
 IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 
 // -------------------------------------------------------------------------
+// Second SD card (data disk) on PMOD 1.
+// Connect a microSD breakout board to these pins + 3.3 V + GND.
+//
+// PMOD 1 header pins (top row): T11, P11, T12, R11
+//                   (bottom row): M14, M15, J14, J16
+//
+//   sd2_dclk  -> breakout SCK   (PMOD1 pin 5 / T11)
+//   sd2_ncs   -> breakout CS    (PMOD1 pin 6 / P11)
+//   sd2_mosi  -> breakout MOSI  (PMOD1 pin 7 / T12)
+//   sd2_miso  -> breakout MISO  (PMOD1 pin 8 / R11)
+// -------------------------------------------------------------------------
+IO_LOC "sd2_dclk" T11;
+IO_PORT "sd2_dclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "sd2_ncs" P11;
+IO_PORT "sd2_ncs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd2_mosi" T12;
+IO_PORT "sd2_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd2_miso" R11;
+IO_PORT "sd2_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// -------------------------------------------------------------------------
 // Buttons (active-low). The dock's S0 reset button is FPGA pin T10 — confirmed
 // by Sipeed's own examples (Cam2HDMI rst_n=T10, HDMI dk_video reset=T10). The
 // earlier key[0]=T5 (and the T2 guess) were wrong: S1/T3 worked but S0 was dead.

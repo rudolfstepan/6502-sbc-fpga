@@ -25,6 +25,7 @@
         <File path="../../../rtl/core/peripherals/sound_chip4.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/peripherals/sid6581.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/peripherals/sd_disk_ctrl.vhd" type="file.vhdl" enable="1"/>
 
         <!-- Memory -->
         <File path="../../../rtl/core/mem/sync_ram.vhd" type="file.vhdl" enable="1"/>
