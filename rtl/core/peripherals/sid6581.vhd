@@ -56,15 +56,19 @@ architecture rtl of sid6581 is
   attribute syn_keep of sid_tick_pulse : signal is 1;
 
   -- State-variable filter ($D415-$D418): cutoff/resonance/routing + LP/BP/HP.
-  -- Updated once per SID tick over a 3-step pipeline (one multiply per clock)
-  -- so the two serial coefficient multiplies never sit in one 54 MHz path.
+  -- Updated once per SID tick over a 5-step pipeline (voice-mix, HP, BP, LP,
+  -- output) so no multiply+add chain sits in one 54 MHz path.  ~54 system
+  -- clocks are available per SID tick, far more than the 5 stages used.
   constant FLT_BND : integer := 2097152;          -- state saturation (+/-2^21)
   signal lp_s, bp_s : signed(23 downto 0) := (others => '0');
   signal hp_s       : signed(25 downto 0) := (others => '0');
   signal fcoef_s    : signed(14 downto 0) := (others => '0');
+  signal dcoef_s    : signed(17 downto 0) := (others => '0');
   signal dir_lat    : signed(21 downto 0) := (others => '0');
+  signal flt_lat    : signed(21 downto 0) := (others => '0');
+  signal total_lat  : signed(27 downto 0) := (others => '0');
   signal modev_lat  : data_t := (others => '0');
-  signal fstage     : integer range 0 to 2 := 0;
+  signal fstage     : integer range 0 to 5 := 0;
 
   -- phi2 cycles between envelope steps (reSID rate-counter periods, ADSR nibble)
   function rate_period(n : natural) return natural is
@@ -322,6 +326,7 @@ begin
                 end if;
               end loop;
               dir_lat   <= dir_v;
+              flt_lat   <= flt_v;
               modev_lat <= regs(24);
 
               -- ---- coefficients (Q16): nonlinear cutoff, resonance -> damping.
@@ -332,16 +337,22 @@ begin
               fcoef_s <= to_signed(cutoff_coeff(cut11), fcoef_s'length);
               res4  := to_integer(unsigned(regs(23)(7 downto 4)));
               dcoef_i := 92000 - res4 * 3949;
-              dcoef := to_signed(dcoef_i, dcoef'length);
-
-              -- ---- HP = in - LP - damping*BP ----
-              dbp := resize(dcoef * bp_s, dbp'length);
-              hp_s <= resize(flt_v, hp_s'length) - resize(lp_s, hp_s'length)
-                      - resize(shift_right(dbp, 16), hp_s'length);
+              dcoef_s <= to_signed(dcoef_i, dcoef_s'length);
               fstage <= 1;
             end if;
 
           when 1 =>
+            -- ---- HP = in - LP - damping*BP ----
+            -- Split out from voice mixing so the regs -> waveform -> flt_v ->
+            -- hp_s chain (the new worst path after the first pipeline split)
+            -- no longer settles in one 54 MHz cycle.  flt_lat/dcoef_s are now
+            -- registered inputs.
+            dbp := resize(dcoef_s * bp_s, dbp'length);
+            hp_s <= resize(flt_lat, hp_s'length) - resize(lp_s, hp_s'length)
+                    - resize(shift_right(dbp, 16), hp_s'length);
+            fstage <= 2;
+
+          when 2 =>
             -- ---- BP += f*HP, with saturation ----
             fhp := resize(fcoef_s * hp_s, fhp'length);
             bp_sum := resize(bp_s, bp_sum'length)
@@ -353,10 +364,14 @@ begin
             else
               bp_s <= resize(bp_sum, bp_s'length);
             end if;
-            fstage <= 2;
+            fstage <= 3;
 
-          when 2 =>
+          when 3 =>
             -- ---- LP += f*BP, with saturation ----
+            -- This stage ends here (register lp_s) to keep the multiply+add+
+            -- saturate path short.  The output mixing/scaling/clipping moves to
+            -- stage 3 so the long bp_s -> sample_out path no longer all settles
+            -- in one 54 MHz cycle (it was the design's worst critical path).
             fbp := resize(fcoef_s * bp_s, fbp'length);
             lp_sum := resize(lp_s, lp_sum'length)
                       + resize(shift_right(fbp, 16), lp_sum'length);
@@ -368,16 +383,23 @@ begin
               lp_new := resize(lp_sum, lp_new'length);
             end if;
             lp_s <= lp_new;
+            fstage <= 4;
 
-            -- ---- select filter modes, mix with direct path, scale, clip ----
+          when 4 =>
+            -- ---- select filter modes, mix with direct path ----
+            -- Ends here (register total) so the mode-sum + master multiply +
+            -- clip no longer all sit in one 54 MHz path.
             filt_out := (others => '0');
-            if modev_lat(4) = '1' then filt_out := filt_out + resize(lp_new, filt_out'length); end if;
-            if modev_lat(5) = '1' then filt_out := filt_out + resize(bp_s,   filt_out'length); end if;
-            if modev_lat(6) = '1' then filt_out := filt_out + resize(hp_s,   filt_out'length); end if;
+            if modev_lat(4) = '1' then filt_out := filt_out + resize(lp_s,  filt_out'length); end if;
+            if modev_lat(5) = '1' then filt_out := filt_out + resize(bp_s,  filt_out'length); end if;
+            if modev_lat(6) = '1' then filt_out := filt_out + resize(hp_s,  filt_out'length); end if;
+            total_lat <= resize(dir_lat, total_lat'length) + filt_out;
+            fstage <= 5;
 
-            total  := resize(dir_lat, total'length) + filt_out;
+          when 5 =>
+            -- ---- scale by master volume, clip to 16-bit ----
             master := '0' & unsigned(modev_lat(3 downto 0));
-            scaled := resize(total * signed('0' & std_logic_vector(master)), scaled'length);
+            scaled := resize(total_lat * signed('0' & std_logic_vector(master)), scaled'length);
             if scaled > to_signed(32767*16, scaled'length) then
               sample_out <= std_logic_vector(to_signed(32767, 16));
             elsif scaled < to_signed(-32768*16, scaled'length) then
