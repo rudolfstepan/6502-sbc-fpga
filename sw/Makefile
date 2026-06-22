@@ -13,7 +13,8 @@ KERNEL_O   = ../../tools/kernel/kernel.o
 KERNEL_ROM = ../../roms/kernel.rom
 
 .PHONY: all clean fpga-ehbasic upload-ehbasic upload-demo sd-ehbasic kernel \
-        soundtest upload-soundtest soundsid upload-soundsid mandelbrot \
+        soundtest upload-soundtest soundsid upload-soundsid \
+        sound-commando upload-sound-commando mandelbrot \
         mandelbrot-bitmap mandelbrot-copro upload-mandelbrot-bitmap \
         upload-mandelbrot-copro
 
@@ -49,6 +50,26 @@ soundsid: $(SOUNDSID_ROM)
 
 upload-soundsid: $(SOUNDSID_ROM)
 	$(PYTHON) ../tools/upload_monitor_hex.py $(SOUNDSID_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
+
+# ── Commando SID tune ROM (generated from sid_orig/Commando.sid) ────────────
+SOUND_COMMANDO_SID = ../sid_orig/Commando.sid
+SOUND_COMMANDO_S   = sound_commando.s
+SOUND_COMMANDO_ROM = ../roms/sound_commando.rom
+
+$(SOUND_COMMANDO_S): $(SOUND_COMMANDO_SID)
+	$(PYTHON) ../tools/build_native_sid_rom.py $< $@
+
+sound_commando.o: $(SOUND_COMMANDO_S)
+	$(CA65) --cpu 6502 -t none -l sound_commando.lst $< -o $@
+
+$(SOUND_COMMANDO_ROM): sound_commando.o soundsid.cfg
+	$(LD65) -C soundsid.cfg -o $@ $< -m sound_commando.map
+	@echo "ROM ready: $(SOUND_COMMANDO_ROM)  (upload with --split-rom)"
+
+sound-commando: $(SOUND_COMMANDO_ROM)
+
+upload-sound-commando: $(SOUND_COMMANDO_ROM)
+	$(PYTHON) ../tools/upload_monitor_hex.py $(SOUND_COMMANDO_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
 
 rom_demo.o: rom_demo.s
 	$(CA65) --cpu 6502 -t none -l rom_demo.lst $< -o $@
@@ -134,4 +155,5 @@ clean:
 	-del /Q rom_demo.o $(ROM_BIN) rom_demo.lst rom_demo.map 2>NUL || true
 	-del /Q soundtest.o $(SOUNDTEST_ROM) soundtest.lst soundtest.map 2>NUL || true
 	-del /Q soundsid.o $(SOUNDSID_ROM) soundsid.lst soundsid.map 2>NUL || true
+	-del /Q sound_commando.o $(SOUND_COMMANDO_ROM) sound_commando.s sound_commando.lst sound_commando.map 2>NUL || true
 	-del /Q $(MANDELBROT_BITMAP_O) $(MANDELBROT_COPRO_O) $(MANDELBROT_BITMAP_ROM) $(MANDELBROT_COPRO_ROM) mandelbrot_bitmap.lst mandelbrot_bitmap.map mandelbrot_copro.lst mandelbrot_copro.map $(MANDELBROT_BAS) 2>NUL || true
