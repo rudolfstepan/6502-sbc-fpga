@@ -62,7 +62,7 @@ rtl/core/
 │   ├── peripherals/via6522.vhd    — VIA 6522: Timer 1 IRQ + Port B
 │   ├── peripherals/uart6551.vhd   — UART 6551: CPU TX/RX registers
 │   ├── peripherals/vic_vga.vhd    — VIC: bus stealing + VGA/HDMI pixel output
-│   ├── peripherals/sid6581.vhd     — native SID-compatible register block ($D400)
+│   ├── peripherals/sid6581.vhd     — native MOS 6581 SID ($D400): 3 voices, combined waveforms, cycle-accurate ADSR, multimode filter, sync + ring mod
 │   ├── peripherals/pt8211_dac.vhd  — PT8211 audio DAC I2S serializer
 │   └── peripherals/math_copro.vhd  — math coprocessor: signed 32×32 fixed-point multiply ($88B0); see FPU.md
 

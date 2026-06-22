@@ -80,6 +80,9 @@ The project includes comprehensive test coverage:
 | `tb_sbc_t65_irq` | T65 interrupt handling | ✅ PASS |
 | `tb_sbc_t65_kernel_smoke` | T65 kernel startup | ✅ PASS |
 | `tb_sbc_t65_indirect_vic` | T65 indirect addressing | ⏸️ SKIP (experimental) |
+| `tb_sid6581` | SID core produces audio (filter off) | ✅ PASS |
+| `tb_sid6581_filter` | SID filter bounded + low cutoff attenuates | ✅ PASS |
+| `tb_sid6581_combined` | SID combined waveforms, ring mod, hard sync | ✅ PASS |
 
 ### Test Categories
 

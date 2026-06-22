@@ -256,40 +256,92 @@ written to the SD card (wrap it with `fpga/tools/make_sd_boot_image.py`).
 ## Native SID playback
 
 `sid6581.vhd` exposes the standard MOS 6581 register window at `$D400–$D418`.
-It implements the three oscillators, 12-bit pulse width, triangle, saw, pulse
-and noise waveforms, gate transitions, ADSR envelopes and master volume. On the
-Tang Primer build it replaces the legacy four-voice synthesizer: running both
-simultaneously exhausted the device's global clock networks and destabilized
-DDR3 PHY calibration. The legacy RTL remains available for other targets.
+On the Tang Primer build it replaces the legacy four-voice synthesizer: running
+both simultaneously exhausted the device's global clock networks and
+destabilized DDR3 PHY calibration. The legacy RTL remains available for other
+targets.
 
-`soundsid.rom` no longer contains a lossy 50 Hz register conversion. It embeds
-the original 4000-byte PSID payload, copies it to its native `$1000` load
-address, calls its `$1000` init routine, and invokes `$1006` every 20 ms. Thus
-all frequency, pulse-width, control and ADSR writes reach the hardware exactly
-as produced by the original player. This tune does not use the SID filter,
-oscillator sync or ring modulation; those functions are not yet implemented.
+### Implemented 6581 features
 
-The wrapper is linked at `$A000`; its embedded payload ends at `$B04A`, safely
-below the I/O hole. A padding window at `$F000-$FFF9` and vectors at
-`$FFFA-$FFFF` complete the 16 KB image in physical shadow-RAM order. Upload it
-with the split-image mode:
+The core has grown from a minimal oscillator block into a fairly complete 6581
+model. What it now reproduces:
+
+| Feature | Detail |
+| --- | --- |
+| Oscillators | 3 voices, 24-bit phase accumulators, clocked at the ~985 kHz PAL phi2 rate |
+| Waveforms | 12-bit triangle, sawtooth, pulse (12-bit width) and noise (23-bit LFSR) |
+| Combined waveforms | multiple waveform bits are wire-ANDed (the classic 6581 darker/hollow approximation); a single waveform is unchanged |
+| ADSR | **cycle-accurate**: reSID rate-counter periods, linear attack, and the exponential decay/release divider (break-points at env `$5D/$36/$1A/$0E/$06`) |
+| Filter | 2-pole **state-variable** multimode (LP/BP/HP) with per-voice routing (`$D417`), mode/volume (`$D418`) and an 11-bit cutoff |
+| Cutoff curve | non-linear "dark 6581" approximation — mid-range register values stay low (e.g. FC≈1240 → ~2 kHz, not ~7.5 kHz of a linear map) so the bass is audibly rounded |
+| Resonance | mapped to a deliberately **weak** Q (~0.7 … 2), matching the 6581 and avoiding output-limiter clipping |
+| Hard sync | voice *v* oscillator resets when the previous voice's MSB rises (`CONTROL` bit 1) |
+| Ring modulation | triangle fold bit XORed with the previous voice's MSB (`CONTROL` bit 2) |
+| Master volume | `$D418` low nibble; voice-3 disconnect (`$D418` bit 7) honoured |
+
+The filter runs once per SID tick over a 3-step internal pipeline (one multiply
+per clock) so the two serial coefficient multiplies never share a single 54 MHz
+path, and the filter states saturate to keep the SVF from blowing up.
+
+**Not yet modelled:** the 6581's analog DAC non-linearity / DC "warmth", and the
+sample-ROM-exact combined-waveform tables (the wire-AND is an approximation).
+The cutoff and resonance mappings are tunable in `sid6581.vhd` (`cutoff_coeff`
+and the `dcoef_i` formula) if a brighter/darker or more/less resonant voicing is
+wanted.
+
+### Wrapping a `.sid` tune as a standalone ROM
+
+`tools/build_native_sid_rom.py` turns any small PSID/RSID tune into a playable
+ROM. It does **not** do a lossy 50 Hz register conversion — it embeds the
+original 6502 payload, copies it to its native `$1000` load address, calls the
+tune's `init` routine once, then invokes `play` every 20 ms. All frequency,
+pulse-width, control, ADSR **and filter** writes therefore reach the hardware
+exactly as the original player produces them. The tune's payload must load at
+`$1000` and be ≤ 4096 bytes.
+
+Two ready-made tunes are checked in:
+
+| ROM | Source tune | Notes |
+| --- | --- | --- |
+| `roms/soundsid.rom` | `World_Record_2.sid` | no filter/sync/ring used |
+| `roms/sound_commando.rom` | `sid_orig/Commando.sid` | uses the low-pass filter heavily (≈98 % of frames, voice 1 routed, res ≤ 8) |
+
+Each wrapper is linked at `$A000` with a padding window at `$F000-$FFF9` and
+vectors at `$FFFA-$FFFF`, completing a 16 KB image in physical shadow-RAM order.
+Upload with the split-image mode:
 
 ```sh
-python tools/upload_monitor_hex.py roms/soundsid.rom --split-rom \
+# Commando
+python tools/upload_monitor_hex.py roms/sound_commando.rom --split-rom \
        --port COM15 --baud 115200 --run --verbose
-# or build and upload:
+make -C sw upload-sound-commando      # build + upload in one step
+
+# World_Record_2
 make -C sw upload-soundsid
 ```
 
-On Windows, `roms\upload\soundsid.bat` uploads the already-built image with the
-same settings.
+On Windows, `roms\upload\soundsid.bat` uploads the already-built `soundsid.rom`.
 
-Regenerate the wrapper source with:
+Regenerate or add a wrapper with:
 
 ```sh
-python tools/build_native_sid_rom.py path/to/tune.sid sw/soundsid.s
-make -C sw soundsid
+python tools/build_native_sid_rom.py path/to/tune.sid sw/<name>.s
+make -C sw sound-commando             # or: make -C sw soundsid
 ```
+
+`tools/sid_dump_full.exe tune.sid <seconds> out.raw` dumps all 25 SID registers
+per 50 Hz frame, which is handy for checking which features (filter, sync, ring,
+combined waveforms) a tune actually exercises before expecting to hear them.
+
+### Verification
+
+The core is regression-tested in simulation (GHDL):
+
+| Testbench | Checks |
+| --- | --- |
+| [`sim/tb/tb_sid6581.vhd`](../sim/tb/tb_sid6581.vhd) | core produces audio (filter off, backward-compatible level) |
+| [`sim/tb/tb_sid6581_filter.vhd`](../sim/tb/tb_sid6581_filter.vhd) | filter is bounded (no blow-up) and a low cutoff attenuates |
+| [`sim/tb/tb_sid6581_combined.vhd`](../sim/tb/tb_sid6581_combined.vhd) | combined waveforms, ring mod and hard sync are wired, bounded and non-silent |
 
 See [Split ROM and Native SID Update](./SPLIT_ROM_SID_UPDATE.md) for the full
 memory-map migration and compatibility notes.

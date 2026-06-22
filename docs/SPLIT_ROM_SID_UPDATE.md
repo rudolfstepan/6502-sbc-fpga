@@ -71,6 +71,14 @@ Or use `make -C sw upload-soundsid`.
 The Windows shortcut for an already-built image is
 `roms\upload\soundsid.bat`.
 
+The same wrapper (`tools/build_native_sid_rom.py`) produces a ROM from any small
+`.sid` tune that loads at `$1000`. `roms/sound_commando.rom`
+(`sid_orig/Commando.sid`) is a second checked-in example and, unlike
+`soundsid.rom`, exercises the SID low-pass filter heavily. Build/upload it with
+`make -C sw sound-commando` / `make -C sw upload-sound-commando`. See
+[SOUND.md](./SOUND.md#native-sid-playback) for the full feature list and the
+`.sid`-wrapping workflow.
+
 ## New uploader behavior
 
 `tools/upload_monitor_hex.py` adds two modes:

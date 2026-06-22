@@ -1,9 +1,10 @@
 -- sid6581.vhd - compact MOS 6581 playback core for original SID player code.
 -- Three voices, 24-bit oscillators, 12-bit triangle/saw/pulse + noise, gate and
 -- a cycle-accurate ADSR (reSID rate-counter periods with the exponential
--- decay/release divider), plus a 2-pole state-variable filter (LP/BP/HP with
--- cutoff/resonance/routing). Oscillator sync and ring modulation, and the
--- 6581's non-linear cutoff/DAC curve, are not modelled yet (left for later).
+-- decay/release divider), a 2-pole state-variable filter (LP/BP/HP with
+-- cutoff/resonance/routing and a non-linear "dark 6581" cutoff curve), hard
+-- oscillator sync, ring modulation and AND-combined waveforms. The 6581's DAC
+-- non-linearity and sample-ROM-exact combined waveforms are not modelled yet.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -43,6 +44,7 @@ architecture rtl of sid6581 is
   signal env        : env_arr_t := (others => (others => '0'));
   signal lfsr       : lfsr_arr_t := (others => (others => '1'));
   signal noise_clk_d : bit_arr_t := (others => '0');
+  signal osc_msb_d  : bit_arr_t := (others => '0');  -- prev osc MSB, for hard sync
   signal gate_d     : bit_arr_t := (others => '0');
   signal env_state  : env_state_arr_t := (others => E_IDLE);
   signal rate_cnt   : rate_arr_t := (others => (others => '0'));
@@ -88,6 +90,21 @@ architecture rtl of sid6581 is
     else                  return 30;
     end if;
   end function;
+
+  -- 11-bit cutoff register -> Q16 filter coefficient (2*pi*fc/fs, fs=phi2).
+  -- Piecewise-linear approximation of an exponential "dark 6581" curve so that
+  -- mid-range register values stay genuinely low (e.g. FC=1240 -> ~2 kHz, not
+  -- ~7.5 kHz of a linear map). 8 equal 256-wide segments, endpoints at 2048.
+  function cutoff_coeff(cut11 : natural) return natural is
+    type y_arr is array (0 to 8) of natural;
+    constant YB  : y_arr := (50, 89, 159, 282, 502, 891, 1586, 2819, 5015);
+    variable seg : natural;
+    variable frac : natural;
+  begin
+    seg  := cut11 / 256;            -- 0..7 (top 3 bits)
+    frac := cut11 mod 256;          -- 0..255 within the segment
+    return YB(seg) + (YB(seg+1) - YB(seg)) * frac / 256;
+  end function;
 begin
   dout <= regs(to_integer(unsigned(addr))) when unsigned(addr) < 25 else x"FF";
 
@@ -109,11 +126,13 @@ begin
   end process;
 
   synth_proc : process(clk)
-    variable idx, base : integer;
+    variable idx, base, src : integer;
     variable f : unsigned(15 downto 0);
     variable ctrl : data_t;
     variable target, rate_nib, e : integer;
     variable feedback : std_logic;
+    variable np : phase_arr_t;                 -- advanced accumulators this tick
+    variable mnow : std_logic_vector(2 downto 0);  -- their MSBs (sync sources)
   begin
     if rising_edge(clk) then
       if reset_n = '0' then
@@ -122,6 +141,7 @@ begin
         env <= (others => (others => '0'));
         lfsr <= (others => (others => '1'));
         noise_clk_d <= (others => '0');
+        osc_msb_d <= (others => '0');
         gate_d <= (others => '0');
         env_state <= (others => E_IDLE);
         rate_cnt <= (others => (others => '0'));
@@ -130,6 +150,32 @@ begin
         if cs = '1' and we = '1' then
           idx := to_integer(unsigned(addr));
           if idx < 25 then regs(idx) <= din; end if;
+        end if;
+
+        -- ===== oscillators: advance, hard sync, noise clock (on SID tick) =====
+        if sid_tick_pulse = '1' then
+          for v in 0 to 2 loop                 -- pass 1: advance accumulators
+            base := v*7; ctrl := regs(base+4);
+            f := unsigned(regs(base+1)) & unsigned(regs(base));
+            if ctrl(3) = '1' then np(v) := (others => '0');
+            else np(v) := phase(v) + resize(f, 24); end if;
+            mnow(v) := np(v)(23);
+          end loop;
+          for v in 0 to 2 loop                 -- pass 2: hard sync from voice v-1
+            src := (v + 2) mod 3;
+            if regs(v*7+4)(1) = '1' and osc_msb_d(src) = '0' and mnow(src) = '1' then
+              np(v) := (others => '0');
+            end if;
+          end loop;
+          for v in 0 to 2 loop                 -- commit phase, MSB history, noise
+            phase(v) <= np(v);
+            osc_msb_d(v) <= mnow(v);
+            if np(v)(19) = '1' and noise_clk_d(v) = '0' then
+              feedback := lfsr(v)(22) xor lfsr(v)(17);
+              lfsr(v) <= lfsr(v)(21 downto 0) & feedback;
+            end if;
+            noise_clk_d(v) <= np(v)(19);
+          end loop;
         end if;
 
         for v in 0 to 2 loop
@@ -149,20 +195,6 @@ begin
           gate_d(v) <= ctrl(0);
 
           if sid_tick_pulse = '1' then
-            -- oscillator / noise
-            f := unsigned(regs(base+1)) & unsigned(regs(base));
-            if ctrl(3) = '1' then
-              phase(v) <= (others => '0');
-            else
-              phase(v) <= phase(v) + resize(f, 24);
-            end if;
-
-            if phase(v)(19) = '1' and noise_clk_d(v) = '0' then
-              feedback := lfsr(v)(22) xor lfsr(v)(17);
-              lfsr(v) <= lfsr(v)(21 downto 0) & feedback;
-            end if;
-            noise_clk_d(v) <= phase(v)(19);
-
             -- envelope: cycle-accurate rate counter + exponential divider
             case env_state(v) is
               when E_ATTACK          => rate_nib := to_integer(unsigned(regs(base+5)(7 downto 4)));
@@ -221,7 +253,10 @@ begin
   -- Stage 0: mix routed/direct voices, derive coefficients, compute HP.
   -- Stage 1: integrate BP (needs HP).  Stage 2: integrate LP, mix, output.
   out_proc : process(clk)
-    variable base, p12, pw, wav12 : integer;
+    variable base, p12, pw, wav12, src, lower : integer;
+    variable msb : std_logic;
+    variable any : boolean;
+    variable wacc, wtmp : unsigned(11 downto 0);
     variable ctrl : data_t;
     variable raw  : signed(11 downto 0);
     variable amp  : signed(20 downto 0);
@@ -250,20 +285,33 @@ begin
               dir_v := (others => '0'); flt_v := (others => '0');
               for v in 0 to 2 loop
                 base := v*7; ctrl := regs(base+4);
+                src := (v + 2) mod 3;                       -- ring/sync source
                 p12 := to_integer(phase(v)(23 downto 12));
                 pw  := to_integer(unsigned(regs(base+3)(3 downto 0)) & unsigned(regs(base+2)));
-                if ctrl(7) = '1' then                       -- noise
-                  wav12 := to_integer(lfsr(v)(22 downto 15)) * 16;
-                elsif ctrl(6) = '1' then                    -- pulse
-                  if p12 < pw then wav12 := 0; else wav12 := 4095; end if;
-                elsif ctrl(5) = '1' then                    -- sawtooth
-                  wav12 := p12;
-                elsif ctrl(4) = '1' then                    -- triangle
-                  if p12 < 2048 then wav12 := p12 * 2;
-                  else wav12 := (4095 - p12) * 2; end if;
-                else
-                  wav12 := 2048;                            -- silence
+
+                -- Combined waveforms approximated by wire-ANDing the enabled
+                -- generators (full-scale 12-bit). A single waveform ANDs with
+                -- all-ones, so it is unchanged.
+                wacc := (others => '1'); any := false;
+                if ctrl(4) = '1' then                       -- triangle (+ ring mod)
+                  msb := phase(v)(23);
+                  if ctrl(2) = '1' then msb := msb xor phase(src)(23); end if;
+                  lower := to_integer(phase(v)(22 downto 12));   -- 0..2047
+                  if msb = '0' then wtmp := to_unsigned(lower * 2, 12);
+                  else wtmp := to_unsigned((2047 - lower) * 2, 12); end if;
+                  wacc := wacc and wtmp; any := true;
                 end if;
+                if ctrl(5) = '1' then                       -- sawtooth
+                  wacc := wacc and to_unsigned(p12, 12); any := true;
+                end if;
+                if ctrl(6) = '1' then                       -- pulse
+                  if p12 < pw then wacc := (others => '0'); end if;
+                  any := true;
+                end if;
+                if ctrl(7) = '1' then                       -- noise (8-bit, top bits)
+                  wacc := wacc and (lfsr(v)(22 downto 15) & to_unsigned(0, 4)); any := true;
+                end if;
+                if any then wav12 := to_integer(wacc); else wav12 := 2048; end if;
                 raw := to_signed(wav12 - 2048, raw'length);
                 amp := raw * signed('0' & std_logic_vector(env(v)));
                 c   := resize(shift_right(amp, 6), 20);
@@ -276,11 +324,14 @@ begin
               dir_lat   <= dir_v;
               modev_lat <= regs(24);
 
-              -- ---- coefficients (Q16): cutoff ~linear, resonance -> damping ----
+              -- ---- coefficients (Q16): nonlinear cutoff, resonance -> damping.
+              -- The 6581 resonance is weak: map res 0..15 to Q ~0.7..2 (damping
+              -- 1.41..0.5) so resonant peaks colour the tone without slamming the
+              -- output limiter into hard clipping.
               cut11 := to_integer(unsigned(regs(22)) & unsigned(regs(21)(2 downto 0)));
-              fcoef_s <= to_signed(13 + (cut11 * 5) / 2, fcoef_s'length);
+              fcoef_s <= to_signed(cutoff_coeff(cut11), fcoef_s'length);
               res4  := to_integer(unsigned(regs(23)(7 downto 4)));
-              dcoef_i := 92000 - res4 * 5600;
+              dcoef_i := 92000 - res4 * 3949;
               dcoef := to_signed(dcoef_i, dcoef'length);
 
               -- ---- HP = in - LP - damping*BP ----
