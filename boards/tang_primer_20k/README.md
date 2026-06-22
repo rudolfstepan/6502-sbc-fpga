@@ -71,9 +71,10 @@ Current bring-up status:
 The lower 16 KB of 6502 RAM (`$0000-$3FFF`) is BRAM; the remaining main-RAM
 addresses use the on-board **DDR3** through the Gowin DDR3 Memory Interface IP.
 See *Main RAM in DDR3* below.
-The address range `$6000-$7FFF` is intercepted by a dedicated 8-KB bitmap RAM;
-its first 8000 bytes hold the visible image. EhBASIC's configured
-`$0200-$3FFF` workspace remains unaffected.
+The address range `$6000-$7FFF` is an 8-KB CPU window into a dedicated banked
+16-KB VIC framebuffer. VIC MODE bit 2 selects the CPU bank. The framebuffer
+supports legacy 320×200 1-bpp graphics, 160×100 RGB332, and packed 180×120
+RGB222; EhBASIC's configured `$0200-$3FFF` workspace remains unaffected.
 Pressing KEY1 enters the FPGA UART monitor, holds the 6502 CPU, and switches HDMI
 back to the diagnostic screen while monitor operations run.
 
@@ -280,9 +281,11 @@ GW2A's hardware DSP blocks into a peripheral the 6502 can drive, off-loading the
 multiply that 8-bit fixed-point code spends all its time on. Default format is
 **8.24**; the shift is a register, so any Q-format works.
 
-Measured on this board: the Mandelbrot renderer ([`sw/mandelbrot_copro.s`](../../sw/mandelbrot_copro.s))
-drops from **~5–8 minutes** (software multiply, 4.12) to **~10 seconds** (8.24),
-with a sharper image.
+The Mandelbrot renderer ([`sw/mandelbrot_copro.s`](../../sw/mandelbrot_copro.s))
+uses the coprocessor in 8.24 format and renders directly into the packed
+180×120 RGB222 VIC mode. Earlier 320×200 measurements showed roughly 10 seconds
+versus 5–8 minutes with software multiplication; the current mode has a
+different pixel count and should be timed separately.
 
 Verify the coprocessor on hardware with [`sw/copro_selftest.s`](../../sw/copro_selftest.s)
 (green screen + `COPRO 2.0*3.0=06000000 OK` over UART). Full register map, timing

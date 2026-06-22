@@ -77,7 +77,7 @@ package sbc_pkg is
   constant ADDR_VIC_REG_LAST    : unsigned(15 downto 0) := x"900F";
 
   -- VIC Bitmap: Main video frame buffer (40KB for graphics display)
-  -- Dedicated 8 KB bitmap RAM. Kept below EhBASIC ($A000) and outside its
+  -- 8 KB CPU window into the banked 16 KB bitmap RAM. Kept below EhBASIC ($A000) and outside its
   -- configured working RAM ($0200-$3FFF). This replaces the old $9010-$AF4F
   -- window, which overlapped the relocated EhBASIC ROM.
   constant ADDR_VIC_BMP_BASE    : unsigned(15 downto 0) := x"6000";

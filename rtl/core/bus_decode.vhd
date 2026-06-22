@@ -27,7 +27,7 @@ begin
     -- Check each address range in priority order (lowest to highest)
     -- The CPU will use this signal to enable the appropriate peripheral
 
-    -- 0x6000-0x7FFF: dedicated 8 KB bitmap RAM. The visible 320x200 bitmap
+    -- 0x6000-0x7FFF: 8 KB CPU window into the banked 16 KB bitmap RAM.
     -- consumes $6000-$7F3F; the final 192 bytes are reserved. This check precedes
     -- main RAM because the relocated framebuffer occupies part of its range.
     if addr(15 downto 13) = "011" then

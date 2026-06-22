@@ -75,7 +75,7 @@ Currently supported ranges are:
 | --- | --- |
 | `$0000-$3FFF` | Internal BRAM main memory, including zero page, stack, and EhBASIC workspace. |
 | `$4000-$5FFF` | External DDR3 main RAM. |
-| `$6000-$7FFF` | Dedicated 8 KB VIC bitmap RAM; `$6000-$7F3F` contains visible pixels, the final 192 bytes are reserved. |
+| `$6000-$7FFF` | 8 KB window into the banked 16 KB VIC framebuffer; MODE bit 2 selects the bank. |
 | `$8000-$87FF` | VIC text VRAM. Writes are visible immediately on VGA. |
 | `$8800-$880F` | VIA 6522 registers. Port B bit 0 is connected to board LED 1 after boot. |
 | `$8810-$8813` | UART 6551 registers. |
@@ -88,6 +88,10 @@ must not cross from `$CFFF` into this hole.
 
 Sprite and blitter ranges remain unavailable where no physical implementation
 exists. Bitmap RAM is implemented separately at `$6000-$7FFF`.
+
+When using monitor reads/writes on the framebuffer, set `$9000` first: `$03/$07`
+select RGB332 bank 0/1 and `$09/$0D` select packed RGB222 bank 0/1. The legacy
+1-bpp mode uses `$01` and normally keeps bank 0 selected.
 
 ## Hex Loader Mode
 

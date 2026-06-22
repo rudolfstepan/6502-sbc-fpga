@@ -93,6 +93,9 @@ volatile EhBASIC image after running a standalone ROM.
 The standalone Mandelbrot images have been migrated accordingly:
 
 - `roms/mandelbrot_bitmap.rom` uses software fixed-point multiplication;
-- `roms/mandelbrot_copro.bin` uses the `$88B0-$88BF` math coprocessor.
+- `roms/mandelbrot_copro.bin` uses the `$88B0-$88BF` math coprocessor and the
+  packed 180×120 RGB222 framebuffer mode.
 
-Both start at `$A000`, use bitmap RAM at `$6000`, and upload with `--split-rom`.
+Both start at `$A000`, access the framebuffer through `$6000-$7FFF`, and upload
+with `--split-rom`. The coprocessor image changes VIC MODE from `$09` to `$0D`
+when it crosses into framebuffer bank 1.

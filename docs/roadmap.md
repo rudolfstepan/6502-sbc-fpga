@@ -21,7 +21,7 @@ programmer-visible interfaces:
 | VIA 6522 | register file, GPIO, basic timers, IRQ flags | shift register, handshake pins, precise cycle timing |
 | UART 6551 | basic TX/RX register interface, status, RX IRQ | baud generator and serial pin timing |
 | DISK MVP | stub or SPI/SD-card bridge | FAT/raw block protocol |
-| VIC | text/color RAM and VGA timing | bitmap, sprites, blitter, raster IRQ |
+| VIC | ✅ text/color RAM, VGA timing, legacy bitmap, RGB332 and packed RGB222 | sprites, blitter refinements, raster IRQ refinements |
 | Sound | ✅ large 4-voice chip (5 waveforms + ADSR + duration + mixer) wired into the Tang Primer 20K board on the PT8211 DAC; bring-up single voice kept as alternative | tune levels / per-voice features on hardware |
 
 ## Verification Plan
@@ -61,6 +61,10 @@ Start small and keep each device independently testable:
 - `tb_sbc_t65_kernel_smoke`: composes `kernel.rom + msbasic.rom`, boots T65, and
   verifies early kernel activity: reset fetch, VIA DDRA initialization, and
   screen-pointer setup for `$8000`.
+- `tb_vic_color256`: verifies the 160×100 RGB332 scanline fetch and RGB565
+  expansion.
+- `tb_vic_color64`: verifies the packed 180×120 RGB222 fetch, four-pixel/three-byte
+  unpacking, centring, and RGB565 expansion.
 
 ## Imported CPU Core
 

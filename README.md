@@ -216,7 +216,7 @@ on reset/reprogramming.
 ```text
 $0000-$3FFF   BRAM main RAM (EhBASIC workspace included)
 $4000-$5FFF   DDR3 main RAM
-$6000-$7FFF   VIC bitmap RAM (8 KB; 8000 bytes visible)
+$6000-$7FFF   8 KB CPU window into 16 KB banked VIC framebuffer
 $8000-$87FF   VIC text/color RAM
 $8800-$88BF   VIA, UART, sound timer, and math-coprocessor I/O
 $9000-$900F   VIC control registers
@@ -254,7 +254,8 @@ $C000-$FFFF   ROM
 2. CPU core integration, ideally with Klaus Dormann functional-test compatibility.
 3. VIA 6522 enough for keyboard/IRQ behavior.
 4. UART 6551 transmit/receive with FPGA board UART pins.
-5. VIC text mode, then bitmap RAM, raster IRQs, sprites, and blitter.
+5. VIC text mode, banked bitmap modes (320×200 1-bpp, 160×100 RGB332,
+   180×120 RGB222), then raster IRQs, sprites, and blitter.
 6. Sound voice register file, then waveform generation, ADSR, and mixer/PWM or I2S.
 7. Board-specific constraints and PLL/clock-domain work.
 

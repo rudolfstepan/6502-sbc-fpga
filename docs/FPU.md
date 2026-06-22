@@ -4,9 +4,11 @@ A small memory-mapped fixed-point multiplier that off-loads the operation the
 8-bit 6502 is worst at: multiplication. It turns the FPGA's hardware **DSP
 blocks** into a peripheral the CPU can drive with a few store/load instructions.
 
-The headline result: the **Mandelbrot** renderer drops from **~5–8 minutes**
-(software 16×16 shift-add multiply) to **~10 seconds** on the Tang Primer 20K —
-while moving from coarse 4.12 to sharp **8.24** fixed-point at the same time.
+The coprocessor reduces each fixed-point multiply from a software shift-add loop
+to a handful of memory-mapped stores and loads while moving from coarse 4.12 to
+sharp **8.24** fixed-point. An earlier 320×200 renderer measured about 10 seconds
+instead of 5–8 minutes on Tang Primer 20K; the current demo renders fewer,
+individually coloured 180×120 RGB222 pixels and is not directly comparable.
 
 Files:
 
@@ -51,7 +53,7 @@ One signed multiply maps to a single hardware DSP and completes in one clock. Th
 | Sign handling | manual abs/negate in 6502 | in hardware |
 | `>> N` normalise | 4× `lsr/ror` chain in 6502 | free (in hardware) |
 | Precision | 12 fractional bits | 24 fractional bits |
-| Mandelbrot full frame | ~5–8 min | **~10 s** |
+| Earlier 320×200 Mandelbrot frame | ~5–8 min | **~10 s** |
 
 ## Fixed-point format (8.24)
 
@@ -159,8 +161,11 @@ macro and uses it for the three products per Mandelbrot iteration
 (`zr²`, `zi²`, `zr·zi`).
 
 The current standalone image is linked for the split ROM map: code starts at
-`$A000`, vectors remain at `$FFFA-$FFFF`, and bitmap output uses the relocated
-`$6000-$7FFF` framebuffer. Build and upload it with:
+`$A000`, vectors remain at `$FFFA-$FFFF`, and it renders directly into the
+180×120 packed RGB222 framebuffer. Four 6-bit pixels occupy three bytes. The
+`$6000-$7FFF` CPU window switches from bank 0 to bank 1 after byte 8191; every
+pixel therefore receives its own colour rather than sharing a colour attribute
+with an 8×8 cell. Build and upload it with:
 
 ```powershell
 make -C sw mandelbrot-copro

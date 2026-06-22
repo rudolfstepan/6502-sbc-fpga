@@ -57,7 +57,7 @@ failure while the CPU remains held.
 | --- | --- | --- | --- |
 | $0000-$3FFF | 16 KB | Internal FPGA RAM | Zero page, stack, and EhBASIC workspace |
 | $4000-$5FFF | 8 KB | Main RAM | External DDR3 in the current Tang build |
-| $6000-$7FFF | 8 KB | VIC bitmap RAM | 320x200, 1 bit per pixel; final 192 bytes reserved |
+| $6000-$7FFF | 8 KB window | Banked VIC framebuffer | 16 KB; legacy 1-bpp, 160x100 RGB332, or 180x120 RGB222 |
 | $8000-$87FF | 2 KB | VIC text/color VRAM | $8000–$83E7 chars, $8400–$87E7 colors; shared by CPU/monitor/VIC |
 | $8800-$880F | 16 B | VIA 6522 | Port B bit 0 -> board LED 1 after boot |
 | $8810-$8813 | 4 B | UART 6551 | CPU UART registers |
@@ -109,11 +109,11 @@ The two ROM windows share one physical 16 KB `boot_shadow_rom`. Image offsets
 │                               ┌────────────────────────────┐   │
 │                               │       vic_vga              │   │
 │                               │  - VGA timing (h/v counters│   │
-│                               │  - Char line buffer (40 B) │   │
+│                               │  - Video buffer (160 B)    │   │
 │                               │  - Color line buffer (40 B)│   │
-│                               │  - 2-phase bus steal FSM   │──►│ vic_stealing
+│                               │  - mode-aware fetch FSM    │──►│ vic_stealing
 │                               │  - char_rom lookup         │   │
-│                               │  - 16-color C64 palette    │   │
+│                               │  - palette + direct colour │   │
 │                               │  - VGA RGB + sync output   │   │
 │                               └────────────┬───────────────┘   │
 │                                            │                    │
@@ -125,7 +125,12 @@ The two ROM windows share one physical 16 KB `boot_shadow_rom`. Image offsets
 
 ### Bus Stealing — C64-Style Shared Bus
 
-The VIC and CPU share a single-port VRAM via a bus multiplexer. During each horizontal blanking interval the VIC takes control of the bus in two phases to prefetch one complete row of character codes and color attributes into internal line buffers. Phase 0 fetches 40 character bytes from `$8000+`, phase 1 fetches 40 color bytes from `$8400+`. Each phase takes 41 clock cycles (1 setup + 40 reads). The CPU is halted during this time via the T65 `RDY` pin.
+The VIC and CPU share single-port video memories through bus multiplexers.
+During each horizontal blanking interval the VIC prefetches the next display
+line and holds the CPU through the T65 `RDY` pin. Text and legacy bitmap modes
+use two phases (40 character/bitmap bytes plus 40 colour bytes). RGB332 fetches
+160 direct-colour bytes; packed RGB222 fetches 135 bytes and needs no colour
+attribute phase.
 
 ```
 One scan line = 1716 system clock cycles (858 pixel clocks × 2)
@@ -135,17 +140,18 @@ One scan line = 1716 system clock cycles (858 pixel clocks × 2)
 │   VIC displays from line buffer (no bus access)                 │
 │                                                                 │
 ├── H-Blank (436 cycles) ──────────────────────────────────────┤
-│   ├── 82 stolen cycles ──────────────────────────────────────┤ │
-│   │   Phase 0: 1 setup + 40 char reads into linebuf          │ │
-│   │   Phase 1: 1 setup + 40 color reads into colorbuf        │ │
+│   ├── up to 161 stolen cycles ───────────────────────────────┤ │
+│   │   Text/legacy: 40 data + 40 colour bytes (+ setup)       │ │
+│   │   RGB332: 160 direct-colour bytes (+ setup)              │ │
+│   │   RGB222: 135 packed-colour bytes (+ setup)              │ │
 │   │   CPU held (RDY=0) while the VIC owns the VRAM bus.      │ │
-│   ├── 354 remaining cycles ──────────────────────────────────┤ │
+│   ├── at least 275 remaining cycles ─────────────────────────┤ │
 │   │   CPU runs freely                                         │ │
 ```
 
-**CPU overhead on the Tang Primer 20K:** 82 stolen out of 1716 system clocks =
-about 4.8% per scan line. The 54 MHz two-phase T65 has a 27 MHz peak bus rate,
-or roughly 25.7 MHz averaged across continuous VIC steals.
+**CPU overhead on the Tang Primer 20K:** text/legacy modes steal 82 of 1716
+system clocks (about 4.8%); RGB332 is the worst case at 161 clocks (about 9.4%);
+RGB222 uses 136 clocks (about 7.9%).
 
 CPU writes to `$8000-$87FF` are never discarded while the VIC owns VRAM. The
 active SD boot cores (`sbc_t65_boot_monitor_top` and `sbc_t65_sdram_boot_top`)
@@ -193,11 +199,13 @@ PETSCII graphics write those character codes directly to VRAM.
 The VIC supports per-cell foreground and background colors using the C64 16-color
 palette. Color attributes are stored in color RAM at `$8400–$87E7`, parallel to the
 character codes at `$8000–$83E7`. Each color byte is packed as `bg[7:4] | fg[3:0]`.
-Color attributes apply to both text and bitmap modes.
+Color attributes apply to text and legacy 1-bpp bitmap modes. Direct-colour
+RGB332/RGB222 pixels carry their own colour and do not use color RAM.
 
-The VIC fetches both character and color data via two-phase bus stealing during
-H-blank. The 16-color palette is implemented as constant RGB565 lookup tables
-(Pepto-style C64 colors) in `vic_vga.vhd`.
+In text and legacy bitmap modes the VIC fetches both data and color attributes
+during H-blank. The 16-color palette is implemented as constant RGB565 lookup
+tables (Pepto-style C64 colors) in `vic_vga.vhd`; direct-colour modes expand
+RGB332 or RGB222 values to RGB565 instead.
 
 **VIC color registers** (active in all top-level modules):
 
@@ -225,16 +233,47 @@ color palette reference.
 
 ### Bitmap Mode
 
-The VIC supports a 320×200 pixel bitmap mode (1 bit per pixel, 2× scaled to
-640×400 on VGA). Bitmap data is stored in a dedicated 8 KB block RAM mapped at
-`$6000–$7F3F`. Bitmap mode is activated by writing `$01` to the MODE register
-(`$9000`).
+The VIC supports a legacy 320×200 bitmap mode (1 bit per pixel, 2× scaled to
+640×400 on VGA), a 160×100 chunky-pixel mode with one RGB332 byte per pixel,
+and a higher-resolution 180×120 RGB222 mode. RGB332 is scaled 4× to 640×400;
+RGB222 is scaled 3× to 540×360 and centred in the 640×480 output. The 16 KB
+framebuffer is exposed through the 8 KB CPU window at `$6000–$7FFF`; MODE bit 2
+selects one of two banks.
+
+| MODE (`$9000`) | Function |
+|---|---|
+| bit 0 | Bitmap enable (`0` text, `1` bitmap) |
+| bit 1 | 256-colour RGB332 enable (valid with bit 0) |
+| bit 2 | CPU framebuffer bank, 0–1 |
+| bit 3 | 64-colour packed RGB222 enable (valid with bit 0; takes priority over bit 1) |
+| bits 7–4 | Reserved, write zero |
+
+Values `$00` and `$01` therefore retain their original text and legacy-bitmap
+meaning. Extended 256-colour mode is selected with `$03` plus the desired bank;
+64-colour mode uses `$09` plus the bank bit.
 
 During bitmap mode, the bus-stealing FSM fetches 40 bitmap bytes per scanline
 (from `$6000 + bmp_line*40`) in phase 0, and 40 color bytes (from `$8400 +
 color_row*40`) in phase 1. The bitmap byte is used directly as the pixel pattern
 — no char ROM lookup or reverse-video processing. Each 8×8 pixel cell shares one
 color attribute from color RAM, providing 16-color foreground/background per cell.
+
+In 256-colour mode the VIC fetches 160 bytes per logical scanline and skips the
+colour-attribute phase. Pixel `(X,Y)` is stored at framebuffer offset `Y*160+X`.
+To access it from the CPU, write `(offset DIV 8192)*4+3` to `$9000`, then access
+`$6000+(offset AND 8191)`. RGB332 is packed as `RRRGGGBB` and expanded directly
+to the RGB565 video output.
+
+In 64-colour mode each pixel is `RRGGBB`. Four pixels occupy three consecutive
+bytes, so a 180×120 frame consumes 16,200 bytes. The packing is:
+
+```text
+byte 0 = P0[5:0] in bits 7–2 | P1[5:4] in bits 1–0
+byte 1 = P1[3:0] in bits 7–4 | P2[5:2] in bits 3–0
+byte 2 = P2[1:0] in bits 7–6 | P3[5:0] in bits 5–0
+```
+
+Use MODE `$09` for bank 0 and `$0D` for bank 1.
 
 **Pixel formula:** `address = $6000 + Y*40 + INT(X/8)`, bit = `7 - (X AND 7)`
 (MSB-first, C64 convention).
@@ -246,6 +285,14 @@ POKE 36864, 1                          : REM bitmap mode on
 A=24576+Y*40+INT(X/8)                  : REM pixel address ($6000)
 POKE A, PEEK(A) OR 2^(7-(X AND 7))    : REM set pixel
 POKE 36864, 0                          : REM back to text
+```
+
+**256-colour BASIC addressing:**
+
+```basic
+O=Y*160+X:B=INT(O/8192)
+POKE 36864,3+B*4                       : REM chunky mode + CPU bank
+POKE 24576+(O-B*8192),C               : REM C is RRRGGGBB
 ```
 
 See [examples/bitmaptest.bas](../examples/bitmaptest.bas) for a full demo. With
@@ -331,7 +378,7 @@ It is present in the project but not synthesized for the PIX16 board (Implementa
 | --- | --- | --- |
 | $0000–$3FFF | 16 KB | BRAM main RAM |
 | $4000–$5FFF | 8 KB | DDR3 main RAM |
-| $6000–$7FFF | 8 KB | Dedicated VIC bitmap RAM; first 8000 bytes visible |
+| $6000–$7FFF | 8 KB window | Banked 16 KB VIC framebuffer |
 | $8000–$87FF | 2 KB | VIC Text RAM |
 | $8800–$880F | 16 B | VIA 6522 |
 | $8810–$8813 | 4 B | UART 6551 |

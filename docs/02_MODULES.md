@@ -206,7 +206,7 @@ end entity;
 | `cpu_enable` | Toggles every clock — 27 MHz T65 rate from the Tang's 54 MHz system clock |
 | `cpu_bus_we` | `cpu_we AND NOT cpu_enable` — write on stable half-cycle |
 | `cpu_rdy` | `NOT vic_stealing` — CPU halted during VIC bus steal |
-| `vic_stealing` | High for 82 system clocks during each H-blank (40 chars + 40 colours, each with setup) |
+| `vic_stealing` | H-blank prefetch: 82 clocks for text/legacy bitmap, 161 for RGB332, 136 for RGB222 |
 | `vram_addr` | Mux: `vic_addr[10:0]` during steal, else `cpu_addr[10:0]` |
 | `vram_we_mux` | Zero during steal (VIC only reads), else `vram_we` |
 | `zp_cs` | Selects internal FPGA RAM for `$0000-$01FF` |
@@ -383,6 +383,12 @@ entity vic_vga is
     -- Character ROM
     char_addr    : out std_logic_vector(9 downto 0);
     char_data    : in  data_t;
+    -- Cursor and graphics modes
+    cursor_x     : in  std_logic_vector(5 downto 0);
+    cursor_y     : in  std_logic_vector(4 downto 0);
+    cursor_enable : in std_logic;
+    bitmap_mode, color256_mode, color64_mode : in std_logic;
+    vic_fetch_bitmap : out std_logic;
     -- VGA output
     vga_hs, vga_vs : out std_logic;
     vga_r        : out std_logic_vector(4 downto 0);
@@ -398,12 +404,14 @@ end entity;
 | --- | --- |
 | `pce` | Pixel clock enable — divides the Tang's 54 MHz system clock to 27 MHz |
 | `hc`, `vc` | Horizontal / vertical scan counters (pixel clock units) |
-| `linebuf` | 40-byte register array — one char code per column |
-| `fetching` | High during the 41-cycle bus steal window |
-| `fetch_col` | Current VRAM address column being presented (0–39) |
+| `linebuf` | 160-byte buffer: 40 text/legacy bytes, 160 RGB332 pixels, or 135 packed RGB222 bytes |
+| `colorbuf` | 40 foreground/background attributes for text and legacy bitmap modes |
+| `fetching` | High during the active H-blank prefetch window |
+| `fetch_col` | Current framebuffer/VRAM byte being presented (mode-dependent) |
 | `fetch_store_col` | Current line-buffer column being filled from the previous cycle's VRAM data |
 | `fetch_valid` | Low for the first setup cycle, high while returned VRAM data is valid |
 | `fetch_row` | Character row being prefetched for the next scan line |
+| `fetch_bmp_line` | Logical bitmap/direct-colour line being prefetched |
 
 **Bus steal timing:**
 
@@ -412,9 +420,23 @@ The first stolen cycle presents the address for column 0. Each following cycle
 stores the previous cycle's synchronous VRAM data and presents the next address.
 
 1. `vic_stealing` asserted → CPU halted via `RDY`.
-2. `vic_addr` driven to `$8000 + fetch_row × 40 + fetch_col`.
+2. `vic_addr` is driven to the text/colour VRAM address or framebuffer-relative
+   byte offset selected by the active mode.
 3. On the next clock, `vram_data` is stored into `linebuf(fetch_store_col)`.
-4. The steal ends after column 39 has been stored.
+4. The steal ends after byte 39 (text/legacy), 159 (RGB332), or 134 (RGB222)
+   has been stored.
+
+**Graphics modes:**
+
+| MODE values | Logical format | Fetch per logical line | Output |
+| --- | --- | --- | --- |
+| `$01` | 320×200, 1 bit/pixel plus 8×8 colour attributes | 40 bitmap + 40 colour bytes | 2×, 640×400 |
+| `$03/$07` | 160×100 RGB332, bank 0/1 | 160 bytes | 4×, 640×400 |
+| `$09/$0D` | 180×120 packed RGB222, bank 0/1 | 135 bytes | 3×, centred 540×360 |
+
+The 16-KB framebuffer is exposed through the `$6000-$7FFF` 8-KB CPU window;
+MODE bit 2 selects the CPU-visible bank. RGB222 packs four pixels into three
+bytes and takes priority if both colour-mode bits are set.
 
 **CPU VRAM writes during bus steal:**
 

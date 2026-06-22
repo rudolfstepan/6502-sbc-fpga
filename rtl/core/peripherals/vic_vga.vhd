@@ -48,8 +48,11 @@ entity vic_vga is
     cursor_y     : in  std_logic_vector(4 downto 0);
     cursor_enable : in std_logic := '1';
 
-    -- Bitmap mode (active when $9000 bit 0 = 1)
+    -- Bitmap modes ($9000: bit 0 = bitmap, bit 1 = 160x100 RGB332,
+    --                         bit 3 = 180x120 packed RGB222)
     bitmap_mode   : in  std_logic := '0';
+    color256_mode : in  std_logic := '0';
+    color64_mode  : in  std_logic := '0';
     vic_fetch_bitmap : out std_logic;
 
     -- VGA-Ausgang 640x480
@@ -78,6 +81,10 @@ architecture rtl of vic_vga is
   -- Textbereich: 40px Rand oben, 25 Zeilen * 16 Pixel = 400px, 40px Rand unten
   constant V_BORD : natural := 40;
   constant TV_END : natural := V_BORD + 400;   -- 440
+  constant C64_H_BORD : natural := 50;         -- (640 - 180*3) / 2
+  constant C64_V_BORD : natural := 60;         -- (480 - 120*3) / 2
+  constant C64_H_END  : natural := 590;
+  constant C64_V_END  : natural := 420;
 
   -- Pixel-Takt-Enable (div2)
   signal pce      : std_logic := '0';
@@ -86,10 +93,12 @@ architecture rtl of vic_vga is
   signal hc       : natural range 0 to H_TOT - 1 := 0;
   signal vc       : natural range 0 to V_TOT - 1 := 0;
 
-  -- 40-Byte Zeilenpuffer (Zeichencodes und Farbattribute der aktuellen Zeile)
-  type linebuf_t is array (0 to 39) of data_t;
+  -- 160-byte pixel/character line buffer. Text and legacy bitmap modes use
+  -- entries 0..39; RGB332 mode uses one entry per logical 160x100 pixel.
+  type linebuf_t is array (0 to 159) of data_t;
+  type colorbuf_t is array (0 to 39) of data_t;
   signal linebuf  : linebuf_t := (others => (others => '0'));
-  signal colorbuf : linebuf_t := (others => x"01");  -- default: white on black
+  signal colorbuf : colorbuf_t := (others => x"01");  -- default: white on black
   attribute ram_style : string;
   attribute ram_style of linebuf  : signal is "distributed";
   attribute ram_style of colorbuf : signal is "distributed";
@@ -97,8 +106,8 @@ architecture rtl of vic_vga is
   -- Fetch-Zustandsautomat (2-Phasen: Phase 0 = Zeichencodes, Phase 1 = Farben)
   signal fetching       : std_logic := '0';
   signal fetch_phase    : std_logic := '0';  -- 0=char, 1=color
-  signal fetch_col      : natural range 0 to 39 := 0;
-  signal fetch_store_col : natural range 0 to 39 := 0;
+  signal fetch_col      : natural range 0 to 159 := 0;
+  signal fetch_store_col : natural range 0 to 159 := 0;
   signal fetch_row      : natural range 0 to 24 := 0;
   signal fetch_bmp_line : natural range 0 to 199 := 0;
   signal fetch_valid    : std_logic := '0';
@@ -111,6 +120,10 @@ architecture rtl of vic_vga is
   signal crow     : natural range 0 to 24 := 0;
   signal cline    : natural range 0 to 7  := 0;
   signal cpix     : natural range 0 to 7  := 0;
+  signal pixel_col : natural range 0 to 159 := 0;
+  signal pixel_col64 : natural range 0 to 179 := 0;
+  signal pack_base   : natural range 0 to 132 := 0;
+  signal pack_sub    : natural range 0 to 3 := 0;
 
   signal char_code : data_t;
   signal cell_color : data_t;
@@ -144,6 +157,9 @@ architecture rtl of vic_vga is
 
   signal fg_index : natural range 0 to 15;
   signal bg_index : natural range 0 to 15;
+  signal chunky_color : data_t;
+  signal color64      : std_logic_vector(5 downto 0);
+  signal in_color64   : std_logic;
 
 begin
   -- Pixel-clock enable: divide by CLK_DIV (2 for 50 MHz, 1 for 27 MHz)
@@ -230,7 +246,17 @@ begin
             -- Zeichenzeile fuer naechste Scanzeile berechnen
             if nv >= V_BORD and nv < TV_END then
               nr := (nv - V_BORD) / 16;
-              nb := (nv - V_BORD) / 2;
+              if bitmap_mode = '1' and color64_mode = '1' then
+                if nv >= C64_V_BORD and nv < C64_V_END then
+                  nb := (nv - C64_V_BORD) / 3;
+                else
+                  nb := 0;
+                end if;
+              elsif bitmap_mode = '1' and color256_mode = '1' then
+                nb := (nv - V_BORD) / 4;
+              else
+                nb := (nv - V_BORD) / 2;
+              end if;
             else
               nr := 0;
               nb := 0;
@@ -247,7 +273,11 @@ begin
           -- fetch_col Vorlauf: Adresse einen Takt vor Datenuebernahme ausgeben.
           -- Steht VOR dem Phasencheck, damit fetch_col<=0 beim Phasenwechsel
           -- als spaetere Zuweisung gewinnt (VHDL last-assignment rule).
-          if fetch_col < 39 then
+          if bitmap_mode = '1' and color64_mode = '1' then
+            if fetch_col < 134 then
+              fetch_col <= fetch_col + 1;
+            end if;
+          elsif fetch_col < 159 then
             fetch_col <= fetch_col + 1;
           end if;
 
@@ -258,13 +288,23 @@ begin
             else
               colorbuf(fetch_store_col) <= vram_data;
             end if;
-            if fetch_store_col = 39 then
+            if (bitmap_mode = '1' and color64_mode = '1' and fetch_phase = '0' and fetch_store_col = 134) or
+               (bitmap_mode = '1' and color64_mode = '0' and color256_mode = '1' and
+                fetch_phase = '0' and fetch_store_col = 159) or
+               ((bitmap_mode = '0' or (color64_mode = '0' and color256_mode = '0')) and
+                fetch_store_col = 39) then
               if fetch_phase = '0' then
-                -- Zeichencodes fertig, jetzt Farbattribute holen
-                fetch_phase     <= '1';
-                fetch_col       <= 0;
-                fetch_store_col <= 0;
-                fetch_valid     <= '0';
+                if bitmap_mode = '1' and (color64_mode = '1' or color256_mode = '1') then
+                  -- RGB332 pixels carry their colour directly; no colour phase.
+                  fetching    <= '0';
+                  fetch_valid <= '0';
+                else
+                  -- Zeichencodes fertig, jetzt Farbattribute holen
+                  fetch_phase     <= '1';
+                  fetch_col       <= 0;
+                  fetch_store_col <= 0;
+                  fetch_valid     <= '0';
+                end if;
               else
                 -- Beide Phasen fertig
                 fetching    <= '0';
@@ -288,8 +328,13 @@ begin
   vic_stealing <= fetching;
   vic_fetch_bitmap <= fetching and (not fetch_phase) and bitmap_mode;
 
-  vic_addr <= std_logic_vector(
-      to_unsigned(to_integer(ADDR_VIC_BMP_BASE) + fetch_bmp_line * 40 + fetch_col, 16))
+  -- Bitmap addresses are framebuffer-relative. This permits all 16 KiB to be
+  -- addressed even though the CPU sees it through the banked $6000-$7FFF window.
+  vic_addr <= std_logic_vector(to_unsigned(fetch_bmp_line * 135 + fetch_col, 16))
+    when fetching = '1' and fetch_phase = '0' and bitmap_mode = '1' and color64_mode = '1' else
+             std_logic_vector(to_unsigned(fetch_bmp_line * 160 + fetch_col, 16))
+    when fetching = '1' and fetch_phase = '0' and bitmap_mode = '1' and color256_mode = '1' else
+             std_logic_vector(to_unsigned(fetch_bmp_line * 40 + fetch_col, 16))
     when fetching = '1' and fetch_phase = '0' and bitmap_mode = '1' else
              std_logic_vector(
       to_unsigned(16#8000# + fetch_row * 40 + fetch_col, 16))
@@ -307,12 +352,26 @@ begin
   crow  <= v_off / 16;
   cline <= (v_off / 2) mod 8;
   cpix  <= (hc  / 2) mod 8;
+  pixel_col <= hc / 4 when hc < H_VIS else 0;
+  in_color64 <= '1' when hc >= C64_H_BORD and hc < C64_H_END and
+                            vc >= C64_V_BORD and vc < C64_V_END else '0';
+  pixel_col64 <= (hc - C64_H_BORD) / 3
+                 when hc >= C64_H_BORD and hc < C64_H_END else 0;
+  pack_base <= (pixel_col64 / 4) * 3;
+  pack_sub  <= pixel_col64 mod 4;
 
   -- Zeichencode und Farbattribut aus Zeilenpuffer
   char_code  <= linebuf(col)  when in_text = '1' else x"00";
   cell_color <= colorbuf(col) when in_text = '1' else x"00";
   fg_index   <= to_integer(unsigned(cell_color(3 downto 0)));
   bg_index   <= to_integer(unsigned(cell_color(7 downto 4)));
+  chunky_color <= linebuf(pixel_col) when in_text = '1' else x"00";
+  color64 <= linebuf(pack_base)(7 downto 2) when pack_sub = 0 else
+             linebuf(pack_base)(1 downto 0) & linebuf(pack_base + 1)(7 downto 4)
+               when pack_sub = 1 else
+             linebuf(pack_base + 1)(3 downto 0) & linebuf(pack_base + 2)(7 downto 6)
+               when pack_sub = 2 else
+             linebuf(pack_base + 2)(5 downto 0);
 
   -- Char-ROM-Adresse: char_code[6:0] & cline[2:0]
   char_addr <= char_code(6 downto 0) &
@@ -337,9 +396,25 @@ begin
   vga_vs <= '0' when vc >= V_SS and vc < V_SE else '1';
   vga_de <= '1' when hc < H_VIS and vc < V_VIS else '0';
 
-  -- VGA-Farbe: Palette-Lookup (Vordergrund bei pbit=1, Hintergrund bei pbit=0)
-  vga_r <= PAL_R(fg_index) when pbit = '1' else PAL_R(bg_index);
-  vga_g <= PAL_G(fg_index) when pbit = '1' else PAL_G(bg_index);
-  vga_b <= PAL_B(fg_index) when pbit = '1' else PAL_B(bg_index);
+  -- RGB332 expands directly to RGB565 in 256-colour mode. Replicated high bits
+  -- fill the DAC width without needing a 256-entry palette RAM.
+  vga_r <= color64(5 downto 4) & color64(5 downto 4) & color64(5)
+           when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
+           "00000" when bitmap_mode = '1' and color64_mode = '1' else
+           chunky_color(7 downto 5) & chunky_color(7 downto 6)
+           when bitmap_mode = '1' and color256_mode = '1' and in_text = '1' else
+           PAL_R(fg_index) when pbit = '1' else PAL_R(bg_index);
+  vga_g <= color64(3 downto 2) & color64(3 downto 2) & color64(3 downto 2)
+           when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
+           "000000" when bitmap_mode = '1' and color64_mode = '1' else
+           chunky_color(4 downto 2) & chunky_color(4 downto 2)
+           when bitmap_mode = '1' and color256_mode = '1' and in_text = '1' else
+           PAL_G(fg_index) when pbit = '1' else PAL_G(bg_index);
+  vga_b <= color64(1 downto 0) & color64(1 downto 0) & color64(1)
+           when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
+           "00000" when bitmap_mode = '1' and color64_mode = '1' else
+           chunky_color(1 downto 0) & chunky_color(1 downto 0) & chunky_color(1)
+           when bitmap_mode = '1' and color256_mode = '1' and in_text = '1' else
+           PAL_B(fg_index) when pbit = '1' else PAL_B(bg_index);
 
 end architecture;

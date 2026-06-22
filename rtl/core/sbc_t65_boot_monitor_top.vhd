@@ -193,12 +193,12 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vic_mode_reg     : data_t := x"00";
   signal vic_fetch_bitmap : std_logic;
   signal bitmap_dout      : data_t;
-  signal bitmap_addr      : std_logic_vector(12 downto 0);
+  signal bitmap_addr      : std_logic_vector(13 downto 0);
   signal bitmap_we        : std_logic;
   signal bitmap_din_mux   : data_t;
   signal bitmap_cpu_we    : std_logic;
   signal bitmap_wr_pending : std_logic := '0';
-  signal bitmap_wr_addr   : std_logic_vector(12 downto 0) := (others => '0');
+  signal bitmap_wr_addr   : std_logic_vector(13 downto 0) := (others => '0');
   signal bitmap_wr_data   : data_t := (others => '0');
   signal vram_data_sel    : std_logic := '0';
   signal vram_data_mux    : data_t;
@@ -354,13 +354,15 @@ begin
   -- stalled via cpu_rdy until the deferred write completes, so no POKE is lost.
   bitmap_cpu_we <= cpu_bus_we when dev_sel = DEV_VIC_BMP else '0';
 
-  bitmap_addr <= std_logic_vector(resize(unsigned(mon_addr_lat) - ADDR_VIC_BMP_BASE, 13))
+  bitmap_addr <= vic_mode_reg(2) &
+                 std_logic_vector(resize(unsigned(mon_addr_lat) - ADDR_VIC_BMP_BASE, 13))
                  when monitor_hold = '1' and
                    (mon_mem_state = M_BITMAP_RD_WAIT or mon_mem_state = M_BITMAP_RD_READY or
                     mon_mem_state = M_BITMAP_WR_WAIT) else
-                 std_logic_vector(resize(unsigned(vic_addr) - ADDR_VIC_BMP_BASE, 13))
+                 vic_addr(13 downto 0)
                  when vic_stealing = '1' and vic_fetch_bitmap = '1' else
                  bitmap_wr_addr when bitmap_wr_pending = '1' and vic_stealing = '0' else
+                 vic_mode_reg(2) &
                  std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
   bitmap_we   <= '1' when monitor_hold = '1' and mon_mem_state = M_BITMAP_WR_WAIT and mon_we_lat = '1' else
                  '1' when bitmap_wr_pending = '1' and vic_stealing = '0' else
@@ -380,7 +382,8 @@ begin
         bitmap_wr_pending <= '0';
       elsif bitmap_cpu_we = '1' and vic_stealing = '1' then
         bitmap_wr_pending <= '1';
-        bitmap_wr_addr    <= std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
+        bitmap_wr_addr    <= vic_mode_reg(2) &
+                             std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
         bitmap_wr_data    <= cpu_dout;
       end if;
     end if;
@@ -686,7 +689,7 @@ begin
               addr => vram_addr_mux, din => vram_din_mux, dout => vram_dout);
 
   bitmap_ram_i : entity work.sync_ram
-    generic map (ADDR_WIDTH => 13, ASYNC_READ => false)
+    generic map (ADDR_WIDTH => 14, ASYNC_READ => false)
     port map (clk => clk, we => bitmap_we,
               addr => bitmap_addr, din => bitmap_din_mux, dout => bitmap_dout);
 
@@ -976,6 +979,8 @@ begin
       cursor_y     => vic_cursor_y,
       cursor_enable => '1',
       bitmap_mode      => vic_mode_reg(0),
+      color256_mode    => vic_mode_reg(1),
+      color64_mode     => vic_mode_reg(3),
       vic_fetch_bitmap => vic_fetch_bitmap,
       vga_hs       => vga_hs,
       vga_vs       => vga_vs,

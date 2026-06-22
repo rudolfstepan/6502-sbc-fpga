@@ -37,6 +37,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_sbc_t65_kernel_smoke.vhd sim/tb/tb_vic_core.vhd sim/tb/tb_char_rom.vhd \
       sim/tb/tb_sbc_t65_boot_shadow.vhd sim/tb/tb_vic_pixel_gen.vhd \
       sim/tb/tb_vic_raster_irq.vhd sim/tb/tb_sbc_vic_display.vhd \
+      sim/tb/tb_vic_color256.vhd \
+      sim/tb/tb_vic_color64.vhd \
       sim/tb/tb_sound_voice.vhd sim/tb/tb_vram_steal_race.vhd \
       sim/tb/tb_vram_read_steal.vhd sim/tb/tb_sound_chip4.vhd
 
@@ -85,6 +87,10 @@ test: roms
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_raster_irq $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_sbc_vic_display
 	$(GHDL) -r $(GHDL_FLAGS) tb_sbc_vic_display $(GHDL_RUN_FLAGS)
+	$(GHDL) -e $(GHDL_FLAGS) tb_vic_color256
+	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color256 $(GHDL_RUN_FLAGS)
+	$(GHDL) -e $(GHDL_FLAGS) tb_vic_color64
+	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color64 $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_sound_voice
 	$(GHDL) -r $(GHDL_FLAGS) tb_sound_voice $(GHDL_RUN_FLAGS) --stop-time=5ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_vram_steal_race

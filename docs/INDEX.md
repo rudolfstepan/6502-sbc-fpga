@@ -11,7 +11,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[Testing Guide](./04_TESTING.md)** - Test infrastructure and running tests
 - **[Component Reference](./05_COMPONENTS.md)** - Detailed specs for major components
 - **[Sound Chip](./SOUND.md)** - Single-voice synth + PT8211 DAC: register map, usage, and wiring
-- **[Math Coprocessor (FPU)](./FPU.md)** - Hardware fixed-point multiplier ($88B0): register map, 8.24 format, and the Mandelbrot speed-up
+- **[Math Coprocessor (FPU)](./FPU.md)** - Hardware fixed-point multiplier ($88B0): register map, 8.24 format, and the packed-RGB222 Mandelbrot demo
 - **[Simulation](./06_SIMULATION.md)** - Running and analyzing simulations
 - **[Development Guide](./07_DEVELOPMENT.md)** - Contributing and development workflow
 - **[UART Monitor](./UART_MONITOR.md)** - Hardware monitor commands and live ROM upload over UART
