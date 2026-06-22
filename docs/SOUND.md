@@ -291,43 +291,65 @@ wanted.
 
 ### Wrapping a `.sid` tune as a standalone ROM
 
-`tools/build_native_sid_rom.py` turns any small PSID/RSID tune into a playable
-ROM. It does **not** do a lossy 50 Hz register conversion — it embeds the
-original 6502 payload, copies it to its native `$1000` load address, calls the
-tune's `init` routine once, then invokes `play` every 20 ms. All frequency,
-pulse-width, control, ADSR **and filter** writes therefore reach the hardware
-exactly as the original player produces them. The tune's payload must load at
-`$1000` and be ≤ 4096 bytes.
+`tools/build_native_sid_rom.py` turns a PSID/RSID tune into a playable ROM. It
+does **not** do a lossy 50 Hz register conversion — it embeds the original 6502
+payload, copies it to its native load address, calls the tune's `init` routine
+once, then invokes `play` every 20 ms. All frequency, pulse-width, control, ADSR
+**and filter** writes therefore reach the hardware exactly as the original
+player produces them.
 
-Two ready-made tunes are checked in:
+A tune can be wrapped only if it fits the board: it needs a real play address
+(not an IRQ/CIA-driven RSID), it must load into the linear RAM at
+`$0200-$5FFF` (above that are the VIC bitmap window, text VRAM, I/O and ROM),
+and its payload must fit the 12 KB `$A000` ROM window. Single-speed PAL tunes
+are assumed (50 Hz `play`).
 
-| ROM | Source tune | Notes |
-| --- | --- | --- |
-| `roms/soundsid.rom` | `World_Record_2.sid` | no filter/sync/ring used |
-| `roms/sound_commando.rom` | `sid_orig/Commando.sid` | uses the low-pass filter heavily (≈98 % of frames, voice 1 routed, res ≤ 8) |
-
-Each wrapper is linked at `$A000` with a padding window at `$F000-$FFF9` and
-vectors at `$FFFA-$FFFF`, completing a 16 KB image in physical shadow-RAM order.
-Upload with the split-image mode:
+`roms/soundsid.rom` (`World_Record_2.sid`, no filter/sync/ring) and
+`roms/sound_commando.rom` (`Commando.sid`, leans on the low-pass filter) are two
+hand-picked examples. Each wrapper is linked at `$A000` with a padding window at
+`$F000-$FFF9` and vectors at `$FFFA-$FFFF`, a 16 KB image in physical
+shadow-RAM order. Upload with the split-image mode:
 
 ```sh
-# Commando
 python tools/upload_monitor_hex.py roms/sound_commando.rom --split-rom \
        --port COM15 --baud 115200 --run --verbose
 make -C sw upload-sound-commando      # build + upload in one step
-
-# World_Record_2
-make -C sw upload-soundsid
+make -C sw upload-soundsid            # World_Record_2
 ```
 
-On Windows, `roms\upload\soundsid.bat` uploads the already-built `soundsid.rom`.
+On Windows, `roms\upload\sound_<name>.bat` uploads an already-built image.
 
-Regenerate or add a wrapper with:
+Regenerate or add a single wrapper with:
 
 ```sh
 python tools/build_native_sid_rom.py path/to/tune.sid sw/<name>.s
 make -C sw sound-commando             # or: make -C sw soundsid
 ```
+
+### Bulk-building a whole `.sid` collection
+
+`tools/build_all_sid_roms.py` wraps **every** suitable tune under `sid_orig/` at
+once, emitting `roms/sound_<name>.rom` and a matching
+`roms/upload/sound_<name>.bat` for each, and reporting the tunes it has to skip.
+
+By default it also runs each tune through the bare-6502 SID emulator
+(`tools/sid_dump_full.exe`) and **skips tunes that produce no sound here** — a
+player that never sets master volume or never gates a voice is silent on this
+hardware (there is no CIA/VIC/KERNAL for it to rely on). This keeps the output
+to genuinely playable ROMs and, as a side effect, leaves a hand-validated ROM
+like `sound_commando.rom` untouched when its `sid_orig` source is a silent rip.
+
+```sh
+python tools/build_all_sid_roms.py            # build playable ROMs + .bat files
+python tools/build_all_sid_roms.py --list     # classify only, build nothing
+python tools/build_all_sid_roms.py --no-verify # build everything that fits memory
+python tools/build_all_sid_roms.py --port COM7 --baud 230400   # override uploader
+```
+
+Skip reasons fall into two groups: it cannot fit the memory map (no play
+address, loads above `$5FFF`, or payload too large), or it fits but is silent in
+this environment. Of the bundled HVSC selection, the tunes that both fit and
+make sound build cleanly; the rest are listed with their reason.
 
 `tools/sid_dump_full.exe tune.sid <seconds> out.raw` dumps all 25 SID registers
 per 50 Hz frame, which is handy for checking which features (filter, sync, ring,

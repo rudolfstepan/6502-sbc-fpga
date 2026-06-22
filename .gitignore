@@ -70,3 +70,5 @@ tools/world_record_2_full.raw
 .claude/
 __pycache__/
 *.py[cod]
+
+sid_orig/

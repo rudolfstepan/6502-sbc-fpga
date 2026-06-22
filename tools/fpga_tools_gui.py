@@ -232,6 +232,7 @@ class App(tk.Tk):
 
         self._tab_build()
         self._tab_upload()
+        self._tab_sid()
         self._tab_sdcard()
         self._tab_utilities()
 
@@ -328,6 +329,65 @@ class App(tk.Tk):
         self._bas_run     = s2.add_check("Send RUN after upload")
         self._bas_verbose = s2.add_check("Verbose — print BASIC responses")
         s2.add_button("▶  Upload BASIC Program", self._do_upload_basic, YELLOW)
+
+    # ── SID Tunes tab ──────────────────────────────────────────────────────
+    def _tab_sid(self):
+        page = tk.Frame(self.nb, bg=BG)
+        self.nb.add(page, text="  SID Tunes  ")
+
+        s = Section(page, "Native SID Tune ROMs")
+        s.pack(fill=tk.X, padx=8)
+        s.add_note("Pick a tune from roms/sound_*.rom and upload it to the SID core.\n"
+                   "Press KEY0 on the board to enter monitor mode first.")
+
+        # Filter / refresh row
+        frow = tk.Frame(s.body, bg=SURFACE)
+        frow.pack(fill=tk.X, pady=(4, 4))
+        _lbl(frow, "Filter:", bg=SURFACE, fg=FG2).pack(side=tk.LEFT, padx=(0, 4))
+        self._sid_filter = tk.StringVar()
+        ttk.Entry(frow, textvariable=self._sid_filter).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self._sid_filter.trace_add("write", lambda *a: self._sid_refresh())
+        tk.Button(frow, text="↻ Refresh", bg=BG3, fg=FG, relief=tk.FLAT,
+                  padx=8, cursor="hand2", command=self._sid_refresh).pack(side=tk.LEFT)
+
+        # Listbox of tunes
+        lwrap = tk.Frame(s.body, bg=SURFACE)
+        lwrap.pack(fill=tk.X, pady=(2, 6))
+        self._sid_list = tk.Listbox(
+            lwrap, bg="#11111b", fg=FG, selectbackground=ACCENT,
+            selectforeground="#1e1e2e", font=("Consolas", 10), height=14,
+            relief=tk.FLAT, activestyle="none", highlightthickness=0,
+        )
+        lsb = ttk.Scrollbar(lwrap, orient=tk.VERTICAL, command=self._sid_list.yview)
+        self._sid_list.configure(yscrollcommand=lsb.set)
+        lsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._sid_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._sid_list.bind("<Double-Button-1>", lambda e: self._do_upload_sid())
+
+        (self._sid_port,
+         self._sid_baud) = s.add_field_row(("Port", "COM15", 10), ("Baud", "115200", 10))
+        self._sid_verbose = s.add_check("Verbose — print monitor responses")
+        s.add_button("▶  Upload Selected SID", self._do_upload_sid, MAUVE)
+        s.add_note("Double-click a tune to upload it directly. ROMs auto-run at $A000.")
+
+        self._sid_paths: list[Path] = []
+        self._sid_refresh()
+
+    def _sid_refresh(self):
+        flt = self._sid_filter.get().strip().lower()
+        self._sid_paths = []
+        self._sid_list.delete(0, tk.END)
+        for p in sorted(ROMS.glob("sound_*.rom")):
+            title = p.stem[len("sound_"):].replace("_", " ").title()
+            if flt and flt not in title.lower() and flt not in p.name.lower():
+                continue
+            self._sid_paths.append(p)
+            self._sid_list.insert(tk.END, "  " + title)
+        if self._sid_paths:
+            self._sid_list.selection_set(0)
+        if hasattr(self, "_status"):       # status bar is built after the tabs
+            self._status.set(f"{len(self._sid_paths)} SID ROM(s) listed")
 
     # ── SD Card tab ────────────────────────────────────────────────────────
     def _tab_sdcard(self):
@@ -480,6 +540,22 @@ class App(tk.Tk):
         if self._bas_run.get():     cmd.append("--run")
         if self._bas_verbose.get(): cmd.append("--verbose")
         self._run(cmd, "Upload BASIC Program")
+
+    def _do_upload_sid(self):
+        sel = self._sid_list.curselection()
+        if not sel:
+            self.console.writeln("ERROR: select a SID tune from the list first.", "err")
+            return
+        rom = self._sid_paths[sel[0]]
+        title = rom.stem[len("sound_"):].replace("_", " ").title()
+        cmd = [sys.executable, TOOLS / "upload_monitor_hex.py", str(rom),
+               "--split-rom",
+               "--port", self._sid_port.get(),
+               "--baud", self._sid_baud.get(),
+               "--run"]
+        if self._sid_verbose.get():
+            cmd.append("--verbose")
+        self._run(cmd, f"Upload SID — {title}")
 
     def _do_make_sd(self):
         rom = self._sd_rom.get().strip()

@@ -16,7 +16,7 @@ Python 3.6+ und `tkinter` (in der Standard-Python-Distribution enthalten) sind d
 ┌──────────────────────────────────────────┐
 │  PIX16 FPGA Tools          [Titelzeile]  │
 ├──────────────────────────────────────────┤
-│  [ Build ] [ Upload ] [ SD Card ] [ Utilities ]  ← Tab-Leiste │
+│  [ Build ] [ Upload ] [ SID Tunes ] [ SD Card ] [ Utilities ] │
 │  ┌────────────────────────────────────┐  │
 │  │  Sektionen mit Optionen & Buttons  │  │
 │  └────────────────────────────────────┘  │
@@ -30,7 +30,7 @@ Python 3.6+ und `tkinter` (in der Standard-Python-Distribution enthalten) sind d
 └──────────────────────────────────────────┘
 ```
 
-Das Fenster ist zweigeteilt: oben ein Notebook mit vier Tabs, unten ein scrollbares Ausgabe-Konsolenfenster.  Der **Stop**-Button bricht den laufenden Prozess jederzeit ab.  Es kann immer nur ein Prozess gleichzeitig laufen.
+Das Fenster ist zweigeteilt: oben ein Notebook mit fünf Tabs, unten ein scrollbares Ausgabe-Konsolenfenster.  Der **Stop**-Button bricht den laufenden Prozess jederzeit ab.  Es kann immer nur ein Prozess gleichzeitig laufen.
 
 ---
 
@@ -74,10 +74,11 @@ Ruft `upload_monitor_hex.py` (oder `upload_monitor_hex_enter.py` wenn *Send ENTE
 > **Voraussetzung:** Zuerst die Monitor-Taste drücken (**KEY1** beim aktuellen Tang-Aufbau).
 
 > **Split-ROM-Hinweis:** Der generische Upload-Tab übergibt weiterhin genau eine
-> Adresse und ist daher nicht für das kombinierte EhBASIC-Image oder
-> `soundsid.rom` geeignet. EhBASIC über den Build-Tab hochladen; Soundsid derzeit
-> per CLI mit `--split-rom`. Ein zusammenhängender 16-KB-Upload ab `$C000` wird
-> vom Uploader absichtlich abgelehnt.
+> Adresse und ist daher nicht für das kombinierte EhBASIC-Image oder die
+> SID-Split-ROMs geeignet. EhBASIC über den Build-Tab hochladen; SID-Tunes über
+> den **SID Tunes**-Tab (siehe unten), der intern `--split-rom` verwendet. Ein
+> zusammenhängender 16-KB-Upload ab `$C000` wird vom Uploader absichtlich
+> abgelehnt.
 
 | Feld / Option | Flag | Beschreibung |
 |---|---|---|
@@ -102,6 +103,26 @@ Ruft `upload_basic_uart.py` auf.  EhBASIC muss bereits auf dem Board laufen und 
 | Send NEW before upload | `--new` | Löscht das aktuelle Programm |
 | Send RUN after upload | `--run` | Startet das Programm direkt |
 | Verbose | `--verbose` | BASIC-Antworten anzeigen |
+
+---
+
+## Tab: SID Tunes
+
+Wählt eine native SID-Tune-ROM aus `roms/sound_*.rom` und lädt sie auf den
+SID-Kern. Ruft `upload_monitor_hex.py … --split-rom --run` auf (dasselbe wie die
+`roms/upload/sound_*.bat`-Skripte). Die ROMs werden mit
+`build_all_sid_roms.py` aus `sid_orig/` erzeugt (siehe [SOUND.md](./SOUND.md)).
+
+> **Voraussetzung:** Zuerst die Monitor-Taste am Board drücken (Monitor-Modus).
+
+| Feld / Option | Beschreibung |
+|---|---|
+| Filter | Tippt man Text ein, wird die Liste live gefiltert (Name oder Dateiname) |
+| ↻ Refresh | Liest `roms/sound_*.rom` neu ein (z. B. nach einem Bulk-Build) |
+| Tunes-Liste | Alle gefundenen SID-ROMs; **Doppelklick lädt direkt hoch** |
+| Port / Baud | Serieller Port und Baudrate |
+| Verbose | Monitor-Antworten anzeigen (`--verbose`) |
+| ▶ Upload Selected SID | Lädt die markierte Tune hoch und startet sie bei `$A000` |
 
 ---
 
@@ -181,6 +202,8 @@ Es läuft immer nur **ein Prozess** gleichzeitig.  Wird ein zweiter gestartet, b
 | `upload_monitor_hex_enter.py` | Wie oben + automatisches CR nach Start |
 | `upload_basic_uart.py` | BASIC-Programm per UART hochladen |
 | `make_sd_boot_image.py` | SD-Boot-Image mit Header und CRC erzeugen |
+| `build_native_sid_rom.py` | Eine `.sid`-Tune in eine Player-ROM wrappen |
+| `build_all_sid_roms.py` | Alle Tunes in `sid_orig/` zu `sound_*.rom` + Upload-Bats bauen |
 | `news_to_uart.py` | RSS-Feed an UART senden |
 
 Alle Skripte lassen sich weiterhin direkt auf der Kommandozeile aufrufen; das GUI ist nur ein bequemer Wrapper.
