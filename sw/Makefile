@@ -7,18 +7,39 @@ ROM_HEX = ../sim/hex/rom_welcome.hex
 
 FPGA_EHBASIC_ROM = ../roms/fpga_ehbasic_16kb.rom
 FPGA_EHBASIC_IMG = ../roms/fpga_ehbasic_16kb.img
-KERNEL_S   = ../../tools/kernel/kernel.s
-KERNEL_CFG = ../../tools/kernel/kernel.cfg
-KERNEL_O   = ../../tools/kernel/kernel.o
-KERNEL_ROM = ../../roms/kernel.rom
+# Kernel now lives in the FPGA repo (was pulled from the sibling emulator repo).
+KERNEL_S   = kernel.s
+KERNEL_CFG = kernel.cfg
+KERNEL_O   = kernel.o
+KERNEL_ROM = ../roms/kernel.rom
 
 .PHONY: all clean fpga-ehbasic upload-ehbasic upload-demo sd-ehbasic kernel \
         soundtest upload-soundtest soundsid upload-soundsid \
         sound-commando upload-sound-commando mandelbrot \
         mandelbrot-bitmap mandelbrot-copro upload-mandelbrot-bitmap \
-        upload-mandelbrot-copro
+        upload-mandelbrot-copro disk-test upload-disk-test
 
 all: $(ROM_HEX)
+
+# ── D64 GoDrive test ROM (16 KB @ $C000, exercises the disk API) ───────────
+DISK_TEST_ROM = disk_test.rom
+
+disk.o: disk.s disk.inc
+	$(CA65) --cpu 6502 -t none -l disk.lst $< -o $@
+
+disk_test.o: disk_test.s disk.inc
+	$(CA65) --cpu 6502 -t none -l disk_test.lst $< -o $@
+
+$(DISK_TEST_ROM): disk_test.o disk.o disk_test.cfg
+	$(LD65) -C disk_test.cfg -o $@ disk_test.o disk.o -m disk_test.map
+	@echo "ROM ready: $(DISK_TEST_ROM)  (split map; upload with --split-rom)"
+
+disk-test: $(DISK_TEST_ROM)
+
+# Build and upload via the UART monitor (press KEY0 on the board first).
+# The image is split around the $D000-$EFFF I/O hole and runs at $A000.
+upload-disk-test: $(DISK_TEST_ROM)
+	$(PYTHON) ../tools/upload_monitor_hex.py $(DISK_TEST_ROM) --split-rom --run --verbose
 
 # ── 4-voice sound-chip demo ROM (16 KB @ $C000, uploads like EhBASIC) ──────
 SOUNDTEST_ROM = soundtest.rom
@@ -91,19 +112,19 @@ $(KERNEL_ROM): $(KERNEL_O) $(KERNEL_CFG)
 	$(LD65) -C $(KERNEL_CFG) -o $(KERNEL_ROM) $(KERNEL_O)
 	@echo "Kernel ROM ready: $(KERNEL_ROM)"
 
-# Build the FPGA EhBASIC 16 KB ROM (kernel + EhBASIC, UART I/O)
+# Build the FPGA EhBASIC 16 KB ROM (kernel + EhBASIC, UART I/O).
+# Also (re)builds the SD card boot image so the card stays in sync with the ROM.
 fpga-ehbasic: $(KERNEL_ROM)
 	$(PYTHON) ../tools/build_fpga_ehbasic.py
-	@echo "ROM ready: $(FPGA_EHBASIC_ROM)"
+	@echo "ROM ready:      $(FPGA_EHBASIC_ROM)"
+	@echo "SD boot image:  $(FPGA_EHBASIC_IMG)"
 
 # Build and immediately upload via UART monitor (board must be in monitor mode)
 upload-ehbasic: $(KERNEL_ROM)
 	$(PYTHON) ../tools/build_fpga_ehbasic.py --upload --run --verbose
 
-# Build 16 KB ROM + raw SD card boot image (.img)
-sd-ehbasic: $(KERNEL_ROM)
-	$(PYTHON) ../tools/build_fpga_ehbasic.py --sd-image
-	@echo "SD image ready: $(FPGA_EHBASIC_IMG)"
+# Alias: the SD boot image is now always built by fpga-ehbasic.
+sd-ehbasic: fpga-ehbasic
 
 # Build and upload rom_demo via UART monitor (board must be in monitor mode)
 upload-demo: $(ROM_BIN)

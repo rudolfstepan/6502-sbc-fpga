@@ -54,8 +54,20 @@ KERNAL_CHROUT   = $F003     ; write char A to VIC + mirror to UART
 KERNAL_CHRIN    = $F006     ; blocking read + echo (uppercase)
 KERNAL_CHRIN_NB = $F009     ; non-blocking: A=char, C=1 ready
 KERNAL_CLRSCR   = $F00C     ; clear VIC screen, home cursor
+KERNAL_DISK_MOUNT = $F01E   ; mount first .d64 on SD2  (C=0 ok)
+KERNAL_DISK_DIR   = $F021   ; print directory of the mounted image
+KERNAL_DISK_LOAD  = $F024   ; load PRG by name; DK_PTR -> name; C=0 ok
+KERNAL_DISK_CALLADDR = $F02A ; print " CALL nnnnn" for the last loaded PRG
 KERNAL_PENDING_CHAR = $02F7
 KERNAL_PENDING_FLAG = $02F8
+
+; Kernel disk-routine scratch (must match sw/kernel.s)
+DK_PTR    = $F2             ; 16-bit name pointer used by KERNAL_DISK_LOAD
+DK_STARTL = $0365           ; PRG load start address (filled by DISK_LOAD)
+DK_STARTH = $0366
+DK_ENDL   = $0367           ; PRG end address +1
+DK_ENDH   = $0368
+NAMEBUF   = $0369           ; up to 17 bytes: filename + null
 
 ; UART hardware registers
 UART_DATA   = $8810         ; write = TX byte, read = RX byte
@@ -197,184 +209,90 @@ NMI_CODE:
 IRQ_NMI_CODE_END:   ; (kept for size reference only)
 
 ; ============================================================
-; SD Disk Controller hardware registers ($8824-$882F)
+; EHB_DISK_LOAD — BASIC LOAD "NAME".  Thin wrapper: parse the filename from
+; the BASIC line, then call the kernel disk loader ($F024), which mounts (via
+; the kernel) and loads the PRG to its embedded load address.  Disk format,
+; directory walk and PRG-chain following all live in the KERNEL, not here.
+;
+; EhBASIC reaches here via JMP (VEC_LD) from the LOAD token with the text
+; cursor positioned after LOAD.  We evaluate the string expression, copy the
+; (<=16 char) name to NAMEBUF, and hand a pointer to the kernel.
 ; ============================================================
-DISK_CMD    = $8824
-DISK_STATUS = $8825
-DISK_SECT0  = $8826
-DISK_SECT1  = $8827
-DISK_SECT2  = $8828
-DISK_SECT3  = $8829
-DISK_DATA   = $882A
-DISK_DPTRL  = $882B
-DISK_DPTRH  = $882C
+LD_SRC = $F4               ; ZP temp pointer to the evaluated string
 
-DISK_DST_L  = $F2       ; ZP temp: destination address
-DISK_DST_H  = $F3
-DISK_END_L  = $02F0     ; temp: end address
-DISK_END_H  = $02F1
-
-; ============================================================
-; EHB_DISK_LOAD — Load from sector 2 (512 bytes max)
-; ============================================================
 EHB_DISK_LOAD:
-    lda DISK_STATUS
-    and #$80
-    bne @ok
+    ; ensure an image is mounted (kernel call; idempotent)
+    jsr KERNAL_DISK_MOUNT
+    bcc @mounted
     jmp disk_not_ready
-@ok:
-    lda #2
-    sta DISK_SECT0
-    stz DISK_SECT1
-    stz DISK_SECT2
-    stz DISK_SECT3
-    jsr disk_cmd_read
-    bcc @rd
-    jmp disk_error
-@rd:
-    stz DISK_DPTRL
-    stz DISK_DPTRH
-    lda DISK_DATA
-    sta DISK_END_L
-    lda DISK_DATA
-    sta DISK_END_H
-
-    lda Smeml
-    sta DISK_DST_L
-    lda Smemh
-    sta DISK_DST_H
-
+@mounted:
+    jsr LAB_EVEX            ; evaluate the "NAME" string expression
+    jsr LAB_22B6            ; A=len, X=ptr lo, Y=ptr hi of the string
+    stx LD_SRC
+    sty LD_SRC+1
+    cmp #17
+    bcc @lenok
+    lda #16                ; clamp to 16 chars
+@lenok:
+    tax                    ; X = length remaining to copy
     ldy #0
-@loop:
-    lda DISK_DATA
-    sta (DISK_DST_L),y
+@copy:
+    cpx #0
+    beq @copydone
+    lda (LD_SRC),y
+    sta NAMEBUF,y
     iny
-    cpy DISK_END_L
-    bcc @loop
-    beq @check_hi
-    bcs @done
+    dex
+    jmp @copy
+@copydone:
+    lda #0
+    sta NAMEBUF,y          ; null-terminate
 
-@check_hi:
-    lda DISK_DST_H
-    cmp Smemh
-    bne @done
-    jmp @done
+    ; LOAD "$"  -> print the directory (1541-style) and return to BASIC,
+    ; without touching the program in memory.
+    lda NAMEBUF
+    cmp #'$'
+    bne @loadfile
+    lda NAMEBUF+1          ; must be exactly "$" (single char)
+    bne @loadfile
+    jsr KERNAL_DISK_DIR
+    jmp LAB_WARM
 
-@done:
-    lda DISK_END_L
-    clc
-    adc Smeml
-    sta Svarl
-    lda DISK_END_H
-    adc Smemh
-    sta Svarh
-
+@loadfile:
+    lda #<NAMEBUF
+    sta DK_PTR
+    lda #>NAMEBUF
+    sta DK_PTR+1
+    jsr KERNAL_DISK_LOAD
+    bcc @ok
+    jmp disk_error
+@ok:
     ldx #0
 @msg:
     lda msg_loaded,x
-    beq @warm
+    beq @calladdr
     jsr KERNAL_CHROUT
     inx
     bne @msg
+@calladdr:
+    jsr KERNAL_DISK_CALLADDR    ; append " CALL nnnnn" so the user can run it
 @warm:
     jmp LAB_WARM
 
 ; ============================================================
 ; EHB_DISK_SAVE — Save to sector 2 (512 bytes max)
 ; ============================================================
+; SAVE is not implemented yet (write support is the next step — it needs BAM
+; allocation + directory write in the kernel).  Report it and return to BASIC.
 EHB_DISK_SAVE:
-    lda DISK_STATUS
-    and #$80
-    bne @ok
-    jmp disk_not_ready
-@ok:
-    sec
-    lda Svarl
-    sbc Smeml
-    sta DISK_END_L
-    lda Svarh
-    sbc Smemh
-    sta DISK_END_H
-
-    lda #2
-    sta DISK_SECT0
-    stz DISK_SECT1
-    stz DISK_SECT2
-    stz DISK_SECT3
-
-    stz DISK_DPTRL
-    stz DISK_DPTRH
-    lda DISK_END_L
-    sta DISK_DATA
-    lda DISK_END_H
-    sta DISK_DATA
-
-    lda Smeml
-    sta DISK_DST_L
-    lda Smemh
-    sta DISK_DST_H
-
-    ldy #0
-@loop:
-    lda (DISK_DST_L),y
-    sta DISK_DATA
-    iny
-    cpy DISK_END_L
-    bcc @loop
-    beq @flush
-    bcs @flush
-
-@flush:
-    jsr disk_cmd_write
-    bcc @done
-    jmp disk_error
-
-@done:
     ldx #0
 @msg:
-    lda msg_saved,x
-    beq @done2
+    lda msg_nosave,x
+    beq @done
     jsr KERNAL_CHROUT
     inx
     bne @msg
-@done2:
-    rts
-
-; ============================================================
-; Helper: read/write SD sector
-; ============================================================
-disk_cmd_read:
-    stz DISK_DPTRL
-    stz DISK_DPTRH
-    lda #$01
-    sta DISK_CMD
-@wait:
-    lda DISK_STATUS
-    lsr a
-    bcs @wait
-    lda DISK_STATUS
-    and #$02
-    beq @ok
-    sec
-    rts
-@ok:
-    clc
-    rts
-
-disk_cmd_write:
-    lda #$02
-    sta DISK_CMD
-@wait:
-    lda DISK_STATUS
-    lsr a
-    bcs @wait
-    lda DISK_STATUS
-    and #$02
-    beq @ok
-    sec
-    rts
-@ok:
-    clc
+@done:
     rts
 
 disk_not_ready:
@@ -400,13 +318,13 @@ disk_error:
     rts
 
 msg_not_ready:
-    .byte $0D, "?SD CARD NOT READY", $0D, $00
+    .byte $0D, "?NO DISK MOUNTED", $0D, $00
 msg_disk_err:
-    .byte $0D, "?DISK I/O ERROR", $0D, $00
+    .byte $0D, "?FILE NOT FOUND", $0D, $00
 msg_loaded:
-    .byte $0D, "LOADED", $0D, $00
-msg_saved:
-    .byte $0D, "SAVED", $0D, $00
+    .byte $0D, "LOADED", $00         ; DISK_CALLADDR appends " CALL nnnnn" + CR
+msg_nosave:
+    .byte $0D, "?SAVE NOT IMPLEMENTED", $0D, $00
 
 ; ============================================================
 ; EHB_CTRLC — EhBASIC STOP/Ctrl-C poll hook.

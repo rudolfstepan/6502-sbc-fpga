@@ -25,7 +25,10 @@
         <File path="../../../rtl/core/audio/legacy_sound/sound_chip4.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/audio/sid/sid6581.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
-        <File path="../../../rtl/core/peripherals/sd_disk_ctrl.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/peripherals/d64_sector_map.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/peripherals/d64_drive.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/peripherals/fat32_reader.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/peripherals/d64_subsystem.vhd" type="file.vhdl" enable="1"/>
 
         <!-- Memory -->
         <File path="../../../rtl/core/mem/sync_ram.vhd" type="file.vhdl" enable="1"/>

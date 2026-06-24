@@ -210,6 +210,24 @@ The SD image is persistent across FPGA resets. The UART monitor upload is a
 development shortcut that writes the same shadow-ROM RAM after boot and is lost
 on reset/reprogramming.
 
+For the Tang Primer 20K, `make -C sw fpga-ehbasic` builds the 16 KB ROM,
+per-window `.bin` segments, **and** the raw SD boot image
+(`roms/fpga_ehbasic_16kb.img`) in one step, so the boot card stays in sync with
+the ROM.
+
+## D64 GoDrive (virtual disk)
+
+A second SD card (the `sd2_*` data disk) holds FAT32 `.d64` images. The FPGA
+mounts one image and exposes its 256-byte D64 sectors to the 6502 at `$8824`;
+the 6502 sees a simple disk and never parses FAT32. From BASIC: `LOAD "$"` lists
+the directory, `LOAD "NAME"` loads a program (printing its `CALL` address), and
+`CALL <addr>` runs it. The disk format is borrowed from Commodore D64 for
+convenience only — the programs are this system's own code, **not** C64-compatible.
+
+See [docs/D64_DRIVE.md](docs/D64_DRIVE.md) for the register map, kernel API,
+tooling (`tools/d64/`, `tools/build_sid_prg.py`), and the runnable test disk
+(`make tunes-d64`).
+
 ## Memory Maps
 
 ### Current Tang Primer 20K
@@ -219,7 +237,7 @@ $0000-$3FFF   BRAM main RAM (EhBASIC workspace included)
 $4000-$5FFF   8 KB BSRAM main RAM (optional DDR3 backend)
 $6000-$7FFF   8 KB CPU window into 16 KB banked VIC framebuffer
 $8000-$87FF   VIC text/color RAM
-$8800-$88BF   VIA, UART, sound timer, and math-coprocessor I/O
+$8800-$88BF   VIA, UART, D64 GoDrive ($8824), sound timer, and math-coprocessor I/O
 $9000-$900F   VIC control registers
 $A000-$CFFF   Shadow ROM application window (EhBASIC/standalone ROM)
 $D400-$D418   SID-compatible registers

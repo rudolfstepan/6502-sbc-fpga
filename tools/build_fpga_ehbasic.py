@@ -41,13 +41,13 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-# This is the standalone 6502-sbc-fpga repo.  Wrapper/output live here; the
-# EhBASIC source cache and kernel.rom are pulled from the sibling emulator repo
-# (6502-sbc-emulator) that sits next to this one under the same parent.
+# This is the standalone 6502-sbc-fpga repo.  Wrapper/output live here.  The
+# EhBASIC source cache is still pulled from the sibling emulator repo, but the
+# kernel now lives in this repo (built from sw/kernel.s into roms/kernel.rom).
 ROOT        = Path(__file__).resolve().parent.parent          # 6502-sbc-fpga
-SIBLING     = ROOT.parent / "6502-sbc-emulator"               # build-input source
+SIBLING     = ROOT.parent / "6502-sbc-emulator"               # EhBASIC source only
 CACHE_ASM   = SIBLING / "tools" / "ehbasic_port" / ".cache" / "basic.asm"
-KERNEL_ROM  = SIBLING / "roms" / "kernel.rom"
+KERNEL_ROM  = ROOT / "roms" / "kernel.rom"                    # built by sw/Makefile (make kernel)
 WRAPPER_S   = ROOT / "sw" / "ehbasic_fpga.s"
 LINKER_CFG  = ROOT / "sw" / "ehbasic_fpga.cfg"
 OUT_DIR     = ROOT / "roms"
@@ -243,7 +243,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--baud",     type=int,            help="serial baud rate (default: uploader default)")
     p.add_argument("--run",      action="store_true", help="send G C000 after upload")
     p.add_argument("--verbose",  action="store_true", help="verbose upload output")
-    p.add_argument("--sd-image", action="store_true", help="also build SD card boot image (.img)")
+    p.add_argument("--sd-image", action="store_true",
+                   help="(deprecated: the SD boot image is now always built)")
     return p.parse_args()
 
 
@@ -315,18 +316,20 @@ def main() -> None:
     print(f"  Ram_top : $4000 (~15.5 KB BASIC RAM at $0200-$3FFF, all BRAM)")
     print(f"  Vectors : kernel $FFFA -> EhBASIC $A000/$A003/$A006 (reset/irq/nmi)")
 
-    if args.sd_image:
-        print("\nBuilding SD boot image ...")
-        sys.stdout.flush()
-        subprocess.run(
-            [sys.executable, str(SD_IMG_TOOL), "-o", str(OUT_IMG), str(OUT_ROM)],
-            check=True,
-        )
-        print(f"SD image: {OUT_IMG}")
-        print("  Write to SD card (Linux/macOS):")
-        print(f"    dd if={OUT_IMG.name} of=/dev/sdX bs=512")
-        print("  Write to SD card (Windows):")
-        print(f"    tools\\write_sd.bat {OUT_IMG.name}")
+    # Always build the SD boot image so the card stays in sync with the ROM.
+    # (The payload is already in boot_shadow_rom physical order: EhBASIC then
+    # Kernel; make_sd_boot_image only prepends the loader header + checksum.)
+    print("\nBuilding SD boot image ...")
+    sys.stdout.flush()
+    subprocess.run(
+        [sys.executable, str(SD_IMG_TOOL), "-o", str(OUT_IMG), str(OUT_ROM)],
+        check=True,
+    )
+    print(f"SD image: {OUT_IMG}")
+    print("  Write to SD card (Linux/macOS):")
+    print(f"    dd if={OUT_IMG.name} of=/dev/sdX bs=512")
+    print("  Write to SD card (Windows):")
+    print(f"    tools\\write_sd.bat {OUT_IMG.name}")
 
     print("\nUpload (UART monitor) — kernel first, then EhBASIC + run:")
     print(

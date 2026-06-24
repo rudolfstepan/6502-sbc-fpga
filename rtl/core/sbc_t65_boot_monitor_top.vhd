@@ -507,12 +507,18 @@ begin
     end case;
   end process;
 
+  -- Reset the VIC control registers on any CPU reset (short soft reset OR full
+  -- board reset = cpu_reset_n), not just the full reset.  Otherwise a program
+  -- that switched the VIC to bitmap mode (e.g. the Mandelbrot demo writing
+  -- vic_mode_reg) would leave it in bitmap mode after reset, so the returning
+  -- BASIC text screen would stay hidden behind the old bitmap image.
   process(clk)
   begin
     if rising_edge(clk) then
-      if reset_n = '0' then
+      if cpu_reset_n = '0' then
         vic_cursor_x <= (others => '0');
         vic_cursor_y <= (others => '0');
+        vic_mode_reg <= (others => '0');   -- back to text mode
       elsif vic_reg_we = '1' then
         case cpu_addr(3 downto 0) is
           when x"0" =>
@@ -744,28 +750,31 @@ begin
       dout    => math_dout
     );
 
-  -- ── SD disk controller: 2nd SD card for runtime LOAD/SAVE ─────────────
-  disk_i : entity work.sd_disk_ctrl
+  -- ── D64 GoDrive: 2nd SD card, FAT32 + D64 mount engine ────────────────
+  -- Replaces the raw sd_disk_ctrl on sd2.  The 6502 issues MOUNT (the FAT32
+  -- scan + D64 contiguity check run in hardware) and READ_SECTOR; the 256-byte
+  -- D64 sector is read back through the DATA port.  Read-only: the sd2 write
+  -- channel is held inactive.  Register window is DEV_DISK ($8824), offset =
+  -- cpu_addr - ADDR_DISK_BASE (low 4 bits; the engine ignores offsets > 7).
+  disk_irq <= '0';   -- the D64 engine is polled, no interrupt source
+  sd2_sec_write      <= '0';
+  sd2_sec_write_addr <= (others => '0');
+  sd2_sec_write_data <= (others => '0');
+
+  disk_i : entity work.d64_subsystem
     port map (
       clk                    => clk,
       reset_n                => cpu_reset_n,
       cs                     => disk_cs,
       we                     => disk_we,
-      addr                   => cpu_addr,
+      offset                 => std_logic_vector(resize(unsigned(cpu_addr) - ADDR_DISK_BASE, 4)),
       din                    => cpu_dout,
       dout                   => disk_dout,
-      irq                    => disk_irq,
-      sd_init_done           => sd2_init_done,
       sd_sec_read            => sd2_sec_read,
       sd_sec_read_addr       => sd2_sec_read_addr,
       sd_sec_read_data       => sd2_sec_read_data,
       sd_sec_read_data_valid => sd2_sec_read_data_valid,
-      sd_sec_read_end        => sd2_sec_read_end,
-      sd_sec_write           => sd2_sec_write,
-      sd_sec_write_addr      => sd2_sec_write_addr,
-      sd_sec_write_data      => sd2_sec_write_data,
-      sd_sec_write_data_req  => sd2_sec_write_data_req,
-      sd_sec_write_end       => sd2_sec_write_end
+      sd_sec_read_end        => sd2_sec_read_end
     );
 
   -- ── Sound: 4-voice synth (ADSR + 5 waveforms) + PT8211 DAC ────────────

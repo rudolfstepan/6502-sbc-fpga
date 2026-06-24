@@ -15,7 +15,10 @@ add_file -type vhdl {../../../rtl/core/audio/legacy_sound/sound_voice_full.vhd}
 add_file -type vhdl {../../../rtl/core/audio/legacy_sound/sound_chip4.vhd}
 add_file -type vhdl {../../../rtl/core/audio/sid/sid6581.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/pt8211_dac.vhd}
-add_file -type vhdl {../../../rtl/core/peripherals/sd_disk_ctrl.vhd}
+add_file -type vhdl {../../../rtl/core/peripherals/d64_sector_map.vhd}
+add_file -type vhdl {../../../rtl/core/peripherals/d64_drive.vhd}
+add_file -type vhdl {../../../rtl/core/peripherals/fat32_reader.vhd}
+add_file -type vhdl {../../../rtl/core/peripherals/d64_subsystem.vhd}
 add_file -type vhdl {../../../rtl/core/mem/sync_ram.vhd}
 add_file -type vhdl {../../../rtl/core/mem/char_rom.vhd}
 add_file -type vhdl {../../../rtl/core/mem/boot_shadow_rom.vhd}
