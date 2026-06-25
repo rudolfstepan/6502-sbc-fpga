@@ -103,6 +103,10 @@ SCREEN_SAVED_Y     = $02F5
 SCREEN_RETURN_CHAR = $02F6
 SCREEN_PENDING_CHAR = $02F7
 SCREEN_PENDING_FLAG = $02F8
+; Count of leading backspaces still to feed BASIC before a screen-edit replay,
+; so BASIC's own input buffer (which collected the originally-typed chars) is
+; emptied first and the corrected line replaces it instead of appending to it.
+SCREEN_FLUSH        = $02F9
 
 VIC_TEXT_COLOR = $9003          ; foreground color register (0-15)
 VIC_BG_COLOR   = $9004          ; background color register (0-15)
@@ -363,6 +367,17 @@ nothing:
 ;                C=1 and A=char if available, C=0 otherwise
 ; ------------------------------------------------------------
 .proc replay_next
+    ; First drain any pending backspaces: these clear BASIC's input buffer so the
+    ; replayed line replaces the originally-typed (and possibly edited) text.
+    lda SCREEN_FLUSH
+    beq no_flush
+    dec SCREEN_FLUSH
+    ldx #1
+    stx SCREEN_REPLAY_CHAR
+    lda #$08               ; [BACKSPACE]: BASIC decrements its buffer index
+    sec
+    rts
+no_flush:
     ldx SCREEN_REPLAY_POS
     cpx SCREEN_REPLAY_LEN
     bcc have
@@ -603,6 +618,11 @@ add_cr:
     lda #0
     sta SCREEN_REPLAY_POS
     sta SCREEN_EDIT_ACTIVE
+    ; Empty BASIC's input buffer first: feed it $47 backspaces (its max line
+    ; length).  Excess backspaces past an empty buffer are ignored by BASIC, so
+    ; whatever it had collected is cleared before the corrected line replays.
+    lda #$47
+    sta SCREEN_FLUSH
 
     ldx #0
     ldy SCREEN_SAVED_Y
@@ -679,6 +699,7 @@ color_loop:
     sta SCREEN_RETURN_CHAR
     sta SCREEN_PENDING_CHAR
     sta SCREEN_PENDING_FLAG
+    sta SCREEN_FLUSH
     rts
 .endproc
 

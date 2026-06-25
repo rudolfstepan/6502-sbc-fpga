@@ -15,6 +15,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[Simulation](./06_SIMULATION.md)** - Running and analyzing simulations
 - **[Development Guide](./07_DEVELOPMENT.md)** - Contributing and development workflow
 - **[UART Monitor](./UART_MONITOR.md)** - Hardware monitor commands and live ROM upload over UART
+- **[Screen-Editor Line Replay](./SCREEN_EDITOR_REPLAY.md)** - C64-style on-screen line editing for EhBASIC and the input-buffer flush that keeps edited lines in sync
 - **[Split ROM and Native SID Update](./SPLIT_ROM_SID_UPDATE.md)** - New memory map, EhBASIC/Soundsid layout, and uploader migration
 - **[SD Bootloader](./SD_BOOTLOADER_PLAN.md)** - SD-card shadow-ROM boot flow
 - **[FPGA Tools GUI](./FPGA_TOOLS_GUI.md)** - Graphical launcher for all Python build/upload/utility tools
