@@ -620,7 +620,8 @@ begin
     );
 
   sbc_i : entity work.sbc_t65_boot_monitor_top
-    generic map (CLK_HZ => 54_000_000, BAUD => BAUD, CEA_480P => true)
+    generic map (CLK_HZ => 54_000_000, BAUD => BAUD, CEA_480P => true,
+                 KBD_LAYOUT => "DE")  -- "DE" QWERTZ or "US" QWERTY
     port map (
       clk           => clk_sys,
       reset_n       => reset_n,

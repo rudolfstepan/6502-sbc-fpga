@@ -15,7 +15,10 @@ use ieee.numeric_std.all;
 
 entity ps2_keyboard is
   generic (
-    CLK_HZ : positive := 27_000_000
+    CLK_HZ : positive := 27_000_000;
+    -- Keyboard layout selected at synthesis time: "DE" (German QWERTZ) or
+    -- "US" (US QWERTY). Any other value falls back to US.
+    KBD_LAYOUT : string := "DE"
   );
   port (
     clk     : in  std_logic;
@@ -229,6 +232,217 @@ architecture rtl of ps2_keyboard is
     return c;
   end function;
 
+  -- German (QWERTZ) Scan code Set 2 to ASCII.
+  -- Set 2 scan codes are positional and identical to the US table; only the
+  -- produced characters differ.  AltGr (right Alt, modifier bit 6) selects the
+  -- third level used for @ { [ ] } \ ~ | on a German layout.  Umlauts use
+  -- Latin-1 code points (ä=E4 ö=F6 ü=FC Ä=C4 Ö=D6 Ü=DC ß=DF), which the 256-entry
+  -- char ROM provides glyphs for.  Characters with no glyph (EUR, paragraph,
+  -- degree, micro, acute accent) are returned as 0x00.
+  function sc2_to_ascii_de(sc  : std_logic_vector(7 downto 0);
+                            m   : std_logic_vector(7 downto 0);
+                            ext : std_logic)
+    return std_logic_vector is
+    variable ki    : integer;
+    variable shift : boolean;
+    variable ctrl  : boolean;
+    variable altgr : boolean;
+    variable c     : std_logic_vector(7 downto 0);
+  begin
+    ki    := to_integer(unsigned(sc));
+    shift := (m(1) = '1') or (m(5) = '1');
+    ctrl  := (m(0) = '1') or (m(4) = '1');
+    altgr := (m(6) = '1');
+    c     := x"00";
+
+    -- Extended (E0) keys: cursor block, layout independent.
+    if ext = '1' then
+      case ki is
+        when 16#6B# => c := x"9D"; -- Cursor left
+        when 16#74# => c := x"1D"; -- Cursor right
+        when 16#75# => c := x"91"; -- Cursor up
+        when 16#72# => c := x"11"; -- Cursor down
+        when 16#6C# =>              -- Home / Shift+Home = clear screen
+          if shift then
+            c := x"93";
+          else
+            c := x"13";
+          end if;
+        when others => c := x"00";
+      end case;
+      return c;
+    end if;
+
+    -- Ctrl combos (RUN-STOP, clear screen), same positions as US.
+    if ctrl then
+      case ki is
+        when 16#21# => c := x"03"; -- Ctrl+C / RUN-STOP
+        when 16#4B# => c := x"93"; -- Ctrl+L / clear screen
+        when others => null;
+      end case;
+      if c /= x"00" then
+        return c;
+      end if;
+    end if;
+
+    -- AltGr (third level): only the characters that have a glyph.
+    if altgr then
+      case ki is
+        when 16#15# => c := x"40"; -- AltGr+Q = @
+        when 16#3D# => c := x"7B"; -- AltGr+7 = {
+        when 16#3E# => c := x"5B"; -- AltGr+8 = [
+        when 16#46# => c := x"5D"; -- AltGr+9 = ]
+        when 16#45# => c := x"7D"; -- AltGr+0 = }
+        when 16#4E# => c := x"5C"; -- AltGr+ß = backslash
+        when 16#5B# => c := x"7E"; -- AltGr++ = ~
+        when 16#61# => c := x"7C"; -- AltGr+< = |
+        when others => c := x"00"; -- EUR, micro, etc. have no glyph
+      end case;
+      return c;
+    end if;
+
+    if not shift then
+      case ki is
+        -- letters (QWERTZ: Y and Z swapped vs US)
+        when 16#1C# => c := x"61"; -- a
+        when 16#32# => c := x"62"; -- b
+        when 16#21# => c := x"63"; -- c
+        when 16#23# => c := x"64"; -- d
+        when 16#24# => c := x"65"; -- e
+        when 16#2B# => c := x"66"; -- f
+        when 16#34# => c := x"67"; -- g
+        when 16#33# => c := x"68"; -- h
+        when 16#43# => c := x"69"; -- i
+        when 16#3B# => c := x"6A"; -- j
+        when 16#42# => c := x"6B"; -- k
+        when 16#4B# => c := x"6C"; -- l
+        when 16#3A# => c := x"6D"; -- m
+        when 16#31# => c := x"6E"; -- n
+        when 16#44# => c := x"6F"; -- o
+        when 16#4D# => c := x"70"; -- p
+        when 16#15# => c := x"71"; -- q
+        when 16#2D# => c := x"72"; -- r
+        when 16#1B# => c := x"73"; -- s
+        when 16#2C# => c := x"74"; -- t
+        when 16#3C# => c := x"75"; -- u
+        when 16#2A# => c := x"76"; -- v
+        when 16#1D# => c := x"77"; -- w
+        when 16#22# => c := x"78"; -- x
+        when 16#1A# => c := x"79"; -- y  (US z position)
+        when 16#35# => c := x"7A"; -- z  (US y position)
+        -- number row
+        when 16#16# => c := x"31"; -- 1
+        when 16#1E# => c := x"32"; -- 2
+        when 16#26# => c := x"33"; -- 3
+        when 16#25# => c := x"34"; -- 4
+        when 16#2E# => c := x"35"; -- 5
+        when 16#36# => c := x"36"; -- 6
+        when 16#3D# => c := x"37"; -- 7
+        when 16#3E# => c := x"38"; -- 8
+        when 16#46# => c := x"39"; -- 9
+        when 16#45# => c := x"30"; -- 0
+        when 16#4E# => c := x"DF"; -- ß
+        when 16#55# => c := x"00"; -- acute accent (dead key) -> none
+        -- top letter row extras
+        when 16#54# => c := x"FC"; -- ü
+        when 16#5B# => c := x"2B"; -- +
+        when 16#5D# => c := x"23"; -- #
+        -- home row extras
+        when 16#4C# => c := x"F6"; -- ö
+        when 16#52# => c := x"E4"; -- ä
+        when 16#0E# => c := x"5E"; -- ^ (dead key, emitted directly)
+        -- bottom row
+        when 16#61# => c := x"3C"; -- < (102nd key)
+        when 16#41# => c := x"2C"; -- ,
+        when 16#49# => c := x"2E"; -- .
+        when 16#4A# => c := x"2D"; -- -
+        -- whitespace / control
+        when 16#5A# => c := x"0D"; -- Enter
+        when 16#76# => c := x"1B"; -- Escape
+        when 16#66# => c := x"08"; -- Backspace
+        when 16#0D# => c := x"09"; -- Tab
+        when 16#29# => c := x"20"; -- Space
+        when others => c := x"00";
+      end case;
+    else
+      case ki is
+        when 16#1C# => c := x"41"; -- A
+        when 16#32# => c := x"42"; -- B
+        when 16#21# => c := x"43"; -- C
+        when 16#23# => c := x"44"; -- D
+        when 16#24# => c := x"45"; -- E
+        when 16#2B# => c := x"46"; -- F
+        when 16#34# => c := x"47"; -- G
+        when 16#33# => c := x"48"; -- H
+        when 16#43# => c := x"49"; -- I
+        when 16#3B# => c := x"4A"; -- J
+        when 16#42# => c := x"4B"; -- K
+        when 16#4B# => c := x"4C"; -- L
+        when 16#3A# => c := x"4D"; -- M
+        when 16#31# => c := x"4E"; -- N
+        when 16#44# => c := x"4F"; -- O
+        when 16#4D# => c := x"50"; -- P
+        when 16#15# => c := x"51"; -- Q
+        when 16#2D# => c := x"52"; -- R
+        when 16#1B# => c := x"53"; -- S
+        when 16#2C# => c := x"54"; -- T
+        when 16#3C# => c := x"55"; -- U
+        when 16#2A# => c := x"56"; -- V
+        when 16#1D# => c := x"57"; -- W
+        when 16#22# => c := x"58"; -- X
+        when 16#1A# => c := x"59"; -- Y  (US z position)
+        when 16#35# => c := x"5A"; -- Z  (US y position)
+        -- shifted number row (German symbols)
+        when 16#16# => c := x"21"; -- !
+        when 16#1E# => c := x"22"; -- "
+        when 16#26# => c := x"00"; -- § (no glyph)
+        when 16#25# => c := x"24"; -- $
+        when 16#2E# => c := x"25"; -- %
+        when 16#36# => c := x"26"; -- &
+        when 16#3D# => c := x"2F"; -- /
+        when 16#3E# => c := x"28"; -- (
+        when 16#46# => c := x"29"; -- )
+        when 16#45# => c := x"3D"; -- =
+        when 16#4E# => c := x"3F"; -- ?
+        when 16#55# => c := x"60"; -- ` (grave accent)
+        -- top letter row extras
+        when 16#54# => c := x"DC"; -- Ü
+        when 16#5B# => c := x"2A"; -- *
+        when 16#5D# => c := x"27"; -- '
+        -- home row extras
+        when 16#4C# => c := x"D6"; -- Ö
+        when 16#52# => c := x"C4"; -- Ä
+        when 16#0E# => c := x"00"; -- ° (no glyph)
+        -- bottom row
+        when 16#61# => c := x"3E"; -- >
+        when 16#41# => c := x"3B"; -- ;
+        when 16#49# => c := x"3A"; -- :
+        when 16#4A# => c := x"5F"; -- _
+        -- whitespace / control
+        when 16#5A# => c := x"0D"; -- Enter
+        when 16#76# => c := x"1B"; -- Escape
+        when 16#66# => c := x"08"; -- Backspace
+        when 16#0D# => c := x"09"; -- Tab
+        when 16#29# => c := x"20"; -- Space
+        when others => c := x"00";
+      end case;
+    end if;
+    return c;
+  end function;
+
+  -- Layout dispatcher selected by the KBD_LAYOUT generic ("DE" or "US").
+  function sc2_to_ascii_sel(sc  : std_logic_vector(7 downto 0);
+                            m   : std_logic_vector(7 downto 0);
+                            ext : std_logic)
+    return std_logic_vector is
+  begin
+    if KBD_LAYOUT = "DE" then
+      return sc2_to_ascii_de(sc, m, ext);
+    else
+      return sc2_to_ascii(sc, m, ext);
+    end if;
+  end function;
+
 begin
 
   -- Synchronise PS/2 clock into system domain and detect falling edge
@@ -330,7 +544,7 @@ begin
             -- On make (not break), latch scancode and ASCII
             if is_break = '0' then
               scancode_r <= rx_byte;
-              ascii_r    <= sc2_to_ascii(rx_byte, modif_r, is_ext);
+              ascii_r    <= sc2_to_ascii_sel(rx_byte, modif_r, is_ext);
               key_ready  <= '1';
               key_ev_tog <= not key_ev_tog;
             end if;

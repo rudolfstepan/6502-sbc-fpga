@@ -50,6 +50,9 @@ entity vic_vga is
 
     -- Char-ROM (kombinatorisch)
     char_addr    : out std_logic_vector(9 downto 0);
+    -- High glyph-select bit (char_code bit 7) -> char_rom glyph_hi. Reaches the
+    -- upper 128 glyphs (German umlauts) instead of using bit 7 as reverse video.
+    char_glyph_hi : out std_logic;
     char_data    : in  data_t;
 
     -- Text cursor register inputs (0..39, 0..24)
@@ -411,9 +414,11 @@ begin
                when pack_sub = 2 else
              linebuf(pack_base + 2)(5 downto 0);
 
-  -- Char-ROM-Adresse: char_code[6:0] & cline[2:0]
+  -- Char-ROM-Adresse: char_code[6:0] & cline[2:0]; bit 7 selects the upper
+  -- glyph half (umlauts) via glyph_hi.
   char_addr <= char_code(6 downto 0) &
                std_logic_vector(to_unsigned(cline, 3));
+  char_glyph_hi <= char_code(7);
 
   -- Pixel-Bit aus ROM-Muster; bit 7 im Zeichencode ist Reverse-Video.
   -- The cursor is an OR overlay on the lower scan lines. It never clears
@@ -426,7 +431,7 @@ begin
                   else '0';
   pbit <= char_code(7 - cpix)
           when in_text = '1' and bitmap_mode = '1' else
-          ((char_data(7 - cpix) xor char_code(7)) or cursor_pixel)
+          (char_data(7 - cpix) or cursor_pixel)
           when in_text = '1' else '0';
 
   -- VGA-Sync (aktiv-low)

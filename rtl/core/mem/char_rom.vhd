@@ -1,6 +1,11 @@
 -- Character ROM: ASCII-compatible PETSCII-style 8x8 pixel patterns
--- Addressing: addr = char_code(6:0) & pixel_row(2:0)
--- Output: bit 7 = leftmost pixel. The VGA path uses char_code(7) as reverse video.
+-- Addressing: full glyph index = glyph_hi & addr = char_code(7:0) & pixel_row(2:0)
+--   addr     = char_code(6:0) & pixel_row(2:0)   (low 128 glyphs, 10 bits)
+--   glyph_hi = char_code(7)                       (selects the upper 128 glyphs)
+-- Output: bit 7 = leftmost pixel.
+-- NOTE: char_code(7) used to mean reverse video. The active VGA path now uses it
+-- as the high glyph-select bit (for German umlauts); legacy instances that leave
+-- glyph_hi unconnected keep the original 128-glyph behaviour.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -9,15 +14,24 @@ use work.sbc_pkg.all;
 
 entity char_rom is
   port (
-    addr : in  std_logic_vector(9 downto 0);
-    dout : out data_t
+    addr     : in  std_logic_vector(9 downto 0);
+    -- 9th glyph-select bit (char_code bit 7). Left unconnected it defaults to
+    -- '0', so existing instances keep their original 128-glyph behaviour; the
+    -- active VGA path drives it with char_code(7) to reach the upper 128 glyphs
+    -- (German umlauts) instead of using bit 7 as reverse video.
+    glyph_hi : in  std_logic := '0';
+    dout     : out data_t
   );
 end entity;
 
 architecture rtl of char_rom is
-  type rom_t is array (0 to 1023) of data_t;
+  -- 256 glyphs * 8 rows = 2048 bytes. The low 128 glyphs are the original
+  -- ASCII/PETSCII set; the upper half is blank except for the German umlaut
+  -- glyphs added at their Latin-1 code points (see build_rom below).
+  type rom_t  is array (0 to 2047) of data_t;
+  type base_t is array (0 to 1023) of data_t;
 
-  constant rom : rom_t := (
+  constant base128 : base_t := (
     -- PETSCII @ / screen-code 0
     x"3C", x"66", x"6E", x"6A", x"6E", x"60", x"3E", x"00",
     -- PETSCII A-Z screen-code block
@@ -276,6 +290,69 @@ architecture rtl of char_rom is
     x"FF", x"FF", x"FF", x"FF", x"FF", x"FF", x"FF", x"FF"
   );
 
+  -- Build the full 256-glyph ROM: copy the base 128 glyphs and overlay the
+  -- German umlaut glyphs at their Latin-1 code points so that the bytes emitted
+  -- by the keyboard (ä=E4 ö=F6 ü=FC Ä=C4 Ö=D6 Ü=DC ß=DF) index real shapes.
+  -- The display path stores text in uppercase, so ä/Ä, ö/Ö and ü/Ü share the
+  -- same upper-case-with-diaeresis glyph for a consistent all-caps screen.
+  function build_rom return rom_t is
+    variable r : rom_t := (others => x"00");
+  begin
+    for i in base_t'range loop
+      r(i) := base128(i);
+    end loop;
+
+    -- Ä / ä  (A with diaeresis)
+    for code in 0 to 1 loop
+      r((16#C4# + code*16#20#)*8 + 0) := x"66";
+      r((16#C4# + code*16#20#)*8 + 1) := x"00";
+      r((16#C4# + code*16#20#)*8 + 2) := x"3C";
+      r((16#C4# + code*16#20#)*8 + 3) := x"66";
+      r((16#C4# + code*16#20#)*8 + 4) := x"7E";
+      r((16#C4# + code*16#20#)*8 + 5) := x"66";
+      r((16#C4# + code*16#20#)*8 + 6) := x"66";
+      r((16#C4# + code*16#20#)*8 + 7) := x"00";
+    end loop;
+
+    -- Ö / ö  (O with diaeresis)
+    for code in 0 to 1 loop
+      r((16#D6# + code*16#20#)*8 + 0) := x"66";
+      r((16#D6# + code*16#20#)*8 + 1) := x"00";
+      r((16#D6# + code*16#20#)*8 + 2) := x"3C";
+      r((16#D6# + code*16#20#)*8 + 3) := x"66";
+      r((16#D6# + code*16#20#)*8 + 4) := x"66";
+      r((16#D6# + code*16#20#)*8 + 5) := x"66";
+      r((16#D6# + code*16#20#)*8 + 6) := x"3C";
+      r((16#D6# + code*16#20#)*8 + 7) := x"00";
+    end loop;
+
+    -- Ü / ü  (U with diaeresis)
+    for code in 0 to 1 loop
+      r((16#DC# + code*16#20#)*8 + 0) := x"66";
+      r((16#DC# + code*16#20#)*8 + 1) := x"00";
+      r((16#DC# + code*16#20#)*8 + 2) := x"66";
+      r((16#DC# + code*16#20#)*8 + 3) := x"66";
+      r((16#DC# + code*16#20#)*8 + 4) := x"66";
+      r((16#DC# + code*16#20#)*8 + 5) := x"66";
+      r((16#DC# + code*16#20#)*8 + 6) := x"3C";
+      r((16#DC# + code*16#20#)*8 + 7) := x"00";
+    end loop;
+
+    -- ß  (sharp s, single form)
+    r(16#DF#*8 + 0) := x"3C";
+    r(16#DF#*8 + 1) := x"66";
+    r(16#DF#*8 + 2) := x"66";
+    r(16#DF#*8 + 3) := x"7C";
+    r(16#DF#*8 + 4) := x"66";
+    r(16#DF#*8 + 5) := x"66";
+    r(16#DF#*8 + 6) := x"6C";
+    r(16#DF#*8 + 7) := x"60";
+
+    return r;
+  end function;
+
+  constant rom : rom_t := build_rom;
+
 begin
-  dout <= rom(to_integer(unsigned(addr)));
+  dout <= rom(to_integer(unsigned(glyph_hi & addr)));
 end architecture;

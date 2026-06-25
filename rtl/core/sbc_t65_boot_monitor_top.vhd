@@ -10,7 +10,9 @@ entity sbc_t65_boot_monitor_top is
     CLK_HZ : positive := 27_000_000;
     BAUD   : positive := 115_200;
     -- Forwarded to vic_vga: true selects exact CEA-861 720x480p (pillarboxed).
-    CEA_480P : boolean := false
+    CEA_480P : boolean := false;
+    -- PS/2 keyboard layout: "DE" (German QWERTZ) or "US" (US QWERTY).
+    KBD_LAYOUT : string := "DE"
   );
   port (
     clk          : in  std_logic;
@@ -219,6 +221,7 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vram_data_mux    : data_t;
 
   signal char_addr   : std_logic_vector(9 downto 0);
+  signal char_glyph_hi : std_logic;
   signal char_data   : data_t;
 
   signal disk_cs     : std_logic;
@@ -988,7 +991,8 @@ begin
 
   ps2_kbd_i : entity work.ps2_keyboard
     generic map (
-      CLK_HZ => CLK_HZ
+      CLK_HZ     => CLK_HZ,
+      KBD_LAYOUT => KBD_LAYOUT
     )
     port map (
       clk            => clk,
@@ -1017,7 +1021,7 @@ begin
   usb_cap_ready <= '0';
 
   char_i : entity work.char_rom
-    port map (addr => char_addr, dout => char_data);
+    port map (addr => char_addr, glyph_hi => char_glyph_hi, dout => char_data);
 
   vic_i : entity work.vic_vga
     generic map (
@@ -1032,6 +1036,7 @@ begin
       vram_data    => vram_data_mux,
       vic_stealing => vic_stealing,
       char_addr    => char_addr,
+      char_glyph_hi => char_glyph_hi,
       char_data    => char_data,
       cursor_x     => vic_cursor_x,
       cursor_y     => vic_cursor_y,

@@ -187,13 +187,32 @@ IRQ sources are OR-combined: `cpu_irq_n = NOT (via_irq OR uart_irq)`.
 640×480 @ 59.94 Hz, pixel clock 27 MHz (54 MHz ÷ 2 via clock enable).  
 Text mode: 40×25 characters, each rendered 2× scaled (16×16 screen pixels).  
 Border: 40 px top and bottom. Character patterns from `char_rom.vhd` (8×8 pixels,
-bit 7 = reverse video).
+256 glyphs).
 
 `char_rom` layout: `$00–$1F` PETSCII screen codes, `$20–$5F` ASCII uppercase/digits/punctuation,
-`$60–$7F` PETSCII block/line graphics. Lowercase ASCII `$61–$7A` falls in the PETSCII
+`$60–$7F` PETSCII block/line graphics, and `$C4/$D6/$DC/$E4/$F6/$FC/$DF` German umlaut
+glyphs (Ä Ö Ü ä ö ü ß) in the upper half. Lowercase ASCII `$61–$7A` falls in the PETSCII
 range, so keyboard/UART input is mapped to A–Z in `CHRIN_NB` before BASIC sees it,
 and `CHROUT` also maps lowercase output to uppercase text. Programs that need raw
 PETSCII graphics write those character codes directly to VRAM.
+
+`char_code` bit 7 selects the upper 128 glyphs via the `char_rom` `glyph_hi` port
+(used by the active `vic_vga` path for umlauts). It previously meant reverse video;
+that was dropped on the active path since no software used it and the cursor is a
+separate overlay. Legacy instances leave `glyph_hi` unconnected (default `'0'`) and
+keep the original 128-glyph behaviour.
+
+### Keyboard Layout
+
+The PS/2 keyboard ([`ps2_keyboard.vhd`](../rtl/core/ps2/ps2_keyboard.vhd)) translates
+Set-2 scan codes to ASCII for a German (QWERTZ) or US (QWERTY) layout, selected at
+synthesis time by the `KBD_LAYOUT` generic (`"DE"` default / `"US"`), threaded from the
+board top through `sbc_t65_boot_monitor_top`. The German table swaps Y/Z, uses the
+German shifted number row, evaluates AltGr (right Alt) for `@ { [ ] } \ ~ |`, handles
+the 102nd `<>|` key, and emits umlauts as Latin-1 code points (ä=`$E4` ö=`$F6` ü=`$FC`
+Ä=`$C4` Ö=`$D6` Ü=`$DC` ß=`$DF`), which the 256-glyph `char_rom` renders. EhBASIC passes
+these 8-bit bytes through unmodified, so umlauts work end to end. The USB-HID host path
+is unchanged (US only).
 
 ### Color Support
 
