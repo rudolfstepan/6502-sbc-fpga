@@ -72,3 +72,8 @@ __pycache__/
 *.py[cod]
 
 sid_orig/
+
+# Intermediate per-tune PRGs (regenerated from sid_orig by make tunes-d64 /
+# sid-disks).  The packed .d64 images under roms/test_d64/ are committed instead.
+roms/test_d64/prg/
+roms/test_d64/sid/prg/

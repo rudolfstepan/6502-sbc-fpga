@@ -117,7 +117,11 @@ class D64Builder:
     # ── BAM + directory ─────────────────────────────────────────────────────
     def _write_directory(self) -> None:
         # Directory sectors live on track 18, starting at sector 1.
-        per_sector = 8
+        # Entries are placed at sector offset 2 + index*32 (matching the 6502
+        # reader in sw/disk.s / sw/kernel.s).  With that offset only 7 full
+        # 32-byte entries fit in a 256-byte sector (index 7 would end at byte
+        # 257), so cap at 7 per sector and chain to the next directory sector.
+        per_sector = 7
         groups = [
             self.dir_entries[i : i + per_sector]
             for i in range(0, len(self.dir_entries), per_sector)

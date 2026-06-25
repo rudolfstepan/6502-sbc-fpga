@@ -55,7 +55,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
-        fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64
+        fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
+        sid-disks
 
 ## ============================================================================
 ## Simulation targets
@@ -101,6 +102,13 @@ tunes-d64:
 	$(PYTHON) -c "import sys; b=open('$(TUNE_PRG_DIR)/mandel.bin','rb').read(); open('$(TUNE_PRG_DIR)/MANDEL.prg','wb').write(bytes([0x00,0x20])+b)"
 	@rm -f $(TUNE_PRG_DIR)/mandel.o $(TUNE_PRG_DIR)/mandel.bin
 	$(PYTHON) tools/d64/pack_d64.py -o $(TEST_D64) $(TUNE_PRG_DIR)/*.prg
+
+## D64 GoDrive: convert EVERY convertible SID tune to a RAM PRG and pack them
+## into numbered disk images (roms/test_d64/sid/tunesNN.d64).  Tunes that can't
+## run in this machine's RAM ($A000+/$E000 loads, IRQ-driven, too large) are
+## skipped.  Each PRG runs with CALL <its load address> (LOAD prints it).
+sid-disks:
+	$(PYTHON) tools/build_sid_disks.py
 
 ## D64 GoDrive: build a FAT32 SD-card image embedding the test .d64 (for sims).
 fat32-card-image: d64-test-image

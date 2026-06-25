@@ -79,8 +79,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("sid", type=Path)
     ap.add_argument("output", type=Path, help="output .prg")
-    ap.add_argument("--base", type=lambda s: int(s, 0), default=0x2000,
-                    help="RAM load/entry address for the PRG (default $2000)")
+    ap.add_argument("--base", default="auto",
+                    help="RAM load/entry address ('auto' = just above the tune's "
+                         "native region, else a hex/decimal address; default auto)")
     ap.add_argument("--ca65", default="C:/tools/cc65/bin/ca65")
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65")
     a = ap.parse_args()
@@ -93,12 +94,28 @@ def main() -> int:
     load = info["load"]
     body = info["body"]                 # page-padded payload
     pad_end = load + len(body)
-    # The PRG (at base) must not overlap the tune's native payload region, and
-    # everything must stay below the VIC bitmap window.
-    if not (pad_end <= a.base or load >= VIC_BITMAP):
+
+    # Choose the PRG load/entry address.  The PRG (stub + an embedded copy of the
+    # payload) lives at `base` and copies the payload down to `load` at run time,
+    # so `base` must sit above the native region (or the native region above the
+    # bitmap window).  "auto" puts the PRG one page above the native end, but at
+    # least $2000 so it never collides with the BASIC/zero-page/stack area.
+    if a.base == "auto":
+        base = max(0x2000, (pad_end + 0xFF) & ~0xFF) if load < VIC_BITMAP else 0x2000
+    else:
+        base = int(a.base, 0)
+    if not (pad_end <= base or load >= VIC_BITMAP):
         raise SystemExit(
             f"{a.sid.name}: native payload ${load:04X}-${pad_end:04X} overlaps "
-            f"the PRG base ${a.base:04X}; pick a higher --base or a lower tune")
+            f"the PRG base ${base:04X}; pick a higher --base or a lower tune")
+    # The PRG (stub ~64 B + the embedded payload copy) must fit below the bitmap.
+    est_end = base + 64 + len(body)
+    if est_end > VIC_BITMAP:
+        raise SystemExit(
+            f"{a.sid.name}: PRG @ ${base:04X} + payload would reach ${est_end:04X} "
+            f">= VIC bitmap ${VIC_BITMAP:04X}; tune too large/high for RAM")
+    # rebind so the rest of the function uses the resolved integer base
+    a.base = base
 
     asm = render_asm(a.sid.name, a.base, load, info["init"], info["play"],
                      info["pages"]) + "\n" + render_data(body)

@@ -35,6 +35,22 @@ Mandelbrot demo is linked at `$2000` via `sw/mandelbrot_copro_prg.cfg`.
 `tools/d64/pack_d64.py` packs the `.prg` files into the D64.  Programs must load
 and run entirely below the VIC bitmap window (`$6000`).
 
+## Full SID collection (`sid/`)
+
+`make sid-disks` converts **every** convertible PSID under `sid_orig/` to a RAM
+PRG and packs them into numbered images `sid/tunesNN.d64` (filled to the 35-track
+capacity).  Tunes that can't run in this machine's RAM are skipped: those that
+load into high RAM (`$A000+`/`$E000`), IRQ/CIA-driven tunes with no play address,
+or payloads too large.  ~87 of ~199 tunes convert.
+
+Each PRG's entry point is its load address (chosen automatically just above the
+tune's native region), so it runs with `CALL <load address>` — and `LOAD "NAME"`
+prints that address.  Copy a `tunesNN.d64` to the data SD card as `TESTDISK.D64`
+(or mount it), then `LOAD "$"` to see the list.
+
+The intermediate per-tune `.prg` files (`prg/`, `sid/prg/`) are build products
+and are not committed; the `.d64` images are.
+
 ## On hardware
 
 1. Copy `testdisk.d64` to the second SD card (FAT32, the `sd2_*` data disk).
