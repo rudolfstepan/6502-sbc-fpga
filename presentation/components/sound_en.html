@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SID-compatible sound chip — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Overview</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Overview</a> / Component 03</div>
+  <span class="kicker">Audio</span>
+  <h1>SID-compatible sound chip <span class="reg">$D400–$D418</span></h1>
+  <p class="lead">A fairly complete MOS 6581 model in logic — complete enough to play
+     <strong>original <code class="inl">.sid</code> files together with their 6502 player code</strong>,
+     with only light conversion, straight on the hardware.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>What it is</h2>
+  <p>The active Tang Primer 20K bitstream instantiates <code class="inl">sid6581.vhd</code> — a VHDL
+     recreation of the <strong>MOS 6581 (SID)</strong> from the Commodore 64. It exposes the standard
+     6581 register window at <code class="inl">$D400–$D418</code>, so SID players address the chip
+     exactly as they would on a real C64.</p>
+  <p>The chip is <strong>more or less SID-compatible</strong>: most of the 6581 behavior is modelled,
+     with a few analog quirks deliberately approximated (see below). On the Tang build it replaces the
+     older four-voice synthesizer — running both at once exhausted the device's global clock networks
+     and destabilized DDR3 PHY calibration.</p>
+
+  <div class="facts">
+    <div class="f"><div class="k">Model</div><div class="v">MOS 6581 (SID)</div></div>
+    <div class="f"><div class="k">Voices</div><div class="v">3 · 24-bit phase accumulators</div></div>
+    <div class="f"><div class="k">Oscillator clock</div><div class="v">~985 kHz PAL φ2</div></div>
+    <div class="f"><div class="k">Filter</div><div class="v">2-pole multimode (LP/BP/HP)</div></div>
+  </div>
+
+  <h2>Modelled 6581 features</h2>
+  <table class="sheet">
+    <thead><tr><th>Feature</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td class="a">Oscillators</td><td>3 voices, 24-bit phase accumulators, ~985 kHz PAL φ2 rate</td></tr>
+      <tr><td class="a">Waveforms</td><td>12-bit triangle, sawtooth, pulse (12-bit width), noise (23-bit LFSR)</td></tr>
+      <tr><td class="a">Combined</td><td>multiple waveform bits wire-ANDed (the classic 6581 approximation)</td></tr>
+      <tr><td class="a">ADSR</td><td><strong>cycle-accurate</strong>: reSID rate-counter periods, linear attack, exponential decay/release divider</td></tr>
+      <tr><td class="a">Filter</td><td>2-pole state-variable multimode (LP/BP/HP), per-voice routing ($D417), 11-bit cutoff</td></tr>
+      <tr><td class="a">Cutoff curve</td><td>non-linear "dark 6581" approximation — mid values stay low, the bass sounds rounded</td></tr>
+      <tr><td class="a">Resonance</td><td>deliberately weak Q (~0.7…2), like the 6581, avoiding limiter clipping</td></tr>
+      <tr><td class="a">Hard sync</td><td>oscillator reset when the previous voice's MSB rises (CONTROL bit 1)</td></tr>
+      <tr><td class="a">Ring modulation</td><td>triangle fold bit XORed with the previous voice's MSB (CONTROL bit 2)</td></tr>
+      <tr><td class="a">Master volume</td><td>$D418 low nibble; voice-3 disconnect ($D418 bit 7) honoured</td></tr>
+    </tbody>
+  </table>
+  <p>The filter runs once per SID tick over a 3-step internal pipeline (one multiply per clock), so the
+     two serial coefficient multiplies never share a single 54 MHz path; the filter states saturate to
+     keep the SVF from blowing up.</p>
+
+  <div class="lead-note"><b>Not yet modelled:</b> the 6581's analog DAC non-linearity / DC "warmth" and
+     the sample-ROM-exact combined-waveform tables (the wire-AND is an approximation). The cutoff and
+     resonance mappings are tunable in <code class="inl">sid6581.vhd</code> for a brighter/darker voicing.</p>
+
+  <h2>Playing original SID files</h2>
+  <p>This is the centerpiece of the demo. <code class="inl">tools/build_native_sid_rom.py</code> turns a
+     PSID/RSID file into a runnable ROM — and crucially <strong>without a lossy 50 Hz register
+     conversion</strong>. Instead it:</p>
+  <ul>
+    <li>embeds the <b>original 6502 payload</b> of the SID file unchanged,</li>
+    <li>copies it to its native load address,</li>
+    <li>calls the tune's <code class="inl">init</code> routine once,</li>
+    <li>and runs the <code class="inl">play</code> routine every 20 ms (50 Hz).</li>
+  </ul>
+  <p>As a result <strong>every write — frequency, pulse width, control, ADSR and filter — reaches the
+     hardware exactly as the original player produces it</strong>. Real C64 player code runs on the real
+     6502 core, driving a real SID recreation.</p>
+
+  <h3>What a tune needs</h3>
+  <ul>
+    <li>a real <code class="inl">play</code> address (not an IRQ/CIA-driven RSID),</li>
+    <li>it loads into linear RAM <code class="inl">$0200–$5FFF</code>,</li>
+    <li>its payload fits the 12 KB ROM window at <code class="inl">$A000</code>,</li>
+    <li>single-speed PAL (50 Hz <code class="inl">play</code>).</li>
+  </ul>
+
+  <h3>Bundled examples</h3>
+  <table class="sheet">
+    <thead><tr><th>ROM</th><th>Tune</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td class="a">soundsid.rom</td><td>World_Record_2.sid</td><td>no filter/sync/ring</td></tr>
+      <tr><td class="a">sound_commando.rom</td><td>Commando.sid</td><td>leans on the low-pass filter</td></tr>
+    </tbody>
+  </table>
+  <pre class="code"><span class="c"># wrap one tune and play it</span>
+python tools/build_native_sid_rom.py path/to/tune.sid sw/&lt;name&gt;.s
+make -C sw upload-sound-commando      <span class="c"># build + upload in one step</span>
+
+<span class="c"># or wrap a whole collection at once</span>
+python tools/build_all_sid_roms.py    <span class="c"># builds playable ROMs + .bat files</span></pre>
+  <p>The bulk builder also runs each tune through the bare-metal 6502 SID emulator and <strong>skips
+     silent tunes</strong> — players that produce no sound without a CIA/VIC/KERNAL to rely on.</p>
+
+  <h2>SID registers ($D400)</h2>
+  <p>Standard 6581 layout: three voices of 7 registers each, plus global filter/volume registers:</p>
+  <table class="sheet">
+    <thead><tr><th>Address</th><th>Register</th></tr></thead>
+    <tbody>
+      <tr><td class="a">$D400–$D406</td><td>Voice 1: freq, pulse width, control, ADSR</td></tr>
+      <tr><td class="a">$D407–$D40D</td><td>Voice 2 (same layout)</td></tr>
+      <tr><td class="a">$D40E–$D414</td><td>Voice 3 (same layout)</td></tr>
+      <tr><td class="a">$D415–$D416</td><td>Filter cutoff (11-bit)</td></tr>
+      <tr><td class="a">$D417</td><td>Resonance &amp; per-voice filter routing</td></tr>
+      <tr><td class="a">$D418</td><td>Filter mode &amp; master volume</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Hardware output</h2>
+  <p>The signed 16-bit sample is shifted out through the I²S serializer in
+     <code class="inl">pt8211_dac.vhd</code> to the dock's <strong>PT8211 (TM8211)</strong> DAC (~47 kHz).
+     The power-amp enable pin (<code class="inl">PA_EN</code>, R16) is held high, otherwise the headphone
+     amplifier stays silent.</p>
+
+  <h2>Alternative synthesizers</h2>
+  <p>The repository keeps two other register-compatible sound sources for other targets:</p>
+  <ul>
+    <li><b>Large 4-voice chip</b> (<code class="inl">sound_chip4.vhd</code>) — 4 voices, five waveforms
+        (sine, square, sawtooth, triangle, noise), full ADSR, note duration and a mixer; the full
+        C-emulator model.</li>
+    <li><b>Bring-up single voice</b> (<code class="inl">sound_voice.vhd</code>) — one voice, square +
+        noise, no envelope; the minimal variant.</li>
+  </ul>
+
+  <h2>Verification</h2>
+  <p>GHDL testbenches confirm the SID core produces audio (filter off, backward-compatible level), the
+     filter stays bounded and a low cutoff attenuates, and that combined waveforms, ring modulation and
+     hard sync are wired, bounded and non-silent.</p>
+
+  <div class="pager">
+    <a href="vic_en.html">← VIC graphics</a>
+    <a href="io_en.html">Next: VIA &amp; UART →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Component detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Overview</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

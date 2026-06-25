@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>D64 GoDrive — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Overview</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Overview</a> / Component 05</div>
+  <span class="kicker">Storage</span>
+  <h1>D64 GoDrive <span class="reg">$8824</span></h1>
+  <p class="lead">A virtual disk drive: the FPGA reads <code class="inl">.d64</code> images off an SD
+     card and exposes a simple drive to the 6502 — the whole filesystem lives in logic.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>What it is</h2>
+  <p>The <strong>D64 GoDrive</strong> lets the 6502 load programs from a <code class="inl">.d64</code>
+     disk image. These images live on a <strong>second SD card</strong> (the
+     <code class="inl">sd2_*</code> data disk, FAT32-formatted); the first card with the ROM loader is
+     untouched. The trick: all FAT32 and D64 parsing happens in FPGA logic. The 6502 only ever sees
+     plain 256-byte sectors and <strong>never has to parse FAT32</strong>.</p>
+
+  <div class="lead-note">The D64 format is borrowed from Commodore for convenience, not for C64
+     compatibility. The loaded programs are this system's own code.</div>
+
+  <div class="facts">
+    <div class="f"><div class="k">Medium</div><div class="v">2nd SD card · FAT32</div></div>
+    <div class="f"><div class="k">Register</div><div class="v">$8824</div></div>
+    <div class="f"><div class="k">Sector size</div><div class="v">256 bytes (D64)</div></div>
+    <div class="f"><div class="k">Status</div><div class="v">HW-verified (2026)</div></div>
+  </div>
+
+  <h2>What it does</h2>
+  <p>From EhBASIC, the drive is operated with familiar commands:</p>
+  <table class="sheet">
+    <thead><tr><th>Command</th><th>Effect</th></tr></thead>
+    <tbody>
+      <tr><td class="a">LOAD "!"</td><td>Interactive arrow-key menu of all <code class="inl">.d64</code> images</td></tr>
+      <tr><td class="a">LOAD "$"</td><td>List the directory of the mounted image</td></tr>
+      <tr><td class="a">LOAD "NAME"</td><td>Load a program (printing its <code class="inl">CALL</code> address)</td></tr>
+      <tr><td class="a">CALL &lt;addr&gt;</td><td>Run the loaded program</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Structure in logic</h2>
+  <p>Four RTL layers under <code class="inl">rtl/core/peripherals/</code> work together:</p>
+  <ul>
+    <li><b>d64_sector_map.vhd</b> — combinational D64 track/sector → linear index conversion.</li>
+    <li><b>d64_drive.vhd</b> — read-only sector engine: mount metadata, T/S→LBA, 512→256 half-sector
+        capture, 256-byte buffer.</li>
+    <li><b>fat32_reader.vhd</b> — autodetects MBR or superfloppy, parses the BPB, scans the root
+        directory for the first <code class="inl">.D64</code> and checks FAT chain contiguity.</li>
+    <li><b>d64_subsystem.vhd</b> — the 6502 register interface at <code class="inl">$8824</code> that
+        wraps both engines and arbitrates the single SD read channel.</li>
+  </ul>
+
+  <h2>Robust against real SD cards</h2>
+  <p>Windows-formatted SD cards are often <strong>superfloppy</strong> (no MBR, BPB at LBA 0) with
+     large geometry, and contain entries such as <code class="inl">System Volume Information</code>,
+     long-filename entries or a deleted <code class="inl">.D64</code> before the wanted file. The reader
+     handles all of these. Verified on a real 32 GB card: mount the image, read the BAM, list the
+     directory and load a program into the correct address range.</p>
+
+  <h2>Tooling</h2>
+  <p>Under <code class="inl">tools/d64/</code> sit Python tools that use the same sector mapping as the
+     hardware: create images (<code class="inl">create_test_d64.py</code>), list them, extract programs
+     and build FAT32 card images for simulation.</p>
+
+  <div class="pager">
+    <a href="io_en.html">← VIA &amp; UART</a>
+    <a href="fpu_en.html">Next: math coprocessor →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Component detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Overview</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

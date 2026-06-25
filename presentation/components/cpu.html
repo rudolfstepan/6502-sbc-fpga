@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>T65 CPU-Kern — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Übersicht</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 01</div>
+  <span class="kicker">Prozessor</span>
+  <h1>T65 CPU-Kern <span class="reg">Reset @ $FFFC</span></h1>
+  <p class="lead">Das Herz des Systems: ein 6502-kompatibler Soft-Core, der unveränderte
+     8-Bit-Software ausführt — synthetisiert in FPGA-Logik statt als physischer Chip.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>Was es ist</h2>
+  <p>Der <strong>T65</strong> ist ein quelloffener, zyklusgenauer VHDL-Nachbau des
+     MOS-6502-Prozessors. Statt einen echten 6502-IC zu verlöten, beschreibt der
+     Soft-Core das Verhalten der CPU in Logik, die das FPGA-Werkzeug in das Gewebe
+     des Bausteins synthetisiert. So läuft dieselbe Maschine, die der C-Emulator
+     nachbildet, nun direkt in Hardware.</p>
+  <p>Zwischen Kern und System sitzt ein projekteigener <strong>Bus-Adapter</strong>
+     (<code class="inl">t65_adapter.vhd</code>), der den 24-Bit-Adressbus des T65 auf den
+     16-Bit-Adressraum des SBC abbildet und Schreib-Strobe, Schreibdaten sowie das
+     Lese-Dateneingang (<code class="inl">DI</code>) sauber an Speicher und Peripherie koppelt.</p>
+
+  <div class="facts">
+    <div class="f"><div class="k">Architektur</div><div class="v">MOS 6502 (T65-Core)</div></div>
+    <div class="f"><div class="k">Adressraum</div><div class="v">16 Bit · 64 KB</div></div>
+    <div class="f"><div class="k">Datenbus</div><div class="v">8 Bit</div></div>
+    <div class="f"><div class="k">Effektiver Takt</div><div class="v">bis 27 MHz</div></div>
+  </div>
+
+  <h2>Was es macht</h2>
+  <p>Der Kern holt Befehle, dekodiert sie und führt den vollständigen 6502-Befehlssatz
+     aus — inklusive aller Adressierungsarten, Stack-Operationen und Interrupt-Behandlung.</p>
+  <ul>
+    <li><b>Halber Systemtakt:</b> Ein <code class="inl">cpu_enable</code>-Signal toggelt mit
+        jedem 54-MHz-Systemtakt, sodass der T65 effektiv mit bis zu 27 MHz fortschreitet.
+        Schreibzugriffe werden in der <code class="inl">cpu_enable = '0'</code>-Halbphase
+        committet — passend zu synchronen FPGA-Schreib- und asynchronen Lesepfaden.</li>
+    <li><b>Reset-Sequenz:</b> Nach dem Loslassen von <code class="inl">reset_n</code> durchläuft
+        die CPU ihre 7 internen Zyklen und liest den Reset-Vektor aus
+        <code class="inl">$FFFC–$FFFD</code> im ROM, bevor sie zur Startadresse springt.</li>
+    <li><b>Interrupts:</b> Die IRQ-Quellen von VIA, UART und VIC werden ODER-verknüpft
+        (<code class="inl">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</code>); der Kern
+        verzweigt über den Vektor bei <code class="inl">$FFFE–$FFFF</code>.</li>
+    <li><b>Bus-Stealing:</b> Über den <code class="inl">RDY</code>-Eingang hält der VIC die CPU
+        an, während er die Austastlücke nutzt, um Videodaten zu holen — die CPU verliert
+        dabei keine Schreibzugriffe.</li>
+  </ul>
+
+  <h2>Taktung</h2>
+  <p>Ein einzelner 27-MHz-Oszillator speist eine 270-MHz-PLL. Aus ihr werden der
+     54-MHz-Systemtakt (<code class="inl">270 / 5</code>), der 135-MHz-TMDS-Takt und der
+     27-MHz-Pixeltakt abgeleitet. Der CPU-Kern läuft über das Toggle-Schema mit halbem
+     Systemtakt — schnell genug, um BASIC und Maschinencode flüssig auszuführen.</p>
+
+  <h2>Wo es im Code lebt</h2>
+  <table class="sheet">
+    <thead><tr><th>Datei</th><th>Rolle</th></tr></thead>
+    <tbody>
+      <tr><td class="a">third_party/t65/rtl/</td><td>Importierter T65-Core (CPU, ALU, Microcode)</td></tr>
+      <tr><td class="a">rtl/core/cpu/t65_adapter.vhd</td><td>16-Bit-Bus-Adapter, Schreib-/Lese-Glue</td></tr>
+      <tr><td class="a">rtl/core/sbc_t65_top.vhd</td><td>Voll integriertes System-Top mit T65</td></tr>
+    </tbody>
+  </table>
+
+  <p>Verifiziert durch GHDL-Testbenches: Boot aus einem realen 6502-ROM
+     (<code class="inl">LDA #$42; STA $0002</code>), UART-Ausgabe, VIA-Port-Ansteuerung,
+     Timer-1-IRQ-Behandlung und ein Kernel-Smoke-Test mit zusammengesetztem
+     <code class="inl">kernel.rom + msbasic.rom</code>.</p>
+
+  <div class="pager">
+    <a href="../6502_fpga_computer.html">← Zurück zur Übersicht</a>
+    <a href="vic.html">Nächste Komponente: VIC-Grafik →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Komponenten-Detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Übersicht</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

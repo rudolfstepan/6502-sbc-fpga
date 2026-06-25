@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIA 6522 &amp; UART 6551 — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Overview</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Overview</a> / Component 04</div>
+  <span class="kicker">Input / Output</span>
+  <h1>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h1>
+  <p class="lead">The two classic I/O chips: a versatile interface adapter with timers and GPIO,
+     and a serial port for terminal and upload.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>VIA 6522 — Versatile Interface Adapter</h2>
+  <p>The <strong>VIA</strong> provides programmable timers, parallel GPIO ports and interrupt
+     logic. In the SBC it serves as a timer (Timer 1 raises periodic IRQs) and drives board LEDs
+     through Port B.</p>
+  <ul>
+    <li><b>Timer 1</b> in free-running mode generates regular interrupts — the kernel uses it as a
+        ~750 Hz tick for counters and LED blinking.</li>
+    <li><b>Port B bit 0</b> is connected to the board LED after boot.</li>
+    <li><b>IER/IFR</b> — interrupt-enable and flag registers control which sources raise an IRQ.</li>
+  </ul>
+
+  <div class="facts">
+    <div class="f"><div class="k">VIA window</div><div class="v">$8800–$880F (16 B)</div></div>
+    <div class="f"><div class="k">UART window</div><div class="v">$8810–$8813 (4 B)</div></div>
+    <div class="f"><div class="k">Serial rate</div><div class="v">115200 8N1</div></div>
+    <div class="f"><div class="k">IRQ</div><div class="v">VIA · UART · VIC (OR)</div></div>
+  </div>
+
+  <h2>UART 6551 — serial port</h2>
+  <p>The <strong>UART</strong> implements the full transmit and receive logic with status
+     registers and a receive interrupt. It is the main link to the PC: the EhBASIC terminal, ROM
+     uploads and diagnostic output all run over it. On the Tang Primer 20K it is driven through the
+     CH340 USB-serial bridge at 115200 8N1.</p>
+  <p>Verified functions (GHDL): status read, TX write, RX read, RDRF clearing, overrun detection,
+     programmed reset and RX IRQ behavior.</p>
+
+  <h2>Keyboard through the serial bridge</h2>
+  <p>A peculiarity of the FPGA implementation: a <strong>PS/2 keyboard</strong> attaches to a PMOD,
+     and its keystrokes are <em>injected</em> directly into the serial receive path. To EhBASIC this
+     looks like ordinary serial input — it never has to tell UART and keyboard apart. Local typing on
+     the HDMI screen works without a separate keyboard controller.</p>
+
+  <h2>How the interrupts combine</h2>
+  <p>The IRQ lines from VIA, UART and VIC are OR-combined and routed together to the CPU:</p>
+  <pre class="code">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</pre>
+  <p>The 6502 then branches through the interrupt vector at <code class="inl">$FFFE–$FFFF</code> into
+     the appropriate handler.</p>
+
+  <div class="pager">
+    <a href="sound_en.html">← Sound chip</a>
+    <a href="godrive_en.html">Next: D64 GoDrive →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Component detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Overview</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

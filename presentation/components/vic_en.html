@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIC graphics — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Overview</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Overview</a> / Component 02</div>
+  <span class="kicker">Graphics</span>
+  <h1>VIC graphics <span class="reg">$8000 · $9000</span></h1>
+  <p class="lead">The video controller produces the picture: text, color and several bitmap
+     modes — output as VGA or HDMI, timed straight from FPGA logic.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>What it is</h2>
+  <p>The <strong>VIC</strong> (Video Interface Controller) is the system's graphics block. It
+     reads character, color and bitmap data from video RAM and turns it into a complete video
+     signal with its own horizontal and vertical sync — HDMI/DVI on the Tang Primer 20K, VGA on
+     the PIX16.</p>
+
+  <div class="facts">
+    <div class="f"><div class="k">Resolution</div><div class="v">640×480 @ 60 Hz</div></div>
+    <div class="f"><div class="k">Pixel clock</div><div class="v">27 MHz</div></div>
+    <div class="f"><div class="k">Text mode</div><div class="v">40×25, 16 colors</div></div>
+    <div class="f"><div class="k">Bitmap modes</div><div class="v">1-bpp · RGB332 · RGB222</div></div>
+  </div>
+
+  <h2>What it does</h2>
+  <h3>Text mode</h3>
+  <p>40×25 characters, each 2× scaled (16×16 screen pixels). Character patterns live in the
+     <code class="inl">char_rom</code> (8×8 pixels, bit 7 = reverse video). Each cell has its own
+     foreground and background color from color RAM at <code class="inl">$8400</code>, packed as
+     <code class="inl">bg[7:4] | fg[3:0]</code>. The 16-color palette is a Pepto-style C64 RGB565
+     lookup.</p>
+
+  <h3>Bitmap modes</h3>
+  <ul>
+    <li><b>320×200 1-bpp</b> — legacy bitmap, 2× scaled to 640×400, 16 colors per 8×8 cell.</li>
+    <li><b>160×100 RGB332</b> — 256 colors, one byte per pixel, 4× scaled to 640×400.</li>
+    <li><b>180×120 RGB222</b> — 64 colors packed (4 pixels in 3 bytes), 3× scaled to 540×360.</li>
+  </ul>
+  <p>The 16 KB framebuffer is exposed through an 8 KB CPU window at <code class="inl">$6000–$7FFF</code>;
+     a MODE bit selects the bank. The control register <code class="inl">$9000</code> switches
+     between modes.</p>
+
+  <h3>Bus stealing — the shared bus</h3>
+  <p>VIC and CPU share a single-port video memory. During each horizontal blanking interval the
+     VIC prefetches the next display line and holds the CPU via the <code class="inl">RDY</code> pin.
+     The overhead is small: <strong>~4.8 %</strong> in text mode, with a worst case of
+     <strong>9.4 %</strong> for RGB332. CPU writes to video RAM are never lost — a pending write is
+     buffered and committed on the first free clock.</p>
+
+  <h2>Color registers</h2>
+  <table class="sheet">
+    <thead><tr><th>Address</th><th>Register</th><th>Function</th></tr></thead>
+    <tbody>
+      <tr><td class="a">$9000</td><td>MODE</td><td>bit 0 bitmap, bit 1 RGB332, bit 2 bank, bit 3 RGB222</td></tr>
+      <tr><td class="a">$9003</td><td>TEXT_COLOR</td><td>foreground color 0–15</td></tr>
+      <tr><td class="a">$9004</td><td>BG_COLOR</td><td>background color 0–15</td></tr>
+    </tbody>
+  </table>
+
+  <h2>From BASIC</h2>
+  <pre class="code"><span class="c">REM bitmap mode on, set a pixel</span>
+POKE 36864, 1
+A=24576+Y*40+INT(X/8)
+POKE A, PEEK(A) OR 2^(7-(X AND 7))
+POKE 36864, 0          <span class="c">: REM back to text</span></pre>
+
+  <div class="pager">
+    <a href="cpu_en.html">← T65 CPU core</a>
+    <a href="sound_en.html">Next: sound chip →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Component detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Overview</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

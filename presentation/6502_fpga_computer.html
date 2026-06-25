@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>6502 SBC FPGA — Synthetisierbarer 8-Bit-Computer</title>
+<meta name="description" content="Ein vollständiger 6502-Single-Board-Computer als synthetisierbares VHDL: CPU, VIC-Grafik, SID-kompatibler Sound, UART/VIA und virtuelles D64-Laufwerk. Hardware-verifiziert auf dem Tang Primer 20K.">
+<style>
+  :root{
+    --paper:#f3efe6;--panel:#fbf9f4;--ink:#1c1a17;--ink-2:#3a352e;--muted:#73695b;
+    --line:#d6cdbb;--line-strong:#b9ad96;--accent:#1f3a8a;--accent-soft:#e7ebf6;--rust:#a6402c;
+    --term-bg:#13161b;--term-grn:#7fd98a;--term-amb:#e3b341;
+    --mono:'JetBrains Mono','SFMono-Regular',Consolas,'Liberation Mono',monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 28px}
+  .mono{font-family:var(--mono)}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--rust)}
+
+  .langblock{display:none}
+  .langblock.active{display:block}
+
+  .topbar{border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:40}
+  .topbar .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .wordmark{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:.2px;color:var(--ink)}
+  .wordmark .mk{font-family:var(--mono);font-weight:700;font-size:13px;color:#fff;background:var(--accent);border-radius:3px;padding:5px 7px;line-height:1}
+  .topnav{display:flex;gap:30px;font-size:14px;align-items:center}
+  .topnav a{color:var(--ink-2)}
+  .topnav a.repo{font-weight:600}
+  .topnav button.lang{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);border:1px solid var(--line-strong);border-radius:3px;padding:4px 9px;background:transparent;cursor:pointer}
+  .topnav button.lang:hover{background:var(--accent);color:#fff}
+  @media(max-width:760px){.topnav a:not(.repo){display:none}}
+
+  .hero{border-bottom:1px solid var(--line)}
+  .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:54px;align-items:center;padding:74px 28px}
+  @media(max-width:880px){.hero .wrap{grid-template-columns:1fr;gap:36px;padding:48px 28px}}
+  .hero h1{font-size:clamp(34px,4.6vw,52px);line-height:1.08;font-weight:800;letter-spacing:-.5px;margin:16px 0 18px}
+  .hero h1 em{font-style:normal;color:var(--accent)}
+  .hero p.lead{font-size:18px;color:var(--ink-2);max-width:46ch}
+  .hero .meta{margin-top:26px;display:flex;flex-wrap:wrap;gap:10px 22px;font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .hero .meta b{color:var(--ink)}
+  .hero .actions{margin-top:30px;display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:11px 20px;border-radius:5px;font-size:14.5px;font-weight:600;border:1px solid var(--line-strong)}
+  .btn.solid{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.solid:hover{background:#172c69;text-decoration:none}
+  .btn.line{background:transparent;color:var(--ink)}
+  .btn.line:hover{background:#fff;text-decoration:none}
+
+  .shot-frame{border:1px solid var(--line-strong);background:#000;border-radius:6px;overflow:hidden;box-shadow:0 1px 0 #fff inset,0 18px 36px -22px rgba(0,0,0,.45)}
+  .shot-frame img{display:block;width:100%;height:auto}
+  .shot-frame .cap{background:var(--panel);color:var(--muted);font-family:var(--mono);font-size:12px;padding:9px 13px;border-top:1px solid var(--line)}
+
+  .strip{border-bottom:1px solid var(--line);background:var(--panel)}
+  .strip .wrap{display:grid;grid-template-columns:repeat(4,1fr);gap:0}
+  @media(max-width:760px){.strip .wrap{grid-template-columns:repeat(2,1fr)}}
+  .strip .cell{padding:22px 8px;border-left:1px solid var(--line);text-align:center}
+  .strip .cell:first-child{border-left:none}
+  .strip .v{font-family:var(--mono);font-size:24px;font-weight:700;color:var(--ink)}
+  .strip .k{font-size:12.5px;color:var(--muted);margin-top:3px}
+
+  section{padding:78px 0;border-bottom:1px solid var(--line)}
+  .sec-head{max-width:660px;margin-bottom:42px}
+  .sec-head h2{font-size:clamp(25px,3.2vw,34px);font-weight:800;letter-spacing:-.4px;margin:10px 0 12px}
+  .sec-head p{color:var(--ink-2);font-size:16.5px}
+
+  .catalog{border:1px solid var(--line-strong);border-radius:6px;overflow:hidden;background:var(--panel)}
+  .catalog .item{display:grid;grid-template-columns:64px 1fr;border-top:1px solid var(--line)}
+  .catalog .item:first-child{border-top:none}
+  .catalog .idx{font-family:var(--mono);font-size:13px;color:var(--rust);padding:24px 0 0 0;text-align:center;border-right:1px solid var(--line);background:#f7f3ea}
+  .catalog .body{padding:22px 26px}
+  .catalog h3{font-size:17.5px;font-weight:700;margin-bottom:5px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .catalog h3 .reg{font-family:var(--mono);font-size:12px;color:var(--muted);font-weight:500}
+  .catalog p{font-size:14.5px;color:var(--ink-2);max-width:72ch}
+  .catalog a.item{text-decoration:none;color:inherit;transition:background .15s}
+  .catalog a.item:hover{background:#f7f3ea}
+  .catalog a.item:hover .idx{background:#f1ebde}
+  .catalog .more{display:inline-block;margin-top:13px;font-family:var(--mono);font-size:12.5px;color:var(--accent)}
+  .catalog a.item:hover .more{text-decoration:underline}
+  @media(min-width:760px){
+    .catalog{display:grid;grid-template-columns:1fr 1fr}
+    .catalog .item:nth-child(2){border-top:none}
+    .catalog .item:nth-child(even){border-left:1px solid var(--line)}
+  }
+
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+  @media(max-width:880px){.grid3{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.grid3{grid-template-columns:1fr}}
+  figure{margin:0;border:1px solid var(--line-strong);background:#000;border-radius:6px;overflow:hidden}
+  figure img{display:block;width:100%;height:190px;object-fit:cover}
+  figcaption{background:var(--panel);padding:12px 14px;border-top:1px solid var(--line)}
+  figcaption b{display:block;font-size:14px;color:var(--ink)}
+  figcaption span{font-size:12.5px;color:var(--muted)}
+
+  .sheet{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:13.5px;background:var(--panel);border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+  .sheet thead th{background:#efe9dc;text-align:left;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:11px 18px;border-bottom:1px solid var(--line-strong)}
+  .sheet td{padding:9px 18px;border-bottom:1px solid var(--line)}
+  .sheet tr:last-child td{border-bottom:none}
+  .sheet td.a{color:var(--accent);white-space:nowrap}
+  .sheet td.s{color:var(--muted);white-space:nowrap}
+  .sheet tbody tr:hover{background:#f7f3ea}
+  .sheet th.c1{width:24%}.sheet th.c2{width:14%}.sheet th.c3{width:30%}
+
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:22px}
+  @media(max-width:760px){.two{grid-template-columns:1fr}}
+  .deflist{background:var(--panel);border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+  .deflist .h{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:12px 18px;background:#efe9dc;border-bottom:1px solid var(--line-strong)}
+  .deflist .r{display:flex;justify-content:space-between;gap:16px;padding:10px 18px;border-bottom:1px solid var(--line);font-size:14px}
+  .deflist .r:last-child{border-bottom:none}
+  .deflist .r span:first-child{color:var(--muted)}
+  .deflist .r span:last-child{font-family:var(--mono);font-size:13px;color:var(--ink);text-align:right}
+
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:46px;align-items:center}
+  @media(max-width:860px){.split{grid-template-columns:1fr;gap:32px}}
+  .split h2{font-size:30px;font-weight:800;letter-spacing:-.4px;margin:10px 0 14px}
+  .split p{color:var(--ink-2);font-size:16px;margin-bottom:16px;max-width:50ch}
+  .check{list-style:none}
+  .check li{position:relative;padding:7px 0 7px 26px;font-size:15px;color:var(--ink)}
+  .check li::before{content:"";position:absolute;left:0;top:13px;width:10px;height:2px;background:var(--rust)}
+  .term{background:var(--term-bg);border:1px solid #2a2f38;border-radius:6px;overflow:hidden}
+  .term .bar{display:flex;align-items:center;gap:8px;padding:9px 13px;background:#1b1f26;border-bottom:1px solid #2a2f38}
+  .term .bar .t{font-family:var(--mono);font-size:11.5px;color:#7d8794;margin-left:4px}
+  .term .bar i{width:11px;height:11px;border-radius:50%;display:block;background:#3a414c}
+  .term pre{padding:18px 20px;font-family:var(--mono);font-size:13px;line-height:1.75;color:#c9d1da;overflow-x:auto;margin:0}
+  .term .g{color:var(--term-grn)}.term .a{color:var(--term-amb)}.term .m{color:#6b7480}.term .b{color:#7aa2f7}
+
+  .flow{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch}
+  .flow .n{flex:1 1 160px;background:var(--panel);border:1px solid var(--line-strong);border-radius:6px;padding:16px 18px}
+  .flow .n .t{font-family:var(--mono);font-size:13px;color:var(--accent)}
+  .flow .n .d{font-size:13px;color:var(--muted);margin-top:5px}
+  .flow .n .step{font-family:var(--mono);font-size:11px;color:var(--rust)}
+
+  .boards{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:760px){.boards{grid-template-columns:1fr}}
+  .board{border:1px solid var(--line-strong);border-radius:6px;background:var(--panel);padding:28px}
+  .board .tag{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;padding:4px 9px;border-radius:3px;display:inline-block;margin-bottom:14px}
+  .board.active .tag{background:var(--accent-soft);color:var(--accent);border:1px solid #c3cdec}
+  .board.ref .tag{background:#f0ebe0;color:var(--muted);border:1px solid var(--line-strong)}
+  .board h3{font-size:20px;margin-bottom:3px}
+  .board .fpga{font-family:var(--mono);font-size:13px;color:var(--muted);margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+  .board ul{list-style:none}
+  .board li{position:relative;padding:6px 0 6px 18px;font-size:14.5px;color:var(--ink-2)}
+  .board li::before{content:"–";position:absolute;left:0;color:var(--line-strong)}
+  .board li b{color:var(--ink);font-weight:600}
+
+  footer{background:var(--panel);padding:46px 0}
+  .foot{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-end}
+  .foot .muted{color:var(--muted);font-size:13.5px;margin-top:10px;max-width:48ch}
+  .foot .links{display:flex;gap:24px;font-size:14px}
+  .lastsec{border-bottom:none}
+</style>
+</head>
+<body>
+
+<!-- ============================== DEUTSCH ============================== -->
+<div class="langblock active" id="lang-de">
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <nav class="topnav">
+    <a href="#system">System</a>
+    <a href="#gallery">In Aktion</a>
+    <a href="#disk">GoDrive</a>
+    <a href="#specs">Datenblatt</a>
+    <a href="#boards">Boards</a>
+    <a href="https://github.com/rudolfstepan/6502-sbc-fpga" class="repo">GitHub ↗</a>
+    <button type="button" class="lang" onclick="setLang('en')">EN</button>
+  </nav>
+</div></div>
+
+<div class="hero"><div class="wrap">
+  <div>
+    <span class="kicker">Synthetisierbares VHDL · T65-Kern</span>
+    <h1>Ein 6502-Computer,<br>in Logik <em>nachgebaut</em>.</h1>
+    <p class="lead">CPU, Grafik, Sound, serielle Schnittstellen und ein virtuelles Diskettenlaufwerk —
+      ein vollständiger Single-Board-Computer als FPGA-Design. Bootet unveränderte 6502-Software und
+      teilt sich die Memory-Map mit dem Original-Emulator.</p>
+    <div class="meta">
+      <span>CPU&nbsp;<b>T65 / 6502</b></span>
+      <span>Takt&nbsp;<b>27 MHz</b></span>
+      <span>Video&nbsp;<b>HDMI · VGA</b></span>
+      <span>Status&nbsp;<b>HW-verifiziert</b></span>
+    </div>
+    <div class="actions">
+      <a class="btn solid" href="#system">System ansehen</a>
+      <a class="btn line" href="https://github.com/rudolfstepan/6502-sbc-fpga">Quellcode</a>
+    </div>
+  </div>
+  <div>
+    <div class="shot-frame">
+      <img src="images/tang_primer_ehbasic_boot.jpg" alt="EhBASIC bootet auf dem Tang Primer 20K">
+      <div class="cap">EhBASIC am HDMI-Ausgang · Tang Primer 20K (GW2A-18)</div>
+    </div>
+  </div>
+</div></div>
+
+<div class="strip"><div class="wrap">
+  <div class="cell"><div class="v">27 MHz</div><div class="k">T65 CPU-Takt (effektiv)</div></div>
+  <div class="cell"><div class="v">SID</div><div class="k">6581-kompatibel · Original-.sid-Wiedergabe</div></div>
+  <div class="cell"><div class="v">256</div><div class="k">Farben · RGB332-Bitmap</div></div>
+  <div class="cell"><div class="v">2</div><div class="k">FPGA-Boards · ein RTL-Kern</div></div>
+</div></div>
+
+<section id="system"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Komponenten</span>
+    <h2>Die Peripherie-Chips — neu in RTL implementiert</h2>
+    <p>Eine board-unabhängige VHDL-Bibliothek bildet die klassischen Bausteine des
+       6502-Systems nach. Gleiche Register, gleiche Adressen, gleiche Software.</p>
+  </div>
+  <div class="catalog">
+    <a class="item" href="components/cpu.html">
+      <div class="idx">01</div>
+      <div class="body">
+        <h3>T65 CPU-Kern <span class="reg">Reset @ $FFFC</span></h3>
+        <p>6502-kompatibler Soft-Core mit eigenem 16-Bit-Bus-Adapter. Läuft über ein
+           <span class="mono">cpu_enable</span>-Toggle mit effektiv halbem Systemtakt bis 27 MHz und
+           behandelt IRQ-Vektoren wie der Originalprozessor.</p>
+        <span class="more">Details ansehen →</span>
+      </div>
+    </a>
+    <a class="item" href="components/vic.html">
+      <div class="idx">02</div>
+      <div class="body">
+        <h3>VIC-Grafik <span class="reg">$8000 · $9000</span></h3>
+        <p>Textmodus 40×25 mit 16-Farben-Palette, Legacy-Bitmap 320×200, 256-Farben
+           RGB332 und gepacktes 64-Farben RGB222 — über C64-artiges Bus-Stealing während
+           der Austastlücke, mit Overhead von nur 4,8 % im Textmodus.</p>
+        <span class="more">Details ansehen →</span>
+      </div>
+    </a>
+    <a class="item" href="components/sound.html">
+      <div class="idx">03</div>
+      <div class="body">
+        <h3>SID-kompatibler Sound-Chip <span class="reg">$D400–$D418</span></h3>
+        <p>Ein recht vollständiges MOS-6581-Modell: 3 Stimmen, kombinierte Wellenformen,
+           zyklusgenaue ADSR und Multimode-Filter. Die Demo spielt <strong>originale
+           <span class="mono">.sid</span>-Dateien samt ihrem 6502-Player-Code</strong> mit
+           leichter Konvertierung direkt auf der Hardware — über den PT8211-DAC.</p>
+        <span class="more">Details ansehen →</span>
+      </div>
+    </a>
+    <a class="item" href="components/io.html">
+      <div class="idx">04</div>
+      <div class="body">
+        <h3>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h3>
+        <p>Timer, GPIO und IRQ-Flags der VIA; vollständige TX/RX-Logik der UART mit
+           Statusregistern und RX-Interrupt. PS/2-Tastatureingaben werden in den
+           seriellen Empfangspfad eingespeist.</p>
+        <span class="more">Details ansehen →</span>
+      </div>
+    </a>
+    <a class="item" href="components/godrive.html">
+      <div class="idx">05</div>
+      <div class="body">
+        <h3>D64 GoDrive <span class="reg">$8824</span></h3>
+        <p>Ein zweites SD-Kärtchen mit FAT32 hält <span class="mono">.d64</span>-Images. Die FPGA
+           parst FAT32 und D64 vollständig in Logik und zeigt dem 6502 nur einfache
+           256-Byte-Sektoren — kein Dateisystem in Software.</p>
+        <span class="more">Details ansehen →</span>
+      </div>
+    </a>
+    <a class="item" href="components/fpu.html">
+      <div class="idx">06</div>
+      <div class="body">
+        <h3>Math-Coprozessor <span class="reg">$88B0</span></h3>
+        <p>Memory-mapped FPU für vorzeichenbehaftete 32×32-Festkomma-Multiplikation im
+           8.24-Format — beschleunigt BASIC-Mathematik wie die Mandelbrot-Renderings.</p>
+        <span class="more">Details ansehen →</span>
+      </div>
+    </a>
+  </div>
+</div></section>
+
+<section id="gallery"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Echte Hardware</span>
+    <h2>Aufnahmen vom laufenden Gerät</h2>
+    <p>Keine Renderings — alle Bilder stammen direkt vom HDMI-Ausgang des Tang Primer 20K.</p>
+  </div>
+  <div class="grid3">
+    <figure><img src="images/tang_primer_mandelbrot_col.jpg" alt="Mandelbrot farbig">
+      <figcaption><b>Mandelbrot · 256 Farben</b><span>RGB332-Bitmap, FPU-beschleunigt</span></figcaption></figure>
+    <figure><img src="images/tang_primer_bitmap_mode.jpg" alt="Bitmap-Modus">
+      <figcaption><b>Bitmap-Modus</b><span>Pixel-Plotting direkt aus BASIC</span></figcaption></figure>
+    <figure><img src="images/tang_primer_petscii_test.jpg" alt="PETSCII-Grafik">
+      <figcaption><b>PETSCII-Grafik</b><span>Block- &amp; Liniengrafik im Textmodus</span></figcaption></figure>
+    <figure><img src="images/tang_primer_mandelbrot_asm_fixed.jpg" alt="Mandelbrot in Assembler">
+      <figcaption><b>Mandelbrot in Assembler</b><span>Festkomma-Mathematik in Maschinencode</span></figcaption></figure>
+    <figure><img src="images/tang_primer_mandelbrot_bw.jpg" alt="Mandelbrot Schwarzweiß">
+      <figcaption><b>Mandelbrot · 1-bpp</b><span>320×200 Legacy-Bitmap</span></figcaption></figure>
+    <figure><img src="images/tang_primer_debug_screen.jpg" alt="Boot-Diagnose">
+      <figcaption><b>Boot-Diagnose</b><span>Self-Test: RAM · VRAM · VIA · UART</span></figcaption></figure>
+  </div>
+</div></section>
+
+<section id="disk"><div class="wrap split">
+  <div>
+    <span class="kicker">D64 GoDrive — virtuelles Laufwerk</span>
+    <h2>Software laden wie früher</h2>
+    <p>Die FPGA übernimmt FAT32- und D64-Auswertung vollständig. Der 6502 sieht nur ein
+       simples Laufwerk und lädt mit den vertrauten BASIC-Befehlen.</p>
+    <ul class="check">
+      <li>Autodetect: MBR-partitioniert oder Superfloppy</li>
+      <li>Interaktives Auswahlmenü per Pfeiltasten (<span class="mono">LOAD "!"</span>)</li>
+      <li>Verzeichnis und PRG-Load direkt aus EhBASIC</li>
+      <li>Auf realer 32-GB-Windows-SD-Karte verifiziert</li>
+    </ul>
+  </div>
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i><span class="t">COM12 — 115200 8N1</span></div>
+<pre><span class="m">EhBASIC ready.</span>
+<span class="b">LOAD "$"</span>
+<span class="m"> 0  "TESTDISK     " 1A 2A</span>
+   4  <span class="a">"HELLO"</span>          PRG
+   8  <span class="a">"MANDELBROT"</span>     PRG
+  12  <span class="a">"SOUNDDEMO"</span>      PRG
+<span class="m">READY.</span>
+<span class="b">LOAD "HELLO"</span>
+<span class="m">LOADING... $0801-$08C9</span>
+<span class="b">CALL 2049</span>
+<span class="g">HELLO FROM A REAL 6502!</span>
+<span class="m">READY.</span>
+</pre>
+  </div>
+</div></section>
+
+<section id="specs"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Datenblatt</span>
+    <h2>Memory-Map &amp; Eckdaten</h2>
+    <p>Aktive Konfiguration des Tang Primer 20K — kompatibel zur emulierten Maschine.</p>
+  </div>
+  <table class="sheet">
+    <thead><tr><th class="c1">Adressbereich</th><th class="c2">Größe</th><th>Gerät</th></tr></thead>
+    <tbody>
+      <tr><td class="a">$0000–$3FFF</td><td class="s">16 KB</td><td>BRAM Haupt-RAM — Zero-Page, Stack, EhBASIC</td></tr>
+      <tr><td class="a">$4000–$5FFF</td><td class="s">8 KB</td><td>BSRAM Haupt-RAM (optional DDR3-Backend)</td></tr>
+      <tr><td class="a">$6000–$7FFF</td><td class="s">8 KB</td><td>Fenster in 16-KB-VIC-Framebuffer</td></tr>
+      <tr><td class="a">$8000–$87FF</td><td class="s">2 KB</td><td>VIC Text- &amp; Farb-RAM</td></tr>
+      <tr><td class="a">$8800–$880F</td><td class="s">16 B</td><td>VIA 6522</td></tr>
+      <tr><td class="a">$8810–$8813</td><td class="s">4 B</td><td>UART 6551</td></tr>
+      <tr><td class="a">$8824</td><td class="s">—</td><td>D64 GoDrive Register</td></tr>
+      <tr><td class="a">$88B0–$88BF</td><td class="s">16 B</td><td>Math-Coprozessor (8.24 FPU)</td></tr>
+      <tr><td class="a">$9000–$900F</td><td class="s">16 B</td><td>VIC-Steuerregister</td></tr>
+      <tr><td class="a">$A000–$CFFF</td><td class="s">12 KB</td><td>Shadow-ROM Anwendungsfenster</td></tr>
+      <tr><td class="a">$D400–$D418</td><td class="s">25 B</td><td>SID-kompatible Audio-Register</td></tr>
+      <tr><td class="a">$F000–$FFFF</td><td class="s">4 KB</td><td>Shadow-ROM Kernel &amp; Vektoren</td></tr>
+    </tbody>
+  </table>
+  <div class="two">
+    <div class="deflist">
+      <div class="h">Video</div>
+      <div class="r"><span>Ausgabe (Tang)</span><span>HDMI/DVI 640×480 @ 60 Hz</span></div>
+      <div class="r"><span>Pixeltakt</span><span>27 MHz · TMDS 135 MHz</span></div>
+      <div class="r"><span>Textmodus</span><span>40×25, 16 Farben</span></div>
+      <div class="r"><span>Bitmap-Modi</span><span>1-bpp · RGB332 · RGB222</span></div>
+      <div class="r"><span>Bus-Overhead</span><span>4,8 % – 9,4 %</span></div>
+    </div>
+    <div class="deflist">
+      <div class="h">Audio &amp; I/O</div>
+      <div class="r"><span>Sound</span><span>SID 6581 · 3 Stimmen + Filter</span></div>
+      <div class="r"><span>DAC</span><span>PT8211 I²S · ~47 kHz</span></div>
+      <div class="r"><span>Oszillator</span><span>24-Bit Phasenakkumulator</span></div>
+      <div class="r"><span>UART</span><span>115200 8N1 (CH340)</span></div>
+      <div class="r"><span>Eingabe</span><span>PS/2-Tastatur · UART</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Boot &amp; Clocking</span>
+    <h2>Von der SD-Karte zum laufenden 6502</h2>
+    <p>Ein 27-MHz-Oszillator speist eine 270-MHz-PLL; daraus entstehen TMDS-, System- und Pixeltakt.</p>
+  </div>
+  <div class="flow">
+    <div class="n"><div class="step">01</div><div class="t">microSD</div><div class="d">SPI-Modus liest Boot-Image</div></div>
+    <div class="n"><div class="step">02</div><div class="t">sd_rom_loader</div><div class="d">prüft Sektor 0, streamt 1…32</div></div>
+    <div class="n"><div class="step">03</div><div class="t">boot_shadow_rom</div><div class="d">16-KB-ROM-Fenster geladen</div></div>
+    <div class="n"><div class="step">04</div><div class="t">Self-Test</div><div class="d">RAM · VRAM · VIA · UART</div></div>
+    <div class="n"><div class="step">05</div><div class="t">T65 release</div><div class="d">Reset-Vektor @ $FFFC</div></div>
+  </div>
+</div></section>
+
+<section id="boards"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Portabilität</span>
+    <h2>Ein Kern, zwei FPGA-Plattformen</h2>
+    <p>Der board-unabhängige RTL-Kern läuft mit minimalem Board-Glue auf zwei Zielen.</p>
+  </div>
+  <div class="boards">
+    <div class="board active">
+      <span class="tag">Aktive Bring-up-Plattform</span>
+      <h3>Sipeed Tang Primer 20K</h3>
+      <div class="fpga">Gowin GW2A-18</div>
+      <ul>
+        <li><b>HDMI/DVI-Ausgabe</b> über TMDS-Serializer</li>
+        <li><b>On-Board microSD</b> Boot-Pfad im SPI-Modus</li>
+        <li><b>Nativer SID-Sound</b> über PT8211-DAC am Dock</li>
+        <li><b>BSRAM-Backend</b> stromsparend, DDR3 optional</li>
+        <li><b>PS/2-Tastatur</b> über PMOD, CH340-UART</li>
+      </ul>
+    </div>
+    <div class="board ref">
+      <span class="tag">Referenz-Plattform</span>
+      <h3>PIX16 Board</h3>
+      <div class="fpga">Xilinx Spartan-6 · xc6slx16</div>
+      <ul>
+        <li><b>VGA-Textausgabe</b> mit Boot-Statusscreen</li>
+        <li><b>SDRAM-gestütztes</b> Haupt-RAM mit Self-Test</li>
+        <li><b>SD-Boot</b> des 16-KB-Shadow-ROMs</li>
+        <li><b>UART-Monitor</b> mit Live-ROM-Upload</li>
+        <li><b>ISE-Projekt</b> versioniert und reproduzierbar</li>
+      </ul>
+    </div>
+  </div>
+</div></section>
+
+<section class="lastsec"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Verifikation</span>
+    <h2>Inkrementell getestet mit GHDL</h2>
+    <p>Jeder Baustein ist unabhängig testbar — von der Adressdekodierung bis zum FAT32-Reader.</p>
+  </div>
+  <table class="sheet">
+    <thead><tr><th class="c3">Testbench-Bereich</th><th>Abdeckung</th></tr></thead>
+    <tbody>
+      <tr><td class="a">Bus &amp; Reset</td><td>Adressdekodierung aller Gerätefenster, Reset-Vektor-Fetch, ROM-skriptgesteuerte Buszyklen</td></tr>
+      <tr><td class="a">VIA 6522</td><td>Port-Masking, IER/IFR, Timer-1-IRQ-Assertion und -Clearing</td></tr>
+      <tr><td class="a">UART 6551</td><td>Status, TX, RX, Overrun, programmierter Reset, RX-IRQ</td></tr>
+      <tr><td class="a">T65 CPU</td><td>Boot aus realem ROM, UART-/VIA-Zugriff, IRQ-Handler, Kernel-Smoke-Test</td></tr>
+      <tr><td class="a">D64 / FAT32</td><td>Real-Geometrie-Images werden lazy gelesen, Start-LBAs verifiziert</td></tr>
+      <tr><td class="a">SID &amp; FPU</td><td>SID-Audio/Filter beschränkt &amp; nicht-stumm, 8.24-Multiplikation gegen Referenz</td></tr>
+    </tbody>
+  </table>
+</div></section>
+
+<footer><div class="wrap foot">
+  <div>
+    <div class="wordmark"><span class="mk">65</span> 6502 SBC FPGA</div>
+    <div class="muted">Synthetisierbares VHDL · T65-Kern · Gowin &amp; Xilinx · kompatibel zur 6502-Emulator-Maschine.</div>
+  </div>
+  <div class="links">
+    <a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a>
+    <a href="https://github.com/rudolfstepan/6502-sbc-fpga/wiki">Wiki</a>
+  </div>
+</div></footer>
+
+</div><!-- /DE -->
+
+
+<!-- ============================== ENGLISH ============================== -->
+<div class="langblock" id="lang-en">
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <nav class="topnav">
+    <a href="#system">System</a>
+    <a href="#gallery">In Action</a>
+    <a href="#disk">GoDrive</a>
+    <a href="#specs">Datasheet</a>
+    <a href="#boards">Boards</a>
+    <a href="https://github.com/rudolfstepan/6502-sbc-fpga" class="repo">GitHub ↗</a>
+    <button type="button" class="lang" onclick="setLang('de')">DE</button>
+  </nav>
+</div></div>
+
+<div class="hero"><div class="wrap">
+  <div>
+    <span class="kicker">Synthesizable VHDL · T65 core</span>
+    <h1>A 6502 computer,<br>rebuilt in <em>logic</em>.</h1>
+    <p class="lead">CPU, graphics, sound, serial I/O and a virtual disk drive — a complete
+      single-board computer as an FPGA design. It boots unmodified 6502 software and shares its
+      memory map with the original emulator.</p>
+    <div class="meta">
+      <span>CPU&nbsp;<b>T65 / 6502</b></span>
+      <span>Clock&nbsp;<b>27 MHz</b></span>
+      <span>Video&nbsp;<b>HDMI · VGA</b></span>
+      <span>Status&nbsp;<b>HW-verified</b></span>
+    </div>
+    <div class="actions">
+      <a class="btn solid" href="#system">Explore the system</a>
+      <a class="btn line" href="https://github.com/rudolfstepan/6502-sbc-fpga">Source code</a>
+    </div>
+  </div>
+  <div>
+    <div class="shot-frame">
+      <img src="images/tang_primer_ehbasic_boot.jpg" alt="EhBASIC booting on the Tang Primer 20K">
+      <div class="cap">EhBASIC on the HDMI output · Tang Primer 20K (GW2A-18)</div>
+    </div>
+  </div>
+</div></div>
+
+<div class="strip"><div class="wrap">
+  <div class="cell"><div class="v">27 MHz</div><div class="k">T65 CPU clock (effective)</div></div>
+  <div class="cell"><div class="v">SID</div><div class="k">6581-compatible · plays original .sid</div></div>
+  <div class="cell"><div class="v">256</div><div class="k">Colors · RGB332 bitmap</div></div>
+  <div class="cell"><div class="v">2</div><div class="k">FPGA boards · one RTL core</div></div>
+</div></div>
+
+<section id="system"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Components</span>
+    <h2>The peripheral chips — re-implemented in RTL</h2>
+    <p>A board-independent VHDL library recreates the classic building blocks of the
+       6502 system. Same registers, same addresses, same software.</p>
+  </div>
+  <div class="catalog">
+    <a class="item" href="components/cpu_en.html">
+      <div class="idx">01</div>
+      <div class="body">
+        <h3>T65 CPU core <span class="reg">Reset @ $FFFC</span></h3>
+        <p>A 6502-compatible soft core with a custom 16-bit bus adapter. A
+           <span class="mono">cpu_enable</span> toggle runs it at effectively half the system clock
+           up to 27 MHz, and it handles IRQ vectors exactly like the original processor.</p>
+        <span class="more">View details →</span>
+      </div>
+    </a>
+    <a class="item" href="components/vic_en.html">
+      <div class="idx">02</div>
+      <div class="body">
+        <h3>VIC graphics <span class="reg">$8000 · $9000</span></h3>
+        <p>40×25 text mode with a 16-color palette, legacy 320×200 bitmap, 256-color
+           RGB332 and packed 64-color RGB222 — all via C64-style bus stealing during the
+           blanking interval, with as little as 4.8 % overhead in text mode.</p>
+        <span class="more">View details →</span>
+      </div>
+    </a>
+    <a class="item" href="components/sound_en.html">
+      <div class="idx">03</div>
+      <div class="body">
+        <h3>SID-compatible sound chip <span class="reg">$D400–$D418</span></h3>
+        <p>A fairly complete MOS 6581 model: 3 voices, combined waveforms,
+           cycle-accurate ADSR and a multimode filter. The demo plays <strong>original
+           <span class="mono">.sid</span> files together with their 6502 player code</strong>
+           with light conversion, straight on the hardware — out through the PT8211 DAC.</p>
+        <span class="more">View details →</span>
+      </div>
+    </a>
+    <a class="item" href="components/io_en.html">
+      <div class="idx">04</div>
+      <div class="body">
+        <h3>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h3>
+        <p>VIA timers, GPIO and IRQ flags; full UART TX/RX logic with status registers
+           and RX interrupt. PS/2 keystrokes are injected into the serial receive path so
+           firmware sees them as UART input.</p>
+        <span class="more">View details →</span>
+      </div>
+    </a>
+    <a class="item" href="components/godrive_en.html">
+      <div class="idx">05</div>
+      <div class="body">
+        <h3>D64 GoDrive <span class="reg">$8824</span></h3>
+        <p>A second SD card with FAT32 holds <span class="mono">.d64</span> images. The FPGA parses
+           FAT32 and D64 entirely in logic and exposes nothing but plain 256-byte sectors
+           to the 6502 — no filesystem in software.</p>
+        <span class="more">View details →</span>
+      </div>
+    </a>
+    <a class="item" href="components/fpu_en.html">
+      <div class="idx">06</div>
+      <div class="body">
+        <h3>Math coprocessor <span class="reg">$88B0</span></h3>
+        <p>A memory-mapped FPU for signed 32×32 fixed-point multiplication in 8.24
+           format — accelerating BASIC math such as the Mandelbrot renders.</p>
+        <span class="more">View details →</span>
+      </div>
+    </a>
+  </div>
+</div></section>
+
+<section id="gallery"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Real hardware</span>
+    <h2>Captured from the running machine</h2>
+    <p>Not renders — every image is taken straight from the Tang Primer 20K's HDMI output.</p>
+  </div>
+  <div class="grid3">
+    <figure><img src="images/tang_primer_mandelbrot_col.jpg" alt="Mandelbrot color">
+      <figcaption><b>Mandelbrot · 256 colors</b><span>RGB332 bitmap, FPU-accelerated</span></figcaption></figure>
+    <figure><img src="images/tang_primer_bitmap_mode.jpg" alt="Bitmap mode">
+      <figcaption><b>Bitmap mode</b><span>Pixel plotting straight from BASIC</span></figcaption></figure>
+    <figure><img src="images/tang_primer_petscii_test.jpg" alt="PETSCII graphics">
+      <figcaption><b>PETSCII graphics</b><span>Block &amp; line graphics in text mode</span></figcaption></figure>
+    <figure><img src="images/tang_primer_mandelbrot_asm_fixed.jpg" alt="Mandelbrot in assembly">
+      <figcaption><b>Mandelbrot in assembly</b><span>Fixed-point math in machine code</span></figcaption></figure>
+    <figure><img src="images/tang_primer_mandelbrot_bw.jpg" alt="Mandelbrot monochrome">
+      <figcaption><b>Mandelbrot · 1-bpp</b><span>320×200 legacy bitmap</span></figcaption></figure>
+    <figure><img src="images/tang_primer_debug_screen.jpg" alt="Boot diagnostics">
+      <figcaption><b>Boot diagnostics</b><span>Self-test: RAM · VRAM · VIA · UART</span></figcaption></figure>
+  </div>
+</div></section>
+
+<section id="disk"><div class="wrap split">
+  <div>
+    <span class="kicker">D64 GoDrive — virtual disk</span>
+    <h2>Load software the old way</h2>
+    <p>The FPGA handles all FAT32 and D64 parsing. The 6502 only ever sees a simple
+       drive and loads programs with the familiar BASIC commands.</p>
+    <ul class="check">
+      <li>Autodetect: MBR-partitioned or superfloppy</li>
+      <li>Interactive arrow-key selection menu (<span class="mono">LOAD "!"</span>)</li>
+      <li>Directory listing and PRG load straight from EhBASIC</li>
+      <li>Verified on a real 32 GB Windows-formatted SD card</li>
+    </ul>
+  </div>
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i><span class="t">COM12 — 115200 8N1</span></div>
+<pre><span class="m">EhBASIC ready.</span>
+<span class="b">LOAD "$"</span>
+<span class="m"> 0  "TESTDISK     " 1A 2A</span>
+   4  <span class="a">"HELLO"</span>          PRG
+   8  <span class="a">"MANDELBROT"</span>     PRG
+  12  <span class="a">"SOUNDDEMO"</span>      PRG
+<span class="m">READY.</span>
+<span class="b">LOAD "HELLO"</span>
+<span class="m">LOADING... $0801-$08C9</span>
+<span class="b">CALL 2049</span>
+<span class="g">HELLO FROM A REAL 6502!</span>
+<span class="m">READY.</span>
+</pre>
+  </div>
+</div></section>
+
+<section id="specs"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Datasheet</span>
+    <h2>Memory map &amp; key figures</h2>
+    <p>The active Tang Primer 20K configuration — compatible with the emulated machine.</p>
+  </div>
+  <table class="sheet">
+    <thead><tr><th class="c1">Address range</th><th class="c2">Size</th><th>Device</th></tr></thead>
+    <tbody>
+      <tr><td class="a">$0000–$3FFF</td><td class="s">16 KB</td><td>BRAM main RAM — zero page, stack, EhBASIC</td></tr>
+      <tr><td class="a">$4000–$5FFF</td><td class="s">8 KB</td><td>BSRAM main RAM (optional DDR3 backend)</td></tr>
+      <tr><td class="a">$6000–$7FFF</td><td class="s">8 KB</td><td>Window into 16 KB VIC framebuffer</td></tr>
+      <tr><td class="a">$8000–$87FF</td><td class="s">2 KB</td><td>VIC text &amp; color RAM</td></tr>
+      <tr><td class="a">$8800–$880F</td><td class="s">16 B</td><td>VIA 6522</td></tr>
+      <tr><td class="a">$8810–$8813</td><td class="s">4 B</td><td>UART 6551</td></tr>
+      <tr><td class="a">$8824</td><td class="s">—</td><td>D64 GoDrive registers</td></tr>
+      <tr><td class="a">$88B0–$88BF</td><td class="s">16 B</td><td>Math coprocessor (8.24 FPU)</td></tr>
+      <tr><td class="a">$9000–$900F</td><td class="s">16 B</td><td>VIC control registers</td></tr>
+      <tr><td class="a">$A000–$CFFF</td><td class="s">12 KB</td><td>Shadow-ROM application window</td></tr>
+      <tr><td class="a">$D400–$D418</td><td class="s">25 B</td><td>SID-compatible audio registers</td></tr>
+      <tr><td class="a">$F000–$FFFF</td><td class="s">4 KB</td><td>Shadow-ROM kernel &amp; vectors</td></tr>
+    </tbody>
+  </table>
+  <div class="two">
+    <div class="deflist">
+      <div class="h">Video</div>
+      <div class="r"><span>Output (Tang)</span><span>HDMI/DVI 640×480 @ 60 Hz</span></div>
+      <div class="r"><span>Pixel clock</span><span>27 MHz · TMDS 135 MHz</span></div>
+      <div class="r"><span>Text mode</span><span>40×25, 16 colors</span></div>
+      <div class="r"><span>Bitmap modes</span><span>1-bpp · RGB332 · RGB222</span></div>
+      <div class="r"><span>Bus overhead</span><span>4.8 % – 9.4 %</span></div>
+    </div>
+    <div class="deflist">
+      <div class="h">Audio &amp; I/O</div>
+      <div class="r"><span>Sound</span><span>SID 6581 · 3 voices + filter</span></div>
+      <div class="r"><span>DAC</span><span>PT8211 I²S · ~47 kHz</span></div>
+      <div class="r"><span>Oscillator</span><span>24-bit phase accumulator</span></div>
+      <div class="r"><span>UART</span><span>115200 8N1 (CH340)</span></div>
+      <div class="r"><span>Input</span><span>PS/2 keyboard · UART</span></div>
+    </div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Boot &amp; clocking</span>
+    <h2>From SD card to a running 6502</h2>
+    <p>A single 27 MHz oscillator feeds a 270 MHz PLL; from it come the TMDS, system and pixel clocks.</p>
+  </div>
+  <div class="flow">
+    <div class="n"><div class="step">01</div><div class="t">microSD</div><div class="d">SPI mode reads the boot image</div></div>
+    <div class="n"><div class="step">02</div><div class="t">sd_rom_loader</div><div class="d">validates sector 0, streams 1…32</div></div>
+    <div class="n"><div class="step">03</div><div class="t">boot_shadow_rom</div><div class="d">16 KB ROM window loaded</div></div>
+    <div class="n"><div class="step">04</div><div class="t">Self-test</div><div class="d">RAM · VRAM · VIA · UART</div></div>
+    <div class="n"><div class="step">05</div><div class="t">T65 release</div><div class="d">Reset vector @ $FFFC</div></div>
+  </div>
+</div></section>
+
+<section id="boards"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Portability</span>
+    <h2>One core, two FPGA platforms</h2>
+    <p>The board-independent RTL core runs on two targets with minimal board glue.</p>
+  </div>
+  <div class="boards">
+    <div class="board active">
+      <span class="tag">Active bring-up platform</span>
+      <h3>Sipeed Tang Primer 20K</h3>
+      <div class="fpga">Gowin GW2A-18</div>
+      <ul>
+        <li><b>HDMI/DVI output</b> through a TMDS serializer</li>
+        <li><b>On-board microSD</b> boot path in SPI mode</li>
+        <li><b>Native SID sound</b> via the dock's PT8211 DAC</li>
+        <li><b>BSRAM backend</b> for low power, DDR3 optional</li>
+        <li><b>PS/2 keyboard</b> over PMOD, CH340 UART</li>
+      </ul>
+    </div>
+    <div class="board ref">
+      <span class="tag">Reference platform</span>
+      <h3>PIX16 Board</h3>
+      <div class="fpga">Xilinx Spartan-6 · xc6slx16</div>
+      <ul>
+        <li><b>VGA text output</b> with a boot status screen</li>
+        <li><b>SDRAM-backed</b> main RAM with self-test</li>
+        <li><b>SD boot</b> of the 16 KB shadow ROM</li>
+        <li><b>UART monitor</b> with live ROM upload</li>
+        <li><b>ISE project</b> versioned and reproducible</li>
+      </ul>
+    </div>
+  </div>
+</div></section>
+
+<section class="lastsec"><div class="wrap">
+  <div class="sec-head">
+    <span class="kicker">Verification</span>
+    <h2>Incrementally tested with GHDL</h2>
+    <p>Every block is independently testable — from address decoding to the FAT32 reader.</p>
+  </div>
+  <table class="sheet">
+    <thead><tr><th class="c3">Testbench area</th><th>Coverage</th></tr></thead>
+    <tbody>
+      <tr><td class="a">Bus &amp; reset</td><td>Address decoding of all device windows, reset-vector fetch, ROM-scripted bus cycles</td></tr>
+      <tr><td class="a">VIA 6522</td><td>Port masking, IER/IFR, Timer-1 IRQ assertion and clearing</td></tr>
+      <tr><td class="a">UART 6551</td><td>Status, TX, RX, overrun, programmed reset, RX IRQ</td></tr>
+      <tr><td class="a">T65 CPU</td><td>Boot from real ROM, UART/VIA access, IRQ handler, kernel smoke test</td></tr>
+      <tr><td class="a">D64 / FAT32</td><td>Real-geometry images read lazily, start LBAs verified</td></tr>
+      <tr><td class="a">SID &amp; FPU</td><td>SID audio/filter bounded &amp; non-silent, 8.24 multiply against reference</td></tr>
+    </tbody>
+  </table>
+</div></section>
+
+<footer><div class="wrap foot">
+  <div>
+    <div class="wordmark"><span class="mk">65</span> 6502 SBC FPGA</div>
+    <div class="muted">Synthesizable VHDL · T65 core · Gowin &amp; Xilinx · compatible with the 6502 emulator machine.</div>
+  </div>
+  <div class="links">
+    <a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a>
+    <a href="https://github.com/rudolfstepan/6502-sbc-fpga/wiki">Wiki</a>
+  </div>
+</div></footer>
+
+</div><!-- /EN -->
+
+<script>
+  function setLang(l){
+    document.getElementById('lang-de').classList.toggle('active', l==='de');
+    document.getElementById('lang-en').classList.toggle('active', l==='en');
+    document.documentElement.lang = l;
+    try{ localStorage.setItem('sbc_lang', l); }catch(e){}
+  }
+  (function(){
+    var saved;
+    try{ saved = localStorage.getItem('sbc_lang'); }catch(e){}
+    if(!saved){ saved = (navigator.language||'de').toLowerCase().indexOf('de')===0 ? 'de' : 'en'; }
+    setLang(saved);
+  })();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>T65 CPU core — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Overview</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Overview</a> / Component 01</div>
+  <span class="kicker">Processor</span>
+  <h1>T65 CPU core <span class="reg">Reset @ $FFFC</span></h1>
+  <p class="lead">The heart of the system: a 6502-compatible soft core that runs unmodified
+     8-bit software — synthesized into FPGA logic instead of a physical chip.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>What it is</h2>
+  <p>The <strong>T65</strong> is an open-source, cycle-accurate VHDL recreation of the
+     MOS 6502 processor. Instead of soldering a real 6502 IC, the soft core describes the
+     CPU's behavior in logic, which the FPGA toolchain synthesizes into the device fabric.
+     The same machine the C emulator models now runs directly in hardware.</p>
+  <p>Between core and system sits a project-specific <strong>bus adapter</strong>
+     (<code class="inl">t65_adapter.vhd</code>) that maps the T65's 24-bit address bus down to
+     the SBC's 16-bit address space and cleanly couples the write strobe, write data and read
+     data input (<code class="inl">DI</code>) to memory and peripherals.</p>
+
+  <div class="facts">
+    <div class="f"><div class="k">Architecture</div><div class="v">MOS 6502 (T65 core)</div></div>
+    <div class="f"><div class="k">Address space</div><div class="v">16-bit · 64 KB</div></div>
+    <div class="f"><div class="k">Data bus</div><div class="v">8-bit</div></div>
+    <div class="f"><div class="k">Effective clock</div><div class="v">up to 27 MHz</div></div>
+  </div>
+
+  <h2>What it does</h2>
+  <p>The core fetches instructions, decodes them and executes the full 6502 instruction set —
+     including all addressing modes, stack operations and interrupt handling.</p>
+  <ul>
+    <li><b>Half system clock:</b> A <code class="inl">cpu_enable</code> signal toggles on every
+        54 MHz system clock, so the T65 advances at effectively up to 27 MHz. Writes are
+        committed on the <code class="inl">cpu_enable = '0'</code> half-cycle — matching synchronous
+        FPGA writes and asynchronous reads.</li>
+    <li><b>Reset sequence:</b> After <code class="inl">reset_n</code> is released, the CPU runs its
+        7 internal cycles and reads the reset vector from <code class="inl">$FFFC–$FFFD</code> in
+        ROM before jumping to the start address.</li>
+    <li><b>Interrupts:</b> The IRQ sources from VIA, UART and VIC are OR-combined
+        (<code class="inl">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</code>); the core
+        branches through the vector at <code class="inl">$FFFE–$FFFF</code>.</li>
+    <li><b>Bus stealing:</b> Through the <code class="inl">RDY</code> input the VIC holds the CPU
+        while it uses the blanking interval to fetch video data — without the CPU losing any writes.</li>
+  </ul>
+
+  <h2>Clocking</h2>
+  <p>A single 27 MHz oscillator feeds a 270 MHz PLL. From it come the 54 MHz system clock
+     (<code class="inl">270 / 5</code>), the 135 MHz TMDS clock and the 27 MHz pixel clock. The CPU
+     core runs at half the system clock via the toggle scheme — fast enough to run BASIC and
+     machine code smoothly.</p>
+
+  <h2>Where it lives in the code</h2>
+  <table class="sheet">
+    <thead><tr><th>File</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td class="a">third_party/t65/rtl/</td><td>Imported T65 core (CPU, ALU, microcode)</td></tr>
+      <tr><td class="a">rtl/core/cpu/t65_adapter.vhd</td><td>16-bit bus adapter, write/read glue</td></tr>
+      <tr><td class="a">rtl/core/sbc_t65_top.vhd</td><td>Fully integrated system top with T65</td></tr>
+    </tbody>
+  </table>
+
+  <p>Verified by GHDL testbenches: boot from a real 6502 ROM
+     (<code class="inl">LDA #$42; STA $0002</code>), UART output, VIA port driving,
+     Timer-1 IRQ handling and a kernel smoke test with composed
+     <code class="inl">kernel.rom + msbasic.rom</code>.</p>
+
+  <div class="pager">
+    <a href="../6502_fpga_computer.html">← Back to overview</a>
+    <a href="vic_en.html">Next component: VIC graphics →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Component detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Overview</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

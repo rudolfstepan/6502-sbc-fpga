@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIA 6522 &amp; UART 6551 — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Übersicht</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 04</div>
+  <span class="kicker">Ein-/Ausgabe</span>
+  <h1>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h1>
+  <p class="lead">Die beiden klassischen I/O-Bausteine: ein vielseitiger Schnittstellen-
+     adapter mit Timern und GPIO, und eine serielle Schnittstelle für Terminal und Upload.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>VIA 6522 — Versatile Interface Adapter</h2>
+  <p>Die <strong>VIA</strong> stellt programmierbare Timer, parallele GPIO-Ports und
+     Interrupt-Logik bereit. Im SBC dient sie als Zeitgeber (Timer 1 löst periodische
+     IRQs aus) und steuert Board-LEDs über Port B.</p>
+  <ul>
+    <li><b>Timer 1</b> im Free-running-Modus erzeugt regelmäßige Interrupts — der Kernel
+        nutzt ihn als ~750-Hz-Tick für Zähler und LED-Blinken.</li>
+    <li><b>Port B Bit 0</b> ist nach dem Boot mit der Board-LED verbunden.</li>
+    <li><b>IER/IFR</b> — Interrupt-Enable- und -Flag-Register steuern, welche Quellen
+        einen IRQ auslösen.</li>
+  </ul>
+
+  <div class="facts">
+    <div class="f"><div class="k">VIA-Fenster</div><div class="v">$8800–$880F (16 B)</div></div>
+    <div class="f"><div class="k">UART-Fenster</div><div class="v">$8810–$8813 (4 B)</div></div>
+    <div class="f"><div class="k">Serielle Rate</div><div class="v">115200 8N1</div></div>
+    <div class="f"><div class="k">IRQ</div><div class="v">VIA · UART · VIC (ODER)</div></div>
+  </div>
+
+  <h2>UART 6551 — serielle Schnittstelle</h2>
+  <p>Die <strong>UART</strong> realisiert die vollständige Sende- und Empfangslogik mit
+     Statusregistern und Empfangs-Interrupt. Sie ist die Hauptverbindung zum PC: über sie
+     laufen das EhBASIC-Terminal, ROM-Uploads und Diagnoseausgaben. Auf dem Tang Primer 20K
+     wird sie über den CH340-USB-Seriell-Wandler mit 115200 8N1 angesprochen.</p>
+  <p>Verifizierte Funktionen (GHDL): Status-Lesen, TX-Schreiben, RX-Lesen, RDRF-Clearing,
+     Overrun-Erkennung, programmierter Reset und RX-IRQ-Verhalten.</p>
+
+  <h2>Tastatur über die serielle Brücke</h2>
+  <p>Eine Besonderheit der FPGA-Umsetzung: Eine <strong>PS/2-Tastatur</strong> wird am PMOD
+     angeschlossen, und ihre Tastendrücke werden direkt in den seriellen Empfangspfad
+     <em>eingespeist</em>. Für EhBASIC sieht das wie normale serielle Eingabe aus — es muss
+     nicht zwischen UART und Tastatur unterscheiden. So funktioniert lokales Tippen am
+     HDMI-Bildschirm ganz ohne separaten Tastatur-Controller.</p>
+
+  <h2>Zusammenspiel der Interrupts</h2>
+  <p>Die IRQ-Leitungen von VIA, UART und VIC werden ODER-verknüpft und gemeinsam an die
+     CPU geführt:</p>
+  <pre class="code">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</pre>
+  <p>Der 6502 verzweigt dann über den Interrupt-Vektor bei <code class="inl">$FFFE–$FFFF</code>
+     in den passenden Handler.</p>
+
+  <div class="pager">
+    <a href="sound.html">← Sound-Chip</a>
+    <a href="godrive.html">Nächste: D64 GoDrive →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Komponenten-Detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Übersicht</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

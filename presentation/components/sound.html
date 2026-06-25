@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SID-kompatibler Sound-Chip — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Übersicht</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 03</div>
+  <span class="kicker">Audio</span>
+  <h1>SID-kompatibler Sound-Chip <span class="reg">$D400–$D418</span></h1>
+  <p class="lead">Ein recht vollständiges MOS-6581-Modell in Logik — vollständig genug, um
+     <strong>originale <code class="inl">.sid</code>-Dateien samt ihrem 6502-Player-Code</strong>
+     mit nur leichter Konvertierung direkt auf der Hardware abzuspielen.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>Was es ist</h2>
+  <p>Der aktive Tang-Primer-20K-Bitstream instanziiert <code class="inl">sid6581.vhd</code> — eine
+     VHDL-Nachbildung des <strong>MOS 6581 (SID)</strong> aus dem Commodore 64. Sie legt das
+     Standard-6581-Registerfenster bei <code class="inl">$D400–$D418</code> offen, sodass SID-Player
+     den Chip genau so ansprechen wie auf einem echten C64.</p>
+  <p>Der Chip ist <strong>mehr oder weniger SID-kompatibel</strong>: Der Großteil des 6581-Verhaltens
+     ist nachgebildet, einige analoge Eigenheiten bewusst angenähert (siehe unten). Auf dem Tang-Build
+     ersetzt er den älteren Vierstimmen-Synthesizer — beide gleichzeitig erschöpften die globalen
+     Taktnetze des Bausteins und destabilisierten die DDR3-PHY-Kalibrierung.</p>
+
+  <div class="facts">
+    <div class="f"><div class="k">Modell</div><div class="v">MOS 6581 (SID)</div></div>
+    <div class="f"><div class="k">Stimmen</div><div class="v">3 · 24-Bit-Phasenakkus</div></div>
+    <div class="f"><div class="k">Oszillatortakt</div><div class="v">~985 kHz PAL φ2</div></div>
+    <div class="f"><div class="k">Filter</div><div class="v">2-polig Multimode (LP/BP/HP)</div></div>
+  </div>
+
+  <h2>Nachgebildete 6581-Funktionen</h2>
+  <table class="sheet">
+    <thead><tr><th>Funktion</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td class="a">Oszillatoren</td><td>3 Stimmen, 24-Bit-Phasenakkumulatoren, ~985 kHz PAL-φ2-Rate</td></tr>
+      <tr><td class="a">Wellenformen</td><td>12-Bit Dreieck, Sägezahn, Pulse (12-Bit Breite), Rauschen (23-Bit-LFSR)</td></tr>
+      <tr><td class="a">Kombiniert</td><td>mehrere Wellenform-Bits werden wire-AND-verknüpft (klassische 6581-Annäherung)</td></tr>
+      <tr><td class="a">ADSR</td><td><strong>zyklusgenau</strong>: reSID-Rate-Counter-Perioden, linearer Attack, exponentieller Decay/Release-Teiler</td></tr>
+      <tr><td class="a">Filter</td><td>2-polige State-Variable-Multimode (LP/BP/HP), Per-Voice-Routing ($D417), 11-Bit-Cutoff</td></tr>
+      <tr><td class="a">Cutoff-Kurve</td><td>nichtlineare „Dark-6581"-Annäherung — mittlere Werte bleiben tief, der Bass klingt rund</td></tr>
+      <tr><td class="a">Resonanz</td><td>bewusst schwaches Q (~0,7…2), wie beim 6581, ohne Limiter-Clipping</td></tr>
+      <tr><td class="a">Hard Sync</td><td>Oszillator-Reset bei steigendem MSB der Vorstimme (CONTROL-Bit 1)</td></tr>
+      <tr><td class="a">Ringmodulation</td><td>Dreieck-Fold-Bit XOR mit MSB der Vorstimme (CONTROL-Bit 2)</td></tr>
+      <tr><td class="a">Master-Volume</td><td>$D418-Lownibble; Voice-3-Abschaltung ($D418 Bit 7) berücksichtigt</td></tr>
+    </tbody>
+  </table>
+  <p>Der Filter läuft einmal pro SID-Tick über eine interne 3-Stufen-Pipeline (eine Multiplikation
+     pro Takt), sodass die beiden seriellen Koeffizienten-Multiplikationen nie denselben 54-MHz-Pfad
+     teilen; die Filterzustände saturieren, damit die SVF nicht „explodiert".</p>
+
+  <div class="lead-note"><b>Noch nicht modelliert:</b> die analoge DAC-Nichtlinearität / DC-„Wärme"
+     des 6581 und die sample-ROM-exakten Tabellen für kombinierte Wellenformen (das Wire-AND ist
+     eine Annäherung). Cutoff- und Resonanz-Mapping sind in <code class="inl">sid6581.vhd</code> für
+     helleres/dunkleres Voicing einstellbar.</p>
+
+  <h2>Originale SID-Dateien abspielen</h2>
+  <p>Das ist das Herzstück der Demo. <code class="inl">tools/build_native_sid_rom.py</code> macht aus
+     einer PSID/RSID-Datei eine lauffähige ROM — und zwar <strong>ohne verlustbehaftete
+     50-Hz-Registerkonvertierung</strong>. Stattdessen:</p>
+  <ul>
+    <li>Der <b>originale 6502-Payload</b> der SID-Datei wird unverändert eingebettet,</li>
+    <li>zur nativen Ladeadresse kopiert,</li>
+    <li>die <code class="inl">init</code>-Routine der Tune einmal aufgerufen,</li>
+    <li>und die <code class="inl">play</code>-Routine alle 20 ms (50 Hz) ausgeführt.</li>
+  </ul>
+  <p>Dadurch erreichen <strong>alle Schreibzugriffe — Frequenz, Pulsbreite, Control, ADSR und Filter —
+     die Hardware exakt so, wie der Original-Player sie erzeugt</strong>. Es läuft echter C64-Player-Code
+     auf dem echten 6502-Kern, der einen echten SID-Nachbau ansteuert.</p>
+
+  <h3>Voraussetzungen einer Tune</h3>
+  <ul>
+    <li>echte <code class="inl">play</code>-Adresse (kein IRQ/CIA-getriebenes RSID),</li>
+    <li>lädt in den linearen RAM <code class="inl">$0200–$5FFF</code>,</li>
+    <li>Payload passt ins 12-KB-ROM-Fenster bei <code class="inl">$A000</code>,</li>
+    <li>Single-Speed-PAL (50 Hz <code class="inl">play</code>).</li>
+  </ul>
+
+  <h3>Mitgelieferte Beispiele</h3>
+  <table class="sheet">
+    <thead><tr><th>ROM</th><th>Tune</th><th>Besonderheit</th></tr></thead>
+    <tbody>
+      <tr><td class="a">soundsid.rom</td><td>World_Record_2.sid</td><td>ohne Filter/Sync/Ring</td></tr>
+      <tr><td class="a">sound_commando.rom</td><td>Commando.sid</td><td>nutzt den Tiefpassfilter stark</td></tr>
+    </tbody>
+  </table>
+  <pre class="code"><span class="c"># eine Tune wrappen und abspielen</span>
+python tools/build_native_sid_rom.py path/to/tune.sid sw/&lt;name&gt;.s
+make -C sw upload-sound-commando      <span class="c"># Build + Upload in einem Schritt</span>
+
+<span class="c"># oder gleich eine ganze Sammlung wrappen</span>
+python tools/build_all_sid_roms.py    <span class="c"># baut spielbare ROMs + .bat-Dateien</span></pre>
+  <p>Der Bulk-Builder lässt jede Tune zusätzlich durch den Bare-Metal-6502-SID-Emulator laufen und
+     <strong>überspringt stumme Tunes</strong> — Player, die ohne CIA/VIC/KERNAL keinen Ton erzeugen.</p>
+
+  <h2>SID-Register ($D400)</h2>
+  <p>Standard-6581-Layout, drei Stimmen je 7 Register plus globale Filter-/Volume-Register:</p>
+  <table class="sheet">
+    <thead><tr><th>Adresse</th><th>Register</th></tr></thead>
+    <tbody>
+      <tr><td class="a">$D400–$D406</td><td>Stimme 1: Freq, Pulsbreite, Control, ADSR</td></tr>
+      <tr><td class="a">$D407–$D40D</td><td>Stimme 2 (gleiche Aufteilung)</td></tr>
+      <tr><td class="a">$D40E–$D414</td><td>Stimme 3 (gleiche Aufteilung)</td></tr>
+      <tr><td class="a">$D415–$D416</td><td>Filter-Cutoff (11 Bit)</td></tr>
+      <tr><td class="a">$D417</td><td>Resonanz &amp; Filter-Routing pro Stimme</td></tr>
+      <tr><td class="a">$D418</td><td>Filtermodus &amp; Master-Volume</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Hardware-Ausgabe</h2>
+  <p>Das vorzeichenbehaftete 16-Bit-Sample wird über den I²S-Serializer in
+     <code class="inl">pt8211_dac.vhd</code> zum <strong>PT8211 (TM8211)</strong>-DAC des Docks
+     geschoben (~47 kHz). Der Power-Amp-Enable-Pin (<code class="inl">PA_EN</code>, R16) wird fest auf
+     High gehalten, sonst bleibt der Kopfhörerverstärker stumm.</p>
+
+  <h2>Alternative Synthesizer</h2>
+  <p>Im Repository liegen für andere Ziele zwei weitere, register-kompatible Klangerzeuger:</p>
+  <ul>
+    <li><b>Großer 4-Stimmen-Chip</b> (<code class="inl">sound_chip4.vhd</code>) — 4 Stimmen, fünf
+        Wellenformen (Sinus, Rechteck, Sägezahn, Dreieck, Rauschen), volle ADSR, Notenlänge und Mixer;
+        das vollständige Modell des C-Emulators.</li>
+    <li><b>Bring-up-Einzelstimme</b> (<code class="inl">sound_voice.vhd</code>) — eine Stimme,
+        Rechteck + Rauschen, ohne Hüllkurve; die minimale Variante.</li>
+  </ul>
+
+  <h2>Verifikation</h2>
+  <p>GHDL-Testbenches prüfen, dass der SID-Kern Audio erzeugt (Filter aus, rückwärtskompatibler Pegel),
+     der Filter beschränkt bleibt und eine niedrige Cutoff dämpft, sowie dass kombinierte Wellenformen,
+     Ringmodulation und Hard Sync verdrahtet, beschränkt und nicht stumm sind.</p>
+
+  <div class="pager">
+    <a href="vic.html">← VIC-Grafik</a>
+    <a href="io.html">Nächste: VIA &amp; UART →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Komponenten-Detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Übersicht</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

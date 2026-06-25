@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VIC-Grafik — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Übersicht</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 02</div>
+  <span class="kicker">Grafik</span>
+  <h1>VIC-Grafik <span class="reg">$8000 · $9000</span></h1>
+  <p class="lead">Der Video-Controller erzeugt das Bild: Text, Farben und mehrere
+     Bitmap-Modi — ausgegeben als VGA oder HDMI, getaktet direkt aus der FPGA-Logik.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>Was es ist</h2>
+  <p>Der <strong>VIC</strong> (Video Interface Controller) ist der Grafikbaustein des
+     Systems. Er liest Zeichen-, Farb- und Bitmap-Daten aus dem Video-RAM und erzeugt
+     daraus ein vollständiges Videosignal mit eigener Zeilen- und Bildsynchronisation —
+     auf dem Tang Primer 20K als HDMI/DVI, auf dem PIX16 als VGA.</p>
+
+  <div class="facts">
+    <div class="f"><div class="k">Auflösung</div><div class="v">640×480 @ 60 Hz</div></div>
+    <div class="f"><div class="k">Pixeltakt</div><div class="v">27 MHz</div></div>
+    <div class="f"><div class="k">Textmodus</div><div class="v">40×25, 16 Farben</div></div>
+    <div class="f"><div class="k">Bitmap-Modi</div><div class="v">1-bpp · RGB332 · RGB222</div></div>
+  </div>
+
+  <h2>Was es macht</h2>
+  <h3>Textmodus</h3>
+  <p>40×25 Zeichen, jedes 2× skaliert (16×16 Bildschirmpixel). Die Zeichenmuster liegen
+     im <code class="inl">char_rom</code> (8×8 Pixel, Bit 7 = invers). Jede Zelle hat eigene
+     Vorder- und Hintergrundfarbe aus dem Farb-RAM bei <code class="inl">$8400</code>, gepackt
+     als <code class="inl">bg[7:4] | fg[3:0]</code>. Die 16-Farben-Palette ist als
+     RGB565-Lookup im Pepto-C64-Stil hinterlegt.</p>
+
+  <h3>Bitmap-Modi</h3>
+  <ul>
+    <li><b>320×200 1-bpp</b> — Legacy-Bitmap, 2× skaliert auf 640×400, 16 Farben pro 8×8-Zelle.</li>
+    <li><b>160×100 RGB332</b> — 256 Farben, ein Byte je Pixel, 4× skaliert auf 640×400.</li>
+    <li><b>180×120 RGB222</b> — 64 Farben gepackt (4 Pixel in 3 Bytes), 3× skaliert auf 540×360.</li>
+  </ul>
+  <p>Der 16-KB-Framebuffer wird über ein 8-KB-CPU-Fenster bei <code class="inl">$6000–$7FFF</code>
+     sichtbar; ein MODE-Bit wählt die Bank. Das Steuerregister <code class="inl">$9000</code>
+     schaltet zwischen den Modi um.</p>
+
+  <h3>Bus-Stealing — der geteilte Bus</h3>
+  <p>VIC und CPU teilen sich einen Single-Port-Videospeicher. Während jeder horizontalen
+     Austastlücke holt der VIC die nächste Bildzeile vor und hält die CPU über den
+     <code class="inl">RDY</code>-Pin an. Der Overhead ist gering: <strong>~4,8 %</strong> im
+     Textmodus, im Worst Case <strong>9,4 %</strong> bei RGB332. CPU-Schreibzugriffe ins
+     Video-RAM gehen dabei nie verloren — eine ausstehende Schreiboperation wird
+     gepuffert und im ersten freien Takt committet.</p>
+
+  <h2>Farb-Register</h2>
+  <table class="sheet">
+    <thead><tr><th>Adresse</th><th>Register</th><th>Funktion</th></tr></thead>
+    <tbody>
+      <tr><td class="a">$9000</td><td>MODE</td><td>Bit 0 Bitmap, Bit 1 RGB332, Bit 2 Bank, Bit 3 RGB222</td></tr>
+      <tr><td class="a">$9003</td><td>TEXT_COLOR</td><td>Vordergrundfarbe 0–15</td></tr>
+      <tr><td class="a">$9004</td><td>BG_COLOR</td><td>Hintergrundfarbe 0–15</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Aus BASIC</h2>
+  <pre class="code"><span class="c">REM Bitmap-Modus an, Pixel setzen</span>
+POKE 36864, 1
+A=24576+Y*40+INT(X/8)
+POKE A, PEEK(A) OR 2^(7-(X AND 7))
+POKE 36864, 0          <span class="c">: REM zurück zu Text</span></pre>
+
+  <div class="pager">
+    <a href="cpu.html">← T65 CPU-Kern</a>
+    <a href="sound.html">Nächste: Sound-Chip →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Komponenten-Detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Übersicht</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

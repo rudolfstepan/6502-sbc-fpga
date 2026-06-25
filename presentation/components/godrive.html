@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>D64 GoDrive — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Übersicht</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 05</div>
+  <span class="kicker">Massenspeicher</span>
+  <h1>D64 GoDrive <span class="reg">$8824</span></h1>
+  <p class="lead">Ein virtuelles Diskettenlaufwerk: Die FPGA liest <code class="inl">.d64</code>-Images
+     von SD-Karte und zeigt dem 6502 ein einfaches Laufwerk — das ganze Dateisystem steckt in Logik.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>Was es ist</h2>
+  <p>Das <strong>D64 GoDrive</strong> lässt den 6502 Programme von einem <code class="inl">.d64</code>-
+     Disk-Image laden. Diese Images liegen auf einer <strong>zweiten SD-Karte</strong>
+     (dem <code class="inl">sd2_*</code>-Datenträger, FAT32-formatiert); die erste Karte mit dem
+     ROM-Loader bleibt unberührt. Der Clou: Die gesamte FAT32- und D64-Auswertung passiert in
+     der FPGA-Logik. Der 6502 sieht nur einfache 256-Byte-Sektoren und muss <strong>nie
+     FAT32 parsen</strong>.</p>
+
+  <div class="lead-note">Das D64-Format ist von Commodore entliehen — aus Bequemlichkeit, nicht
+     für C64-Kompatibilität. Die geladenen Programme sind eigener Code dieses Systems.</div>
+
+  <div class="facts">
+    <div class="f"><div class="k">Datenträger</div><div class="v">2. SD-Karte · FAT32</div></div>
+    <div class="f"><div class="k">Register</div><div class="v">$8824</div></div>
+    <div class="f"><div class="k">Sektorgröße</div><div class="v">256 Byte (D64)</div></div>
+    <div class="f"><div class="k">Status</div><div class="v">HW-verifiziert (2026)</div></div>
+  </div>
+
+  <h2>Was es macht</h2>
+  <p>Aus EhBASIC heraus bedient sich das Laufwerk mit vertrauten Befehlen:</p>
+  <table class="sheet">
+    <thead><tr><th>Befehl</th><th>Wirkung</th></tr></thead>
+    <tbody>
+      <tr><td class="a">LOAD "!"</td><td>Interaktives Auswahlmenü aller <code class="inl">.d64</code>-Images per Pfeiltasten</td></tr>
+      <tr><td class="a">LOAD "$"</td><td>Verzeichnis des gemounteten Images anzeigen</td></tr>
+      <tr><td class="a">LOAD "NAME"</td><td>Programm laden (gibt die <code class="inl">CALL</code>-Adresse aus)</td></tr>
+      <tr><td class="a">CALL &lt;addr&gt;</td><td>Geladenes Programm starten</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Aufbau in Logik</h2>
+  <p>Vier RTL-Schichten unter <code class="inl">rtl/core/peripherals/</code> arbeiten zusammen:</p>
+  <ul>
+    <li><b>d64_sector_map.vhd</b> — kombinatorische Umrechnung D64-Track/Sektor → linearer Index.</li>
+    <li><b>d64_drive.vhd</b> — Read-only-Sektor-Engine: Mount-Metadaten, T/S→LBA, 512→256-Halbsektor-
+        Erfassung, 256-Byte-Puffer.</li>
+    <li><b>fat32_reader.vhd</b> — erkennt MBR oder Superfloppy automatisch, parst den BPB, durchsucht
+        das Root-Verzeichnis nach dem ersten <code class="inl">.D64</code> und prüft die FAT-Ketten-
+        Kontiguität.</li>
+    <li><b>d64_subsystem.vhd</b> — die 6502-Registerschnittstelle bei <code class="inl">$8824</code>,
+        die beide Engines kapselt und den einzelnen SD-Lesekanal arbitriert.</li>
+  </ul>
+
+  <h2>Robust gegenüber echten SD-Karten</h2>
+  <p>Windows-formatierte SD-Karten sind oft <strong>Superfloppy</strong> (ohne MBR, BPB bei LBA 0)
+     mit großer Geometrie und enthalten Einträge wie <code class="inl">System Volume Information</code>,
+     Langnamen-Einträge oder eine gelöschte <code class="inl">.D64</code> vor der gewünschten Datei.
+     Der Reader behandelt all diese Fälle. Verifiziert auf einer realen 32-GB-Karte: Image mounten,
+     BAM lesen, Verzeichnis listen und ein Programm in den korrekten Adressbereich laden.</p>
+
+  <h2>Werkzeuge</h2>
+  <p>Unter <code class="inl">tools/d64/</code> liegen Python-Werkzeuge, die dieselbe Sektor-Abbildung
+     wie die Hardware verwenden: Images erzeugen (<code class="inl">create_test_d64.py</code>),
+     auflisten, Programme extrahieren und FAT32-Kartenabbilder für Simulationen bauen.</p>
+
+  <div class="pager">
+    <a href="io.html">← VIA &amp; UART</a>
+    <a href="fpu.html">Nächste: Math-Coprozessor →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Komponenten-Detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Übersicht</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>

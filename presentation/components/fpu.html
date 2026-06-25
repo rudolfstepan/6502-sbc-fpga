@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Math-Coprozessor — 6502 SBC FPGA</title>
+<link rel="stylesheet" href="detail.css">
+</head>
+<body>
+
+<div class="topbar"><div class="wrap">
+  <div class="wordmark"><span class="mk">65</span> 6502&nbsp;SBC&nbsp;FPGA</div>
+  <a class="back" href="../6502_fpga_computer.html">← Übersicht</a>
+</div></div>
+
+<div class="head"><div class="wrap">
+  <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 06</div>
+  <span class="kicker">Beschleuniger</span>
+  <h1>Math-Coprozessor <span class="reg">$88B0</span></h1>
+  <p class="lead">Ein speicherabgebildeter Festkomma-Multiplizierer, der dem 6502 genau das
+     abnimmt, was er am schlechtesten kann: schnelle Multiplikation.</p>
+</div></div>
+
+<main><div class="wrap">
+
+  <h2>Was es ist</h2>
+  <p>Der <strong>Math-Coprozessor</strong> verwandelt die Hardware-DSP-Blöcke des FPGA in
+     eine Peripherie, die die CPU mit wenigen Store/Load-Befehlen ansteuert. Der 6502 hat
+     keinen Multiplikationsbefehl — in Software kostet ein Festkomma-Produkt rund
+     <strong>250 Zyklen</strong>. Eine vorzeichenbehaftete Multiplikation bildet hier auf
+     einen einzigen Hardware-DSP ab und ist in einem Takt fertig.</p>
+
+  <div class="facts">
+    <div class="f"><div class="k">Operation</div><div class="v">signed 32×32 → 64 Bit</div></div>
+    <div class="f"><div class="k">Format</div><div class="v">8.24 Festkomma (Shift wählbar)</div></div>
+    <div class="f"><div class="k">Latenz</div><div class="v">2 Takte · keine Wait-States</div></div>
+    <div class="f"><div class="k">FPGA-Kosten</div><div class="v">~4 DSP18 von 48 (GW2A-18)</div></div>
+  </div>
+
+  <h2>Was es macht</h2>
+  <p>Die Einheit multipliziert kontinuierlich, was in den Operanden-Registern A und B liegt,
+     und liefert sowohl das volle 64-Bit-Produkt als auch ein arithmetisch nach rechts
+     geschobenes Ergebnis. Der Shift ist über ein Register wählbar (0…63), sodass dasselbe
+     Werkzeug jedes Q-Format bedient — <code class="inl">SHIFT = 24</code> ergibt 8.24,
+     <code class="inl">SHIFT = 12</code> ergibt 4.12.</p>
+
+  <h3>Warum das wichtig ist</h3>
+  <table class="sheet">
+    <thead><tr><th></th><th>Software (4.12)</th><th>Coprozessor (8.24)</th></tr></thead>
+    <tbody>
+      <tr><td class="a">Pro Multiplikation</td><td>~250 Zyklen</td><td>~12–20 Zyklen</td></tr>
+      <tr><td class="a">Vorzeichen</td><td>manuell in 6502</td><td>in Hardware</td></tr>
+      <tr><td class="a">Normalisierung</td><td>4× lsr/ror-Kette</td><td>gratis (Hardware)</td></tr>
+      <tr><td class="a">Genauigkeit</td><td>12 Nachkommabits</td><td>24 Nachkommabits</td></tr>
+      <tr><td class="a">Mandelbrot 320×200</td><td>~5–8 min</td><td>~10 s</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Register ($88B0)</h2>
+  <table class="sheet">
+    <thead><tr><th>Adresse</th><th>Schreiben</th><th>Lesen</th></tr></thead>
+    <tbody>
+      <tr><td class="a">$88B0–$88B3</td><td>Operand A (4 Byte, LE)</td><td>rohes Produkt, Byte 0–3</td></tr>
+      <tr><td class="a">$88B4–$88B7</td><td>Operand B (4 Byte, LE)</td><td>rohes Produkt, Byte 4–7</td></tr>
+      <tr><td class="a">$88B8–$88BB</td><td>—</td><td>Ergebnis (A·B) &gt;&gt; SHIFT (4 Byte)</td></tr>
+      <tr><td class="a">$88BC</td><td>SHIFT (0…63)</td><td>SHIFT</td></tr>
+    </tbody>
+  </table>
+  <p>Alle Werte sind <strong>little-endian</strong> — passend dazu, wie der 6502 Mehrbyte-Wörter
+     ablegt. Es gibt kein „Start"-Strobe: Das Ergebnis folgt den Operanden zwei Takte später,
+     und weil der 6502 ohnehin mehrere Zyklen bis zum nächsten Lesezugriff braucht, sind keine
+     Wait-States nötig.</p>
+
+  <h2>Verwendung vom 6502</h2>
+  <pre class="code">MUL     = $88B0
+MUL_A   = MUL+0          <span class="c">; Operand A (4 Byte)</span>
+MUL_B   = MUL+4          <span class="c">; Operand B (4 Byte)</span>
+MUL_RES = MUL+8          <span class="c">; Ergebnis (4 Byte)</span>
+
+    <span class="k">lda</span> #24            <span class="c">; einmalig: 8.24 wählen</span>
+    <span class="k">sta</span> MUL+12
+    <span class="c">; A schreiben, B schreiben, Ergebnis lesen ...</span></pre>
+
+  <p>Der Selbsttest <code class="inl">copro_selftest.s</code> rechnet <code class="inl">2.0 × 3.0</code>,
+     prüft auf <code class="inl">$06000000</code> und färbt den Bildschirm bei Erfolg grün, sonst rot.</p>
+
+  <div class="pager">
+    <a href="godrive.html">← D64 GoDrive</a>
+    <a href="../6502_fpga_computer.html">Zurück zur Übersicht →</a>
+  </div>
+</div></main>
+
+<footer><div class="wrap">
+  <div class="muted">6502 SBC FPGA · Komponenten-Detail</div>
+  <div class="links"><a href="../6502_fpga_computer.html">Übersicht</a><a href="https://github.com/rudolfstepan/6502-sbc-fpga">GitHub</a></div>
+</div></footer>
+
+</body>
+</html>
