@@ -1178,6 +1178,12 @@ ok:
     ldx #0
     jsr disk_read_sector
     bcs skiphdr
+    ldx #4                 ; 4-space indent (match the file lines below)
+hindent:
+    lda #' '
+    jsr CHROUT
+    dex
+    bne hindent
     lda #'0'
     jsr CHROUT
     lda #' '
@@ -1290,15 +1296,18 @@ no:
     rts
 .endproc
 
-; print_entry -- 1541-style line:  blocks  "NAME" PRG
+; print_entry -- directory line:  ____"NAME" PRG
+; The line starts with a 4-space indent (no leading block count) so the user can
+; position the cursor at the start, type LOAD over the spaces, and press Enter:
+; the line becomes  LOAD"NAME" PRG  which BASIC loads (the trailing type is
+; ignored by the LOAD hook).
 .proc print_entry
-    lda DK_ENTRY+DE_SIZEL
-    sta DK_NUML
-    lda DK_ENTRY+DE_SIZEH
-    sta DK_NUMH
-    jsr print_dec16        ; block count, decimal
+    ldx #4                 ; 4-space indent = room to type "LOAD"
+indent:
     lda #' '
     jsr CHROUT
+    dex
+    bne indent
     lda #'"'
     jsr CHROUT
     ldy #0

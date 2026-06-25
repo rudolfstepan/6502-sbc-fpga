@@ -113,15 +113,26 @@ kernel), evaluates the string argument, copies the name to a buffer, and calls
 ### Listing the directory and running a program from BASIC
 
 ```basic
+LOAD "!"          : REM interactive .d64 select menu (cursor keys + Enter)
 LOAD "$"          : REM 1541-style: print the directory to the screen
 LOAD "ZOIDS"      : REM kernel mounts + loads the PRG to its embedded address
 CALL 6912         : REM jump to the program's entry (here $1B00)
 ```
 
-`LOAD "$"` prints the directory directly (1541-style) — disk name, then one line
-per file `blocks "NAME" PRG` with the block count in decimal — and returns to
-BASIC without touching the program in memory.  (It does *not* load `$` as a
-program to be `LIST`ed; it prints immediately.)
+`LOAD "!"` opens an arrow-key menu of every `.d64` on the FAT32 card and mounts
+the one you pick (see the menu section below), then prints its directory.
+
+`LOAD "$"` prints the directory of the mounted disk and returns to BASIC without
+touching the program in memory.  (It does *not* load `$` as a program to be
+`LIST`ed; it prints immediately.)
+
+The listing is printed **indented 4 spaces**, with each file line as
+`____"NAME" PRG` (no leading block count).  This is so you can run a program
+straight from the listing the C64 way: move the cursor to the start of a file
+line, type `LOAD` over the four spaces so the line reads `LOAD"NAME" PRG`, and
+press Enter.  The kernel's screen-edit replay rebuilds the edited line and the
+LOAD hook evaluates `"NAME"` (the trailing type label is ignored).  See
+[SCREEN_EDITOR_REPLAY.md](./SCREEN_EDITOR_REPLAY.md).
 
 `LOAD "NAME"` only loads; it does not auto-run.  On success it prints the entry
 address to use, e.g.:
