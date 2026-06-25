@@ -3,8 +3,11 @@
 -- Clock: 27 MHz oscillator -> 270 MHz PLL root -> 135 MHz TMDS,
 --   54 MHz SBC system clock, and 27 MHz pixel clock.
 --
--- Video: vic_vga runs at CLK_DIV=1 (27 MHz pixel), 858x525 total (CEA 480p),
---   giving 640x480 @ 31.47 kHz H / 59.94 Hz V.  Encoded to DVI TMDS over HDMI.
+-- Video: vic_vga/boot_vga run with CEA_480P=true (27 MHz pixel, 858x525 total)
+--   emitting an exact CEA-861 720x480p (VIC 3) frame at 31.47 kHz H / 59.94 Hz V.
+--   The native 640x480 content is pillarboxed (40 px black border L/R) into the
+--   720 active region so HDMI capture devices lock onto a standard mode.
+--   Encoded to DVI TMDS over HDMI.
 --
 -- KEY[0] = T10 (dock S0, LVCMOS33, active-low reset button):
 --                short press  -> CPU soft reset (restart program, keep ROM/boot)
@@ -617,7 +620,7 @@ begin
     );
 
   sbc_i : entity work.sbc_t65_boot_monitor_top
-    generic map (CLK_HZ => 54_000_000, BAUD => BAUD)
+    generic map (CLK_HZ => 54_000_000, BAUD => BAUD, CEA_480P => true)
     port map (
       clk           => clk_sys,
       reset_n       => reset_n,
@@ -686,7 +689,7 @@ begin
     );
 
   boot_vga_i : entity work.boot_vga_debug
-    generic map (CLK_DIV => 2)
+    generic map (CLK_DIV => 2, CEA_480P => true)
     port map (
       clk             => clk_sys,
       reset_n         => reset_n,

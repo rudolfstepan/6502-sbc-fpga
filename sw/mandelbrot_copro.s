@@ -40,12 +40,15 @@ MODE_RGB0   = $09           ; bitmap + packed RGB222, framebuffer bank 0
 MODE_RGB1   = $0D           ; bitmap + packed RGB222, framebuffer bank 1
 
 ; --- Mandelbrot constants (8.24 fixed-point) ---
-; View: real -2.1..+0.9 (width 3.0), imag -1.0..+1.0 (height 2.0)
-; This matches the 180:120 aspect ratio: both axes use a 1/60 pixel step.
-X_LEFT      = $FDE66666     ; -2.1 in 8.24
-CI_START    = $FF000000     ; -1.0 in 8.24
-SX_STEP     = $00044444     ; 3.0/180 * 2^24 ~= 279620
-SY_STEP     = $00044444     ; 2.0/120 * 2^24 ~= 279620
+; View: real -2.625..+1.125 (width 3.75), imag -1.25..+1.25 (height 2.5).
+; Zoomed out from the old -2.1..+0.9 / -1.0..+1.0: the old imag range clipped
+; the set's top/bottom bulbs (which reach ~+/-1.13). Now the whole set fits with
+; margin. Both axes share a 1/48 pixel step, so pixels stay square
+; (180*1/48 = 3.75 wide, 120*1/48 = 2.5 tall).
+X_LEFT      = $FD600000     ; -2.625 in 8.24
+CI_START    = $FEC00000     ; -1.25 in 8.24
+SX_STEP     = $00055555     ; 1/48 * 2^24 ~= 349525  (3.75/180 = 2.5/120)
+SY_STEP     = $00055555     ; 1/48 * 2^24 ~= 349525
 ESCAPE_INT  = $04           ; |z|^2 >= 4.0 -> integer byte (bits 24-31) >= 4
 MAX_ITER    = 32            ; more contour detail than the old 20
 
@@ -162,6 +165,10 @@ RESET:
     ; --- Enable 180x120 packed RGB222 mode, framebuffer bank 0 ---
     lda #MODE_RGB0
     sta VIC_MODE
+
+    ; --- Clear the framebuffer first so the previous render does not linger;
+    ;     the new image then visibly builds up from a black screen. ---
+    jsr clear_fb
 
     ; --- Initialize outer loop ---
     LD32I CI, CI_START
@@ -397,6 +404,37 @@ wait_key:
 
 halt:
     jmp halt
+
+; Clear the whole 16 KiB framebuffer (both 8 KiB CPU-window banks) to black.
+; Leaves the mode at MODE_RGB0 / bank 0 so rendering can start writing linearly.
+clear_fb:
+    lda #MODE_RGB0
+    sta VIC_MODE            ; bank 0 in the $6000 window
+    jsr clear_window
+    lda #MODE_RGB1
+    sta VIC_MODE            ; bank 1 in the $6000 window
+    jsr clear_window
+    lda #MODE_RGB0
+    sta VIC_MODE            ; rendering starts in bank 0
+    rts
+
+; Zero $6000-$7FFF (8 KiB) of the currently banked framebuffer window.
+clear_window:
+    lda #<BMP_BASE
+    sta BMPLO
+    lda #>BMP_BASE
+    sta BMPHI
+    lda #0
+    tay                     ; Y = 0 index (stays 0); A = 0 (stays 0)
+@cw:
+    sta (BMPLO),y
+    inc BMPLO
+    bne @cw
+    inc BMPHI
+    ldx BMPHI
+    cpx #$80                ; past $7FFF -> done
+    bne @cw
+    rts
 
 ; Write A to the current framebuffer byte and switch CPU banks at 8 KiB.
 store_byte:

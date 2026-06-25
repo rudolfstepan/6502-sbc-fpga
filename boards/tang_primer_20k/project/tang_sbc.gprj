@@ -57,8 +57,10 @@
         <!-- SBC core (internal BSRAM + SD-loaded shadow ROM + UART monitor) -->
         <File path="../../../rtl/core/sbc_t65_boot_monitor_top.vhd" type="file.vhdl" enable="1"/>
 
-        <!-- HDMI TMDS encoder (generic, reusable) -->
+        <!-- HDMI TMDS encoder (generic, reusable) + HDMI data-island/AVI-InfoFrame -->
         <File path="../../../rtl/core/hdmi/tmds_encoder.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/hdmi/hdmi_encoder.vhd" type="file.vhdl" enable="1"/>
 
         <!-- DDR3 main RAM: Gowin DDR3 Memory Interface IP + rPLL (generated) -->
         <File path="src/gowin_rpll/gowin_rpll.v" type="file.verilog" enable="1"/>

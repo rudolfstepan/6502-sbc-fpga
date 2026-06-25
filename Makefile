@@ -36,7 +36,9 @@ RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/boot/boot_sdram_test.vhd rtl/core/boot/uart_debug_monitor.vhd \
       rtl/core/cpu/t65_adapter.vhd rtl/core/cpu6502_slot.vhd rtl/core/sbc_top.vhd \
       rtl/core/sbc_t65_top.vhd rtl/core/sbc_t65_boot_top.vhd \
-      rtl/core/sbc_t65_sdram_boot_top.vhd
+      rtl/core/sbc_t65_sdram_boot_top.vhd \
+      rtl/core/hdmi/hdmi_data_island_pkg.vhd rtl/core/hdmi/tmds_encoder.vhd \
+      rtl/core/hdmi/hdmi_encoder.vhd
 
 SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.vhd \
       sim/tb/tb_sbc_sram_readback.vhd sim/tb/tb_via6522.vhd sim/tb/tb_uart6551.vhd \
@@ -51,7 +53,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_sound_voice.vhd sim/tb/tb_vram_steal_race.vhd \
       sim/tb/tb_vram_read_steal.vhd sim/tb/tb_sound_chip4.vhd \
       sim/tb/tb_d64_sector_map.vhd sim/tb/tb_d64_drive.vhd \
-      sim/tb/tb_fat32_reader.vhd sim/tb/tb_d64_subsystem.vhd
+      sim/tb/tb_fat32_reader.vhd sim/tb/tb_d64_subsystem.vhd \
+      sim/tb/tb_hdmi_encoder.vhd
 
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
@@ -171,6 +174,8 @@ test: roms fat32-card-image
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color256 $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_vic_color64
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color64 $(GHDL_RUN_FLAGS)
+	$(GHDL) -e $(GHDL_FLAGS) tb_hdmi_encoder
+	$(GHDL) -r $(GHDL_FLAGS) tb_hdmi_encoder $(GHDL_RUN_FLAGS) --stop-time=30ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_bram_byte_bridge
 	$(GHDL) -r $(GHDL_FLAGS) tb_bram_byte_bridge $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_sound_voice

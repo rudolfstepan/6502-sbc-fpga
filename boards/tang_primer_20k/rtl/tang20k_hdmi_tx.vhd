@@ -1,5 +1,7 @@
 -- Tang Primer 20K HDMI transmitter.
--- Takes VGA-style RGB + sync signals and outputs DVI-compatible TMDS over HDMI.
+-- Takes VGA-style RGB + sync signals and outputs HDMI TMDS. The hdmi_encoder
+-- adds the HDMI data island carrying an AVI InfoFrame (plus video preamble and
+-- guard bands), so capture devices that reject bare DVI recognise the format.
 --
 -- System clock: 54 MHz (T65 effective 27 MHz through its two-phase bus).
 -- Pixel clock:  27 MHz (CLK_DIV=2 in vic_vga).
@@ -264,21 +266,15 @@ begin
   g8 <= g_pix & g_pix(5 downto 4);
   b8 <= b_pix & b_pix(4 downto 2);
 
-  -- TMDS encoders (1 cycle latency, synchronous to 27 MHz pixel clock)
-  -- Channel 2: Red
-  enc_r : entity work.tmds_encoder
-    port map (clk => clk_pix_i, reset_n => reset_n, de => de_pix,
-              d => r8, c0 => '0', c1 => '0', q => tmds_r);
-
-  -- Channel 1: Green
-  enc_g : entity work.tmds_encoder
-    port map (clk => clk_pix_i, reset_n => reset_n, de => de_pix,
-              d => g8, c0 => '0', c1 => '0', q => tmds_g);
-
-  -- Channel 0: Blue (carries HS/VS sync during blanking)
-  enc_b : entity work.tmds_encoder
-    port map (clk => clk_pix_i, reset_n => reset_n, de => de_pix,
-              d => b8, c0 => hs_pix, c1 => vs_pix, q => tmds_b);
+  -- HDMI TMDS generator: video 8b/10b plus the HDMI periphery (video
+  -- preamble/guard band on every line and one AVI-InfoFrame data island per
+  -- frame). This turns the stream from bare DVI into HDMI so capture devices
+  -- recognise the format. Generic defaults already match the CEA 480p timing.
+  hdmi_enc : entity work.hdmi_encoder
+    port map (clk => clk_pix_i, reset_n => reset_n,
+              de => de_pix, hs => hs_pix, vs => vs_pix,
+              r8 => r8, g8 => g8, b8 => b8,
+              tmds_ch0 => tmds_b, tmds_ch1 => tmds_g, tmds_ch2 => tmds_r);
 
   -- OSER10 serialisers (PCLK = 27 MHz from CLKDIV, FCLK = 135 MHz from rPLL)
   -- D0 is transmitted first (LSB first matches DVI TMDS bit order)

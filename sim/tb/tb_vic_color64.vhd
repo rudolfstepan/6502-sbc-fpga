@@ -31,8 +31,9 @@ begin
     end if;
   end process;
 
+  -- Test the Tang CEA path where RGB222 is scaled 4x to fill 720x480.
   dut : entity work.vic_vga
-    generic map (CLK_DIV => 2, CURSOR_BLINK_DIV => 1000)
+    generic map (CLK_DIV => 2, CURSOR_BLINK_DIV => 1000, CEA_480P => true)
     port map (
       clk => clk, reset_n => reset_n,
       vic_addr => vic_addr, vram_data => vram_data,
@@ -64,16 +65,16 @@ begin
       wait until falling_edge(hs);
     end loop;
     wait until rising_edge(de);       -- line 60, hc=0
-    wait for 101 * CLK_PERIOD;        -- centered image begins at hc=50
+    wait for 5 * CLK_PERIOD;          -- full-screen RGB222 starts at hc=0 (pixel 0)
     assert r = "11111" and g = "000000" and b = "00000"
       report "packed RGB222 pixel 0 (red) mismatch" severity failure;
-    wait for 6 * CLK_PERIOD;
+    wait for 8 * CLK_PERIOD;          -- 4x scale: each RGB222 pixel is 4 hc wide
     assert r = "00000" and g = "111111" and b = "00000"
       report "packed RGB222 pixel 1 (green) mismatch" severity failure;
-    wait for 6 * CLK_PERIOD;
+    wait for 8 * CLK_PERIOD;
     assert r = "00000" and g = "000000" and b = "11111"
       report "packed RGB222 pixel 2 (blue) mismatch" severity failure;
-    wait for 6 * CLK_PERIOD;
+    wait for 8 * CLK_PERIOD;
     assert r = "11111" and g = "111111" and b = "11111"
       report "packed RGB222 pixel 3 (white) mismatch" severity failure;
 

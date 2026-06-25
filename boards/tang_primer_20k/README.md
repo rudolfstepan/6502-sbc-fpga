@@ -33,11 +33,21 @@ Target: Sipeed Tang Primer 20K (Gowin GW2A-LV18PG256C8/I7)
 
 ## Status
 
-HDMI bring-up is implemented with a Tang-specific top-level wrapper and DVI-style
-TMDS output at 27 MHz pixel clock with CEA-861 480p total timing (858×525),
-giving standard 640×480 @ 59.94 Hz (31.47 kHz H-sync).  An earlier version used
-800×525 totals which produced non-standard 33.75 kHz / 64.3 Hz timing that some
-monitors could not sync to.
+HDMI output uses a Tang-specific top-level wrapper. The TMDS stream is full HDMI
+rather than bare DVI: `hdmi_encoder` inserts a per-frame data island carrying an
+AVI InfoFrame (VIC 2, 720×480p) together with the video preamble and guard bands.
+Bare DVI displayed fine on monitors but many USB HDMI capture devices stayed
+black (or dropped every other frame); the AVI InfoFrame makes them lock onto the
+format. The static InfoFrame packet (BCH ECC + TERC4) is precomputed offline by
+`tools/gen_avi_infoframe.py` into `rtl/core/hdmi/hdmi_data_island_pkg.vhd`.
+
+Timing is exact CEA-861 **720×480p** at 27 MHz pixel clock (858×525 total,
+59.94 Hz, 31.47 kHz H-sync). The text/RGB332 renderer keeps its native 640-wide
+content and pillarboxes it into the 720 active region (40 px black border each
+side); the 180×120 RGB222 mode is instead scaled 4× to fill the whole 720×480
+frame edge to edge. Earlier revisions used 800×525 totals (non-standard
+33.75 kHz / 64.3 Hz) and then a 640-active-in-858 hybrid that monitors tolerated
+but grabbers did not.
 
 The SBC logic runs at 54 MHz. Its two-phase T65 bus advances the CPU every
 second system clock, giving a 27 MHz maximum 6502 bus rate before VIC stalls.

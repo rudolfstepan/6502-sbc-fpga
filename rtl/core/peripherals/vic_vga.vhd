@@ -10,9 +10,12 @@
 --   zeigt Zeichen aus dem 40-Byte Zeilenpuffer mit kombinatorischer
 --   Char-ROM-Ausgabe.
 --
--- Timing: 640x480 @ 59.94 Hz, CEA-861 480p totals (858x525).
---   CLK_DIV=2 with 50 MHz -> 25 MHz pixel clock (PIX16 board).
+-- Timing: 858x525 total. Active width and sync positions are generics.
+--   CLK_DIV=2 with 50 MHz -> 25 MHz pixel clock (PIX16 board, default 640 active).
 --   CLK_DIV=1 with 27 MHz -> 27 MHz pixel clock (Tang Primer 20K).
+--   Tang overrides the generics for exact CEA-861 720x480p (VIC 3): the native
+--   640-wide content is pillarboxed (40 px black border each side) into the
+--   standard 720 active region so HDMI capture devices lock onto a known mode.
 -- Textmodus: 40x25 Zeichen, 2x skaliert (16x16 Bildschirmpixel pro Zeichen)
 -- Randhoehe oben/unten: 40 Pixel
 library ieee;
@@ -28,7 +31,13 @@ entity vic_vga is
     CLK_DIV : natural := 2;
     -- Number of clk cycles per cursor blink phase. 25_000_000 gives a
     -- C64-like half-second phase on 50 MHz boards.
-    CURSOR_BLINK_DIV : positive := 25_000_000
+    CURSOR_BLINK_DIV : positive := 25_000_000;
+    -- Video timing select. Total H/V are fixed at 858x525.
+    --   false = legacy 640-active-in-858 hybrid (25 MHz boards, analog VGA).
+    --   true  = exact CEA-861 720x480p (VIC 3): the native 640-wide content is
+    --           pillarboxed into the standard 720 active region so HDMI capture
+    --           devices recognise a known mode (Tang Primer 20K).
+    CEA_480P : boolean := false
   );
   port (
     clk          : in  std_logic;
@@ -66,25 +75,40 @@ entity vic_vga is
 end entity;
 
 architecture rtl of vic_vga is
-  -- 640x480 @ 59.94 Hz (27 MHz pixel clock, CEA-861 480p total timing)
+  -- Compile-time conditional select (VHDL-93 safe; resolved at elaboration).
+  function ite(c : boolean; a, b : natural) return natural is
+  begin
+    if c then return a; else return b; end if;
+  end function;
+
+  -- 858x525 total @ pixel clock. At 27 MHz -> 59.94 Hz (CEA-861 480p totals).
   -- H_freq = 27 MHz / 858 = 31.47 kHz,  V_freq = 31468 / 525 = 59.94 Hz
-  constant H_VIS  : natural := 640;
   constant H_TOT  : natural := 858;
-  constant H_SS   : natural := 671;   -- H-Sync-Start  (640 + 31 front porch)
-  constant H_SE   : natural := 767;   -- H-Sync-Ende   (671 + 96 sync width)
+  constant H_VIS  : natural := ite(CEA_480P, 720, 640);  -- active / DE width
+  constant H_PILL : natural := ite(CEA_480P,  40,   0);  -- pillarbox border L/R
+  constant H_SS   : natural := ite(CEA_480P, 736, 671);  -- H-Sync-Start
+  constant H_SE   : natural := ite(CEA_480P, 798, 767);  -- H-Sync-Ende
+  -- Native content width (40 chars * 16 px = 640) carved out of the active
+  -- region: [H_PILL, H_CEND).  H_CONT stays 640 for the renderer geometry.
+  constant H_CONT : natural := H_VIS - 2 * H_PILL;
+  constant H_CEND : natural := H_PILL + H_CONT;
 
   constant V_VIS  : natural := 480;
   constant V_TOT  : natural := 525;
-  constant V_SS   : natural := 490;   -- V-Sync-Start  (480 + 10 front porch)
-  constant V_SE   : natural := 492;   -- V-Sync-Ende   (490 + 2 sync width)
+  constant V_SS   : natural := ite(CEA_480P, 489, 490);  -- V-Sync-Start
+  constant V_SE   : natural := ite(CEA_480P, 495, 492);  -- V-Sync-Ende
 
   -- Textbereich: 40px Rand oben, 25 Zeilen * 16 Pixel = 400px, 40px Rand unten
   constant V_BORD : natural := 40;
   constant TV_END : natural := V_BORD + 400;   -- 440
-  constant C64_H_BORD : natural := 50;         -- (640 - 180*3) / 2
-  constant C64_V_BORD : natural := 60;         -- (480 - 120*3) / 2
-  constant C64_H_END  : natural := 590;
-  constant C64_V_END  : natural := 420;
+  -- RGB222 (180x120) scaling. On the Tang CEA 720x480p path it is scaled 4x to
+  -- fill the whole active region (180*4=720, 120*4=480, no border). On the
+  -- 640-wide boards it stays 3x = 540x360, centred (50/60 px border).
+  constant C64_SC     : natural := ite(CEA_480P, 4, 3);
+  constant C64_H_BORD : natural := ite(CEA_480P, 0, 50);
+  constant C64_V_BORD : natural := ite(CEA_480P, 0, 60);
+  constant C64_H_END  : natural := C64_H_BORD + 180 * C64_SC;
+  constant C64_V_END  : natural := C64_V_BORD + 120 * C64_SC;
 
   -- Pixel-Takt-Enable (div2)
   signal pce      : std_logic := '0';
@@ -115,6 +139,8 @@ architecture rtl of vic_vga is
   -- Anzeige-Geometrie (kombinatorisch aus Scanzaehlern)
   -- Breiter Wertebereich um Out-of-Bounds bei Blanking zu vermeiden
   signal in_text  : std_logic;
+  -- Content-relative horizontal coordinate (0..H_CONT-1) inside the pillarbox.
+  signal hx       : natural range 0 to H_CONT - 1 := 0;
   signal v_off    : natural range 0 to V_VIS := 0;
   signal col      : natural range 0 to 39 := 0;
   signal crow     : natural range 0 to 24 := 0;
@@ -244,15 +270,18 @@ begin
             else nv := vc + 1;
             end if;
             -- Zeichenzeile fuer naechste Scanzeile berechnen
-            if nv >= V_BORD and nv < TV_END then
+            if bitmap_mode = '1' and color64_mode = '1' then
+              -- RGB222: C64_SC scanlines per bitmap row (4x full-screen on Tang,
+              -- 3x centred on 640 boards).
+              nr := 0;
+              if nv >= C64_V_BORD and nv < C64_V_END then
+                nb := (nv - C64_V_BORD) / C64_SC;
+              else
+                nb := 0;
+              end if;
+            elsif nv >= V_BORD and nv < TV_END then
               nr := (nv - V_BORD) / 16;
-              if bitmap_mode = '1' and color64_mode = '1' then
-                if nv >= C64_V_BORD and nv < C64_V_END then
-                  nb := (nv - C64_V_BORD) / 3;
-                else
-                  nb := 0;
-                end if;
-              elsif bitmap_mode = '1' and color256_mode = '1' then
+              if bitmap_mode = '1' and color256_mode = '1' then
                 nb := (nv - V_BORD) / 4;
               else
                 nb := (nv - V_BORD) / 2;
@@ -345,17 +374,26 @@ begin
 
   -- Anzeige-Geometrie: col/row auf gueltigen Bereich klemmen
   -- damit kein Out-of-Bounds bei Blanking entsteht
-  in_text <= '1' when hc < H_VIS and vc >= V_BORD and vc < TV_END else '0';
+  -- Pillarbox: hx is the content X (0..H_CONT-1) inside the active region.
+  -- Outside the content window (left/right border, blanking) hx = 0; those
+  -- pixels render as black because in_text/in_color64 are deasserted there.
+  hx <= hc - H_PILL when hc >= H_PILL and hc < H_CEND else 0;
+
+  in_text <= '1' when hc >= H_PILL and hc < H_CEND and
+                       vc >= V_BORD and vc < TV_END else '0';
 
   v_off <= (vc - V_BORD)   when vc >= V_BORD else 0;
-  col   <= hc / 16         when hc < H_VIS   else 0;
+  col   <= hx / 16;
   crow  <= v_off / 16;
   cline <= (v_off / 2) mod 8;
-  cpix  <= (hc  / 2) mod 8;
-  pixel_col <= hc / 4 when hc < H_VIS else 0;
+  cpix  <= (hx  / 2) mod 8;
+  pixel_col <= hx / 4;
+  -- RGB222 maps to the full active region (uses hc, not the pillarboxed hx),
+  -- scaled by C64_SC: on Tang that is 4x -> 720x480 edge to edge (no pillarbox
+  -- for this mode); on 640 boards 3x -> 540x360 centred.
   in_color64 <= '1' when hc >= C64_H_BORD and hc < C64_H_END and
                             vc >= C64_V_BORD and vc < C64_V_END else '0';
-  pixel_col64 <= (hc - C64_H_BORD) / 3
+  pixel_col64 <= (hc - C64_H_BORD) / C64_SC
                  when hc >= C64_H_BORD and hc < C64_H_END else 0;
   pack_base <= (pixel_col64 / 4) * 3;
   pack_sub  <= pixel_col64 mod 4;

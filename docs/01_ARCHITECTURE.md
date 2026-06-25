@@ -39,7 +39,7 @@ and shadow-ROM concept with Tang-specific board glue:
 
 ```text
 Tang Primer 20K board
-  -> HDMI/DVI output through tang20k_hdmi_tx
+  -> HDMI output (CEA 720x480p + AVI InfoFrame) through tang20k_hdmi_tx
   -> CH340 UART at 115200 8N1
   -> on-board microSD/SDIO slot in SPI mode on N10/N11/R14/M8
   -> sd_rom_loader writes the 16 KB ROM window into boot_shadow_rom
@@ -236,8 +236,10 @@ color palette reference.
 
 The VIC supports a legacy 320×200 bitmap mode (1 bit per pixel, 2× scaled to
 640×400 on VGA), a 160×100 chunky-pixel mode with one RGB332 byte per pixel,
-and a higher-resolution 180×120 RGB222 mode. RGB332 is scaled 4× to 640×400;
-RGB222 is scaled 3× to 540×360 and centred in the 640×480 output. The 16 KB
+and a higher-resolution 180×120 RGB222 mode. RGB332 is scaled 4× to 640×400.
+RGB222 is scaled 4× to 720×480 on the Tang CEA 720×480p path — filling the whole
+active region edge to edge (no border, no pillarbox, unlike the 640-wide
+text/RGB332 modes) — and 3× to 540×360 centred on the 640-wide boards. The 16 KB
 framebuffer is exposed through the 8 KB CPU window at `$6000–$7FFF`; MODE bit 2
 selects one of two banks.
 
@@ -404,6 +406,12 @@ PLL root. Dedicated dividers derive three phase-related clocks:
 The direct 135-to-27 MHz divide is required by OSER10's 5:1 fast/parallel clock
 relationship. The renderer output is registered at 54 MHz and transferred on
 the falling system edge before the next 27 MHz TMDS encoder edge.
+
+The TMDS stream is full HDMI (not bare DVI): `hdmi_encoder` adds a per-frame data
+island carrying an AVI InfoFrame (exact CEA 720×480p, VIC 2) plus the video
+preamble and guard bands, so USB HDMI capture devices recognise the format.
+640×480 content is pillarboxed into the 720 active region; the RGB222 graphics
+mode fills the full 720×480.
 
 The T65 CPU runs at effective half system-clock speed through a toggling
 `cpu_enable` signal:

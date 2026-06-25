@@ -7,7 +7,11 @@ use work.sbc_pkg.all;
 
 entity boot_vga_debug is
   generic (
-    CLK_DIV : natural range 1 to 2 := 2
+    CLK_DIV : natural range 1 to 2 := 2;
+    -- See vic_vga: false = legacy 640-in-858 hybrid, true = CEA-861 720x480p
+    -- with the 640-wide content pillarboxed into the 720 active region. Must
+    -- match the runtime VIC so the HDMI mode does not change at boot handoff.
+    CEA_480P : boolean := false
   );
   port (
     clk             : in  std_logic;
@@ -50,16 +54,25 @@ entity boot_vga_debug is
 end entity;
 
 architecture rtl of boot_vga_debug is
-  -- 640x480 @ 59.94 Hz (27 MHz pixel clock, CEA-861 480p total timing)
-  constant H_VIS : natural := 640;
-  constant H_TOT : natural := 858;
-  constant H_SS  : natural := 671;
-  constant H_SE  : natural := 767;
+  -- Compile-time conditional select (VHDL-93 safe; resolved at elaboration).
+  function ite(c : boolean; a, b : natural) return natural is
+  begin
+    if c then return a; else return b; end if;
+  end function;
+
+  -- 858x525 total. See vic_vga for the CEA_480P pillarbox rationale.
+  constant H_TOT  : natural := 858;
+  constant H_VIS  : natural := ite(CEA_480P, 720, 640);
+  constant H_PILL : natural := ite(CEA_480P,  40,   0);
+  constant H_SS   : natural := ite(CEA_480P, 736, 671);
+  constant H_SE   : natural := ite(CEA_480P, 798, 767);
+  constant H_CONT : natural := H_VIS - 2 * H_PILL;   -- 640
+  constant H_CEND : natural := H_PILL + H_CONT;
 
   constant V_VIS : natural := 480;
   constant V_TOT : natural := 525;
-  constant V_SS  : natural := 490;
-  constant V_SE  : natural := 492;
+  constant V_SS  : natural := ite(CEA_480P, 489, 490);
+  constant V_SE  : natural := ite(CEA_480P, 495, 492);
 
   constant V_BORD : natural := 40;
   constant TV_END : natural := V_BORD + 400;
@@ -76,6 +89,7 @@ architecture rtl of boot_vga_debug is
 
   signal in_text   : std_logic;
   signal active    : std_logic;
+  signal hx        : natural range 0 to H_CONT - 1 := 0;  -- content-relative X
   signal v_off     : natural range 0 to V_VIS := 0;
   signal col       : natural range 0 to 39 := 0;
   signal crow      : natural range 0 to 24 := 0;
@@ -189,13 +203,16 @@ begin
 
   no_card_timeout <= '1' when sd_init_done = '0' and init_timeout_cnt = INIT_TIMEOUT_CYC else '0';
 
+  -- Pillarbox: content X (0..H_CONT-1) inside the active region; 0 outside.
+  hx      <= hc - H_PILL when hc >= H_PILL and hc < H_CEND else 0;
   active  <= '1' when hc < H_VIS and vc < V_VIS else '0';
-  in_text <= '1' when hc < H_VIS and vc >= V_BORD and vc < TV_END else '0';
+  in_text <= '1' when hc >= H_PILL and hc < H_CEND and
+                       vc >= V_BORD and vc < TV_END else '0';
   v_off   <= (vc - V_BORD) when vc >= V_BORD else 0;
-  col     <= hc / 16 when hc < H_VIS else 0;
+  col     <= hx / 16;
   crow    <= v_off / 16;
   cline   <= (v_off / 2) mod 8;
-  cpix    <= (hc / 2) mod 8;
+  cpix    <= (hx / 2) mod 8;
 
   process(crow, col, sd_init_done, no_card_timeout, sd_sec_read,
           seen_read_end, boot_done, boot_error, sd_cmd_error,

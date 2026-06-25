@@ -45,7 +45,12 @@ third_party/alinx_sd/              — vendor SD-card SPI sector core
 ```text
 boards/tang_primer_20k/rtl/
 ├── tang20k_sbc_top.vhd            — Tang HDMI/CH340/on-board-SD board wrapper
-└── tang20k_hdmi_tx.vhd            — Gowin rPLL + TMDS output wrapper
+└── tang20k_hdmi_tx.vhd            — Gowin rPLL + TMDS serialiser wrapper
+
+rtl/core/hdmi/
+├── tmds_encoder.vhd               — DVI 8b/10b TMDS encoder (one channel)
+├── hdmi_encoder.vhd               — full HDMI: video + AVI-InfoFrame data island, preamble, guard bands
+└── hdmi_data_island_pkg.vhd       — precomputed AVI-InfoFrame TERC4 words (gen by tools/gen_avi_infoframe.py)
 
 rtl/core/
 ├── sbc_pkg.vhd                    — shared types, memory map, constants
@@ -432,7 +437,7 @@ stores the previous cycle's synchronous VRAM data and presents the next address.
 | --- | --- | --- | --- |
 | `$01` | 320×200, 1 bit/pixel plus 8×8 colour attributes | 40 bitmap + 40 colour bytes | 2×, 640×400 |
 | `$03/$07` | 160×100 RGB332, bank 0/1 | 160 bytes | 4×, 640×400 |
-| `$09/$0D` | 180×120 packed RGB222, bank 0/1 | 135 bytes | 3×, centred 540×360 |
+| `$09/$0D` | 180×120 packed RGB222, bank 0/1 | 135 bytes | Tang 4× full-screen 720×480; 640 boards 3× centred 540×360 |
 
 The 16-KB framebuffer is exposed through the `$6000-$7FFF` 8-KB CPU window;
 MODE bit 2 selects the CPU-visible bank. RGB222 packs four pixels into three

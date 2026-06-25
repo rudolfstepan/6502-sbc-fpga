@@ -8,7 +8,9 @@ use work.sbc_pkg.all;
 entity sbc_t65_boot_monitor_top is
   generic (
     CLK_HZ : positive := 27_000_000;
-    BAUD   : positive := 115_200
+    BAUD   : positive := 115_200;
+    -- Forwarded to vic_vga: true selects exact CEA-861 720x480p (pillarboxed).
+    CEA_480P : boolean := false
   );
   port (
     clk          : in  std_logic;
@@ -1020,7 +1022,8 @@ begin
   vic_i : entity work.vic_vga
     generic map (
       CLK_DIV => CLK_HZ / 27_000_000,
-      CURSOR_BLINK_DIV => CLK_HZ / 2
+      CURSOR_BLINK_DIV => CLK_HZ / 2,
+      CEA_480P => CEA_480P
     )
     port map (
       clk          => clk,
