@@ -43,6 +43,7 @@ CMD_READ_SECTOR  = $01
 CMD_MOUNT        = $03
 CMD_UNMOUNT      = $04
 CMD_RAW_READ     = $05      ; debug: read raw card LBA (lower 256 bytes -> DATA)
+CMD_MOUNT_LBA    = $07      ; mount the LBA written to $882C-$882F
 CMD_RESET        = $0A
 
 ; ── Result codes ─────────────────────────────────────────────────────────--

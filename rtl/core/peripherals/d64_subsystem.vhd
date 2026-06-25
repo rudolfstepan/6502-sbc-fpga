@@ -53,6 +53,7 @@ architecture rtl of d64_subsystem is
   constant CMD_MOUNT  : std_logic_vector(7 downto 0) := x"03";
   constant CMD_UNMOUNT: std_logic_vector(7 downto 0) := x"04";
   constant CMD_RAW_READ : std_logic_vector(7 downto 0) := x"05";  -- debug: read raw LBA
+  constant CMD_MOUNT_LBA: std_logic_vector(7 downto 0) := x"07";  -- mount the LBA in $882C-$882F
   constant CMD_RESET  : std_logic_vector(7 downto 0) := x"0A";
 
   constant RES_OK         : std_logic_vector(7 downto 0) := x"00";
@@ -99,6 +100,8 @@ architecture rtl of d64_subsystem is
   -- d64_drive interface
   signal drv_mount    : std_logic := '0';
   signal drv_unmount  : std_logic := '0';
+  signal drv_mount_lba : std_logic_vector(31 downto 0);  -- muxed mount source
+  signal mount_by_lba  : std_logic := '0';               -- '1' = use raw_lba
   signal drv_rd_req   : std_logic := '0';
   signal drv_busy     : std_logic;
   signal drv_done     : std_logic;
@@ -112,6 +115,13 @@ architecture rtl of d64_subsystem is
 
   -- Pending MOUNT: after fat32_reader finds the file, pulse drive mount.
   signal mount_pending : std_logic := '0';
+
+  -- Pending MOUNT_LBA: the 6502 supplied a raw LBA to mount directly.  Like
+  -- mount_pending, the actual drv_mount pulse is deferred to the main FSM so it
+  -- is issued cleanly when the drive engine is idle (a same-cycle pulse from the
+  -- command decode could be missed on hardware if the drive had just finished a
+  -- read and was not yet back in its idle state -- a race GHDL does not show).
+  signal mount_lba_pending : std_logic := '0';
 
   -- "Engine has acknowledged the request": set when a command is issued,
   -- cleared once the owned engine's busy is observed high.  Completion
@@ -156,13 +166,18 @@ begin
       sd_sec_read_end        => sd_sec_read_end
     );
 
+  -- Mount source: normally the LBA resolved by fat32_reader (CMD_MOUNT), but a
+  -- CMD_MOUNT_LBA lets the 6502 mount a specific LBA it found itself (used by the
+  -- D64 selection menu, which enumerates .d64 files via raw reads).
+  drv_mount_lba <= raw_lba when mount_by_lba = '1' else fat_lba;
+
   drv_i : entity work.d64_drive
     port map (
       clk            => clk,
       reset_n        => reset_n,
       mount          => drv_mount,
       unmount        => drv_unmount,
-      file_start_lba => fat_lba,
+      file_start_lba => drv_mount_lba,
       write_protect_in => '1',
       rd_req         => drv_rd_req,
       rd_track       => reg_track,
@@ -255,6 +270,8 @@ begin
         drv_unmount  <= '0';
         drv_rd_req   <= '0';
         mount_pending <= '0';
+        mount_lba_pending <= '0';
+        mount_by_lba <= '0';
         raw_lba      <= (others => '0');
         raw_sd_read  <= '0';
         raw_active   <= '0';
@@ -290,11 +307,23 @@ begin
                   fat_start_p  <= '1';
                   mount_pending <= '1';
                   eng_started  <= '0';
+                  mount_by_lba <= '0';   -- fat32_reader supplies the LBA
                 elsif din = CMD_RAW_READ then
                   busy_r     <= '1';
                   owner      <= OWN_RAW;
                   raw_active <= '1';
                   raw_state  <= RAW_REQ;
+                elsif din = CMD_MOUNT_LBA then
+                  -- mount the LBA the 6502 placed in $882C-$882F (no FAT scan).
+                  -- Select raw_lba as the mount source and defer the drv_mount
+                  -- pulse to the main FSM (mount_lba_pending), so it is issued
+                  -- when the drive engine is guaranteed idle.
+                  mount_by_lba      <= '1';
+                  mount_lba_pending <= '1';
+                  busy_r            <= '1';
+                  owner             <= OWN_NONE;  -- not a fat/drive/raw op
+                  raw_active        <= '0';       -- DATA port follows drive buf
+                  eng_started       <= '0';
                 elsif din = CMD_UNMOUNT then
                   drv_unmount <= '1';
                   reg_result  <= RES_OK;
@@ -365,6 +394,20 @@ begin
             img_ready     <= '1';
             drv_mount     <= '1';   -- latch start LBA into the drive
           end if;
+        end if;
+
+        -- ── MOUNT_LBA: pulse drive mount once the engine is idle ───────────
+        -- drv_mount_lba is already raw_lba (mount_by_lba='1').  Wait until the
+        -- drive is not busy, then pulse drv_mount for exactly one cycle so the
+        -- engine latches the new start LBA, and complete the command.
+        if mount_lba_pending = '1' and drv_busy = '0' then
+          mount_lba_pending <= '0';
+          drv_mount         <= '1';   -- latch raw_lba into the drive (S_IDLE)
+          img_ready         <= '1';
+          busy_r            <= '0';
+          done_r            <= '1';
+          error_r           <= '0';
+          reg_result        <= RES_OK;
         end if;
 
         -- ── READ completion: drive done/error ──────────────────────────────

@@ -58,6 +58,7 @@ KERNAL_DISK_MOUNT = $F01E   ; mount first .d64 on SD2  (C=0 ok)
 KERNAL_DISK_DIR   = $F021   ; print directory of the mounted image
 KERNAL_DISK_LOAD  = $F024   ; load PRG by name; DK_PTR -> name; C=0 ok
 KERNAL_DISK_CALLADDR = $F02A ; print " CALL nnnnn" for the last loaded PRG
+KERNAL_DISK_MENU  = $F033   ; interactive .d64 select menu (C=0 mounted, C=1 not)
 KERNAL_PENDING_CHAR = $02F7
 KERNAL_PENDING_FLAG = $02F8
 
@@ -247,6 +248,21 @@ EHB_DISK_LOAD:
 @copydone:
     lda #0
     sta NAMEBUF,y          ; null-terminate
+
+    ; LOAD "!"  -> interactive .d64 select menu.  Lets the user pick which disk
+    ; image to mount with the cursor keys, then prints its directory.  Returns to
+    ; BASIC without touching the program in memory.
+    lda NAMEBUF
+    cmp #'!'
+    bne @notmenu
+    lda NAMEBUF+1          ; must be exactly "!" (single char)
+    bne @notmenu
+    jsr KERNAL_DISK_MENU
+    bcs @menuend          ; cancelled / none / error -> just return
+    jsr KERNAL_DISK_DIR   ; show the freshly mounted disk
+@menuend:
+    jmp LAB_WARM
+@notmenu:
 
     ; LOAD "$"  -> print the directory (1541-style) and return to BASIC,
     ; without touching the program in memory.

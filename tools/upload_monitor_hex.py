@@ -26,7 +26,7 @@ import sys
 import time
 from pathlib import Path
 
-DEFAULT_PORT = "COM12"
+DEFAULT_PORT = "COM15"
 DEFAULT_BAUD = 115200
 DEFAULT_ADDR = 0xC000
 DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "roms" / "upload_demo.rom"

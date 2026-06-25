@@ -133,15 +133,20 @@ begin
 
   main : process
     -- write one register
+    -- write one register.  Models the real CPU bus cycle EXACTLY: on hardware
+    -- cpu_enable toggles every clk, disk_cs is high for TWO clocks but
+    -- disk_we = cpu_we AND NOT cpu_enable is high for only ONE of them (the
+    -- cpu_enable=0 clock).  So cs is held 2 clocks while we pulses 1 clock.
     procedure reg_write(ofs : integer; val : integer) is
     begin
       offset <= std_logic_vector(to_unsigned(ofs, 4));
       din    <= std_logic_vector(to_unsigned(val, 8));
       cs     <= '1';
       we     <= '1';
-      wait until rising_edge(clk);
+      wait until rising_edge(clk);     -- clock 1: cs=1, we=1 (the write fires)
+      we     <= '0';
+      wait until rising_edge(clk);     -- clock 2: cs=1, we=0 (we already dropped)
       cs <= '0';
-      we <= '0';
       wait until rising_edge(clk);
     end procedure;
 
@@ -248,6 +253,50 @@ begin
              & " expected " & integer'image(card(card_off + i))
         severity failure;
     end loop;
+
+    -- ── MOUNT_LBA: mount a specific LBA (the menu path) and read from it ────
+    -- Write FILE_LBA into $882C-$882F, CMD_MOUNT_LBA, then READ T18/S1.
+    reg_write(8,  FILE_LBA mod 256);
+    reg_write(9,  (FILE_LBA / 256) mod 256);
+    reg_write(10, (FILE_LBA / 65536) mod 256);
+    reg_write(11, 0);
+    reg_write(1, 16#07#);      -- COMMAND = MOUNT_LBA
+    wait_not_busy;
+    reg_read(0, st);
+    assert (st / 8) mod 2 = 1 report "not MOUNTED after MOUNT_LBA" severity failure;
+    reg_write(2, 18);
+    reg_write(3, 1);
+    reg_write(1, 16#01#);
+    wait_not_busy;
+    reg_write(6, 0);
+    card_off := FILE_LBA * 512 + d64_offset(18, 1);
+    for i in 0 to 255 loop
+      reg_read(5, val);
+      assert val = card(card_off + i)
+        report "MOUNT_LBA T18/S1 byte " & integer'image(i) & " mismatch"
+        severity failure;
+    end loop;
+
+    -- ── RE-MOUNT_LBA to a DIFFERENT LBA: the read must target the NEW LBA ──
+    -- Regression for the menu bug "always mounts the first disk": after the
+    -- first CMD_MOUNT_LBA above, a second CMD_MOUNT_LBA to a distinct LBA must
+    -- re-latch the drive's start LBA so the next read goes there, not the old one.
+    reg_write(8,  (FILE_LBA+50) mod 256);
+    reg_write(9,  ((FILE_LBA+50) / 256) mod 256);
+    reg_write(10, ((FILE_LBA+50) / 65536) mod 256);
+    reg_write(11, 0);
+    reg_write(1, 16#07#);      -- COMMAND = MOUNT_LBA (new LBA)
+    wait_not_busy;
+    reg_write(2, 18);
+    reg_write(3, 1);
+    reg_write(1, 16#01#);      -- READ T18/S1
+    wait_not_busy;
+    -- engine requests target_lba = start_lba + index/2; for S1 index/2 = 0, so
+    -- the SD request LBA should equal (FILE_LBA+50) + (d64_offset(18,1)/512).
+    assert to_integer(unsigned(rd_lba)) = (FILE_LBA+50) + (d64_offset(18,1)/512)
+      report "RE-MOUNT_LBA: read went to LBA " & integer'image(to_integer(unsigned(rd_lba)))
+           & " expected " & integer'image((FILE_LBA+50) + (d64_offset(18,1)/512))
+      severity failure;
 
     -- ── READ an invalid sector -> ERROR, RESULT=INVALID_SECTOR ($03) ───────
     reg_write(2, 1);
