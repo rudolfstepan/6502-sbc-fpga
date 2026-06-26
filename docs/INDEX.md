@@ -10,6 +10,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[Building & Synthesis](./03_BUILDING.md)** - How to build and synthesize the project
 - **[Testing Guide](./04_TESTING.md)** - Test infrastructure and running tests
 - **[Component Reference](./05_COMPONENTS.md)** - Detailed specs for major components
+- **[VIC Video Controller](./VIC.md)** - Text + bitmap modes (incl. 320×240 16-colour), `$9000` register map, MODE bits, `$6000` framebuffer window/banking, palette, bus-stealing
 - **[Sound Chip](./SOUND.md)** - Sound chips + PT8211 DAC: bring-up voice, 4-voice synth, and the native MOS 6581 SID (filter, ADSR, sync/ring) with `.sid` ROM wrapping
 - **[Math Coprocessor (FPU)](./FPU.md)** - Hardware fixed-point multiplier ($88B0): register map, 8.24 format, and the packed-RGB222 Mandelbrot demo
 - **[Simulation](./06_SIMULATION.md)** - Running and analyzing simulations

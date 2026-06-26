@@ -17,7 +17,7 @@ T65_RTL = third_party/t65/rtl/T65_Pack.vhd third_party/t65/rtl/T65_ALU.vhd \
           third_party/t65/rtl/T65_MCode.vhd third_party/t65/rtl/T65.vhd
 
 RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
-      rtl/core/mem/sync_ram.vhd rtl/core/mem/rom.vhd \
+      rtl/core/mem/sync_ram.vhd rtl/core/mem/fb_ram.vhd rtl/core/mem/rom.vhd \
       boards/tang_primer_20k/rtl/bram_byte_bridge.vhd \
       rtl/core/mem/boot_shadow_rom.vhd \
       rtl/core/mem/sdram_if.vhd rtl/core/mem/sdram_ctrl.vhd \
@@ -49,6 +49,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_vic_raster_irq.vhd sim/tb/tb_sbc_vic_display.vhd \
       sim/tb/tb_vic_color256.vhd \
       sim/tb/tb_vic_color64.vhd \
+      sim/tb/tb_vic_color16.vhd \
       sim/tb/tb_bram_byte_bridge.vhd \
       sim/tb/tb_sound_voice.vhd sim/tb/tb_vram_steal_race.vhd \
       sim/tb/tb_vram_read_steal.vhd sim/tb/tb_sound_chip4.vhd \
@@ -174,6 +175,8 @@ test: roms fat32-card-image
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color256 $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_vic_color64
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color64 $(GHDL_RUN_FLAGS)
+	$(GHDL) -e $(GHDL_FLAGS) tb_vic_color16
+	$(GHDL) -r $(GHDL_FLAGS) tb_vic_color16 $(GHDL_RUN_FLAGS) --stop-time=60ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_hdmi_encoder
 	$(GHDL) -r $(GHDL_FLAGS) tb_hdmi_encoder $(GHDL_RUN_FLAGS) --stop-time=30ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_bram_byte_bridge

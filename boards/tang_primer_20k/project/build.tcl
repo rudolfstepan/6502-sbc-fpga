@@ -20,6 +20,7 @@ add_file -type vhdl {../../../rtl/core/peripherals/d64_drive.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/fat32_reader.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/d64_subsystem.vhd}
 add_file -type vhdl {../../../rtl/core/mem/sync_ram.vhd}
+add_file -type vhdl {../../../rtl/core/mem/fb_ram.vhd}
 add_file -type vhdl {../../../rtl/core/mem/char_rom.vhd}
 add_file -type vhdl {../../../rtl/core/mem/boot_shadow_rom.vhd}
 add_file -type verilog {../../../rtl/core/boot/sd_rom_loader.v}
@@ -46,6 +47,7 @@ add_file -type vhdl {../rtl/tang20k_sbc_top.vhd}
 add_file -type cst {../constraints/tang20k_sbc.cst}
 add_file -type sdc {../constraints/tang20k_sbc.sdc}
 
+set_option -top_module tang20k_sbc_top
 set_option -use_sspi_as_gpio 1
 set_option -use_mspi_as_gpio 1
 set_option -output_base_name tang_sbc

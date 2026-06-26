@@ -32,6 +32,7 @@
 
         <!-- Memory -->
         <File path="../../../rtl/core/mem/sync_ram.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../rtl/core/mem/fb_ram.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/mem/char_rom.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../rtl/core/mem/boot_shadow_rom.vhd" type="file.vhdl" enable="1"/>
 
