@@ -3,7 +3,7 @@
 
 BITSTREAM   := project/impl/pnr/tang_sbc.fs
 
-GOWIN       ?= gw_sh
+GOWIN       ?= C:/Gowin/Gowin_V1.9.11.03_Education_x64/IDE/bin/gw_sh.exe
 OPENLOAD    ?= openFPGALoader
 
 .PHONY: build program clean

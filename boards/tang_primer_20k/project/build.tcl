@@ -11,8 +11,7 @@ add_file -type vhdl {../../../rtl/core/peripherals/uart_tx_ser.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/uart_rx_ser.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/uart6551.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/vic_vga.vhd}
-add_file -type vhdl {../../../rtl/core/audio/legacy_sound/sound_voice_full.vhd}
-add_file -type vhdl {../../../rtl/core/audio/legacy_sound/sound_chip4.vhd}
+add_file -type vhdl {../../../rtl/core/peripherals/vic_fb_ddr3.vhd}
 add_file -type vhdl {../../../rtl/core/audio/sid/sid6581.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/pt8211_dac.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/d64_sector_map.vhd}
@@ -39,17 +38,18 @@ add_file -type vhdl {../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd}
 add_file -type vhdl {../../../rtl/core/hdmi/hdmi_encoder.vhd}
 add_file -type verilog {src/gowin_rpll/gowin_rpll.v}
 add_file -type verilog {src/ddr3_memory_interface/ddr3_memory_interface.v}
-add_file -type vhdl {../rtl/ddr3_byte_bridge.vhd}
 add_file -type vhdl {../rtl/bram_byte_bridge.vhd}
 add_file -type vhdl {../rtl/tang20k_hdmi_tx.vhd}
 add_file -type vhdl {../rtl/tang20k_sbc_top.vhd}
 add_file -type cst {../constraints/tang20k_sbc.cst}
 add_file -type sdc {../constraints/tang20k_sbc.sdc}
 
+set_option -top_module tang20k_sbc_top
 set_option -use_sspi_as_gpio 1
 set_option -use_mspi_as_gpio 1
 set_option -output_base_name tang_sbc
 set_option -vhdl_std vhd1993
+set_option -verilog_std sysv2017
 set_option -timing_driven 1
 set_option -cst_warn_to_error 1
 set_option -route_maxfan 23

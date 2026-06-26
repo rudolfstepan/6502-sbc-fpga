@@ -183,6 +183,26 @@ def upload(args: argparse.Namespace) -> None:
             if args.verbose and response:
                 print(response.decode("ascii", errors="replace"), end="")
 
+        if args.monitor != 0:
+            # Keep the port open and stream UART output live (for ROMs that print
+            # results after starting). monitor < 0 runs until Ctrl+C.
+            if args.monitor < 0:
+                print("--- monitoring UART (Ctrl+C to stop) ---")
+            else:
+                print(f"--- monitoring UART for {args.monitor:.0f}s (Ctrl+C to stop) ---")
+            end = None if args.monitor < 0 else time.time() + args.monitor
+            try:
+                while end is None or time.time() < end:
+                    waiting = port.in_waiting
+                    if waiting:
+                        sys.stdout.write(
+                            port.read(waiting).decode("ascii", errors="replace"))
+                        sys.stdout.flush()
+                    else:
+                        time.sleep(0.02)
+            except KeyboardInterrupt:
+                print()
+
     print("Upload complete")
 
 
@@ -201,6 +221,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-done", type=float, default=0.8, help="seconds to read after . or G")
     parser.add_argument("--progress", type=int, default=1024, help="progress interval in bytes, 0 disables")
     parser.add_argument("--run", action="store_true", help="send G <address> after upload")
+    parser.add_argument(
+        "--monitor", type=float, default=0.0,
+        help="after upload/run, stream UART output live for N seconds "
+             "(negative = until Ctrl+C, 0 = off)",
+    )
     parser.add_argument(
         "--ehbasic", action="store_true",
         help="upload kernel to $F000, then EhBASIC to $A000 (use --run to start at $A000)",

@@ -26,7 +26,14 @@ entity tang20k_sbc_top is
     BAUD          : positive := 115_200;
     -- false (default): low-power 8 KiB BSRAM at $4000-$5FFF.
     -- true: original Gowin DDR3 IP backend; retains the same CPU memory map.
-    USE_DDR3      : boolean := false
+    USE_DDR3      : boolean := false;
+    -- true: instantiate the DDR3 IP (99 MHz) as a 320x200 8bpp framebuffer at
+    -- $6000-$7FFF (vic_fb_ddr3) while main RAM stays on BSRAM. Mutually
+    -- exclusive with USE_DDR3 (both would need the single DDR3 app port).
+    -- Default true: the base SDC/CST now carry the DDR clock + PLL-placement
+    -- profile (ddr_hw_g must exist). For a pure low-power BSRAM build set this
+    -- false AND comment out the DDR lines in tang20k_sbc.sdc/.cst.
+    FB_DDR3       : boolean := true
   );
   port (
     clk_27mhz  : in  std_logic;
@@ -58,22 +65,25 @@ entity tang20k_sbc_top is
     sd2_mosi    : out std_logic;
     sd2_miso    : in  std_logic;
 
-    -- DDR3 SDRAM (on-board, drives main RAM via Gowin DDR3 Memory Interface IP)
-    ddr_addr    : out   std_logic_vector(13 downto 0);
-    ddr_bank    : out   std_logic_vector(2 downto 0);
-    ddr_cs      : out   std_logic;
-    ddr_ras     : out   std_logic;
-    ddr_cas     : out   std_logic;
-    ddr_we      : out   std_logic;
-    ddr_ck      : out   std_logic;
-    ddr_ck_n    : out   std_logic;
-    ddr_cke     : out   std_logic;
-    ddr_odt     : out   std_logic;
-    ddr_reset_n : out   std_logic;
-    ddr_dm      : out   std_logic_vector(1 downto 0);
-    ddr_dq      : inout std_logic_vector(15 downto 0);
-    ddr_dqs     : inout std_logic_vector(1 downto 0);
-    ddr_dqs_n   : inout std_logic_vector(1 downto 0)
+    -- DDR3 SDRAM (on-board) driven by the official Gowin DDR3 Memory Interface IP.
+    -- The IP drives the differential clock/DQS P and N halves separately; the CST
+    -- constrains only the P signal as SSTL15D (two-pin IO_LOC), like the Sipeed
+    -- DDR-test reference. CK_N / DQS_N have no IO_LOC (auto-paired by SSTL15D).
+    DDR3_A      : out   std_logic_vector(13 downto 0);
+    DDR3_BA     : out   std_logic_vector(2 downto 0);
+    DDR3_nCS    : out   std_logic;
+    DDR3_nRAS   : out   std_logic;
+    DDR3_nCAS   : out   std_logic;
+    DDR3_nWE    : out   std_logic;
+    DDR3_CK     : out   std_logic;
+    DDR3_CK_N   : out   std_logic;
+    DDR3_CKE    : out   std_logic;
+    DDR3_ODT    : out   std_logic;
+    DDR3_nRESET : out   std_logic;
+    DDR3_DM     : out   std_logic_vector(1 downto 0);
+    DDR3_DQ     : inout std_logic_vector(15 downto 0);
+    DDR3_DQS    : inout std_logic_vector(1 downto 0);
+    DDR3_DQS_N  : inout std_logic_vector(1 downto 0)
   );
 end entity;
 
@@ -160,24 +170,24 @@ architecture rtl of tang20k_sbc_top is
     );
   end component;
 
-  -- Gowin DDR3 memory-interface IP (generated; see project/src/ddr3_memory_interface)
+  -- Official Gowin DDR3 Memory Interface IP (DDR3_Memory_Interface_Top),
+  -- 1:4 clock ratio: 128-bit (BL8) app interface, 28-bit word address.
   component DDR3_Memory_Interface_Top
     port (
       clk                 : in    std_logic;
       memory_clk          : in    std_logic;
       pll_lock            : in    std_logic;
       rst_n               : in    std_logic;
-      app_burst_number    : in    std_logic_vector(5 downto 0);
       cmd_ready           : out   std_logic;
       cmd                 : in    std_logic_vector(2 downto 0);
       cmd_en              : in    std_logic;
       addr                : in    std_logic_vector(27 downto 0);
       wr_data_rdy         : out   std_logic;
-      wr_data             : in    std_logic_vector(127 downto 0);
+      wr_data             : in    std_logic_vector(63 downto 0);
       wr_data_en          : in    std_logic;
       wr_data_end         : in    std_logic;
-      wr_data_mask        : in    std_logic_vector(15 downto 0);
-      rd_data             : out   std_logic_vector(127 downto 0);
+      wr_data_mask        : in    std_logic_vector(7 downto 0);
+      rd_data             : out   std_logic_vector(63 downto 0);
       rd_data_valid       : out   std_logic;
       rd_data_end         : out   std_logic;
       sr_req              : in    std_logic;
@@ -199,14 +209,14 @@ architecture rtl of tang20k_sbc_top is
       O_ddr_cke           : out   std_logic;
       O_ddr_odt           : out   std_logic;
       O_ddr_reset_n       : out   std_logic;
-      O_ddr_dqm           : out   std_logic_vector(1 downto 0);
-      IO_ddr_dq           : inout std_logic_vector(15 downto 0);
-      IO_ddr_dqs          : inout std_logic_vector(1 downto 0);
-      IO_ddr_dqs_n        : inout std_logic_vector(1 downto 0)
+      O_ddr_dqm           : out   std_logic_vector(0 downto 0);
+      IO_ddr_dq           : inout std_logic_vector(7 downto 0);
+      IO_ddr_dqs          : inout std_logic_vector(0 downto 0);
+      IO_ddr_dqs_n        : inout std_logic_vector(0 downto 0)
     );
   end component;
 
-  -- Generated rPLL wrapper for the DDR3 memory clock (27 MHz -> ~400 MHz)
+  -- DDR3 memory PLL (Gowin_rPLL): 27 MHz -> 200 MHz memory_clk (DDR3-400).
   component Gowin_rPLL
     port (
       clkout : out std_logic;
@@ -326,35 +336,23 @@ architecture rtl of tang20k_sbc_top is
   signal usb_cap_data       : std_logic_vector(15 downto 0);
   signal usb_cap_ready      : std_logic;
 
-  -- Optional main-RAM backends. Both present the same byte req/ack interface to
-  -- the SBC core; static generate removes the unused backend during synthesis.
-  signal ddr_memory_clk     : std_logic;
-  signal ddr_pll_lock       : std_logic;
-  signal ddr_clk_x1         : std_logic;   -- 100 MHz DDR3 user clock
-  signal ddr_calib_complete : std_logic;
-  signal app_cmd            : std_logic_vector(2 downto 0);
-  signal app_cmd_en         : std_logic;
-  signal app_cmd_rdy        : std_logic;
-  signal app_addr27         : std_logic_vector(26 downto 0);
-  signal app_addr28         : std_logic_vector(27 downto 0);
-  -- DDR3 controller reset + calibration auto-retry (sequenced on clk_27mhz, the
-  -- IP's own reference clock -- no PLL-derived fabric clock is loaded).
-  constant DDR_RST_HOLD     : integer := 1023;        -- reset assert width (~38 us @ 27 MHz)
-  constant DDR_CAL_WAIT     : integer := 540_000;     -- calibration timeout (~20 ms @ 27 MHz)
-  type ddr_rst_state_t is (DR_ASSERT, DR_WAIT_CAL);
-  signal ddr_rst_state      : ddr_rst_state_t := DR_ASSERT;
-  signal ddr_rst_n          : std_logic := '0';       -- DDR3 controller reset
-  signal ddr_lock_sync      : std_logic_vector(1 downto 0) := (others => '0');
-  signal ddr_cal_sync       : std_logic_vector(1 downto 0) := (others => '0');
-  signal ddr_rst_cnt        : integer range 0 to DDR_CAL_WAIT := 0;
-  -- Reference DDR3 IP uses zero for a single 128-bit user-interface beat.
-  signal app_wren           : std_logic;
-  signal app_wdata          : std_logic_vector(127 downto 0);
-  signal app_wdata_end      : std_logic;
-  signal app_wdata_mask     : std_logic_vector(15 downto 0);
-  signal app_wdata_rdy      : std_logic;
-  signal app_rdata          : std_logic_vector(127 downto 0);
-  signal app_rdata_valid    : std_logic;
+  -- Gowin DDR3 Memory Interface IP clocks + app interface (present when FB_DDR3).
+  signal ddr_memory_clk : std_logic;   -- 200 MHz (DDR3 CK)
+  signal ddr_pll_lock   : std_logic;   -- memory PLL lock
+  signal ddr_clk_x1     : std_logic;   -- clk_out, ~50 MHz user/app clock
+  signal ddr_calib      : std_logic;   -- init_calib_complete
+  signal ddr_resetn     : std_logic;   -- IP reset (rst_n): board reset & PLL lock
+  signal app_cmd        : std_logic_vector(2 downto 0);
+  signal app_cmd_en     : std_logic;
+  signal app_cmd_rdy    : std_logic;
+  signal app_addr       : std_logic_vector(27 downto 0);
+  signal app_wdata      : std_logic_vector(63 downto 0);
+  signal app_wdata_mask : std_logic_vector(7 downto 0);
+  signal app_wren       : std_logic;
+  signal app_wdata_end  : std_logic;
+  signal app_wdata_rdy  : std_logic;
+  signal app_rdata      : std_logic_vector(63 downto 0);
+  signal app_rdata_valid : std_logic;
   -- core <-> bridge byte port
   signal sram_ext_req   : std_logic;
   signal sram_ext_we    : std_logic;
@@ -362,6 +360,18 @@ architecture rtl of tang20k_sbc_top is
   signal sram_ext_din   : data_t;
   signal sram_ext_dout  : data_t;
   signal sram_ext_ack   : std_logic;
+
+  -- DDR3 framebuffer interface (sbc_i <-> vic_fb_ddr3), used only when FB_DDR3
+  signal fb_frame_start : std_logic;
+  signal fb_line_adv    : std_logic;
+  signal fb_rdaddr      : std_logic_vector(9 downto 0);
+  signal fb_rddata      : data_t;
+  signal fb_cpu_req     : std_logic;
+  signal fb_cpu_we      : std_logic;
+  signal fb_cpu_addr    : std_logic_vector(16 downto 0);
+  signal fb_cpu_din     : data_t;
+  signal fb_cpu_dout    : data_t;
+  signal fb_cpu_ack     : std_logic;
   signal ram_ready      : std_logic;
   -- self-test status (to boot screen)
   signal ram_test_active    : std_logic;
@@ -621,7 +631,9 @@ begin
 
   sbc_i : entity work.sbc_t65_boot_monitor_top
     generic map (CLK_HZ => 54_000_000, BAUD => BAUD, CEA_480P => true,
-                 KBD_LAYOUT => "DE")  -- "DE" QWERTZ or "US" QWERTY
+                 KBD_LAYOUT => "DE",  -- "DE" QWERTZ or "US" QWERTY
+                 FB_DDR3 => FB_DDR3,
+                 ENABLE_SID => true)   -- SID re-enabled (Gowin DDR3 IP freed LUTs)
     port map (
       clk           => clk_sys,
       reset_n       => reset_n,
@@ -656,6 +668,16 @@ begin
       sram_ext_din  => sram_ext_din,
       sram_ext_dout => sram_ext_dout,
       sram_ext_ack  => sram_ext_ack,
+      fb_frame_start => fb_frame_start,
+      fb_line_adv    => fb_line_adv,
+      fb_rdaddr      => fb_rdaddr,
+      fb_rddata      => fb_rddata,
+      fb_cpu_req     => fb_cpu_req,
+      fb_cpu_we      => fb_cpu_we,
+      fb_cpu_addr    => fb_cpu_addr,
+      fb_cpu_din     => fb_cpu_din,
+      fb_cpu_dout    => fb_cpu_dout,
+      fb_cpu_ack     => fb_cpu_ack,
       dac_bck       => dac_bck,
       dac_ws        => dac_ws,
       dac_din       => dac_din,
@@ -769,156 +791,120 @@ begin
       tmds_d_n   => tmds_d_n
     );
 
-  -- ── Optional DDR3 main-RAM backend ──────────────────────────────────────
-  ddr_backend_g : if USE_DDR3 generate
-  -- Single-rank board: chip-select tied low (matches Sipeed DDR-test example).
-  ddr_cs        <= '0';
-  app_addr28    <= '0' & app_addr27;
-  -- DDR3 bring-up sequenced like the known-good Sipeed DDR reference, with an
-  -- automatic calibration retry:
-  --  * the DDR memory PLL free-runs (reset tied '0' in the port map below) so it
-  --    locks immediately at power-on, independent of the HDMI PLL and the button.
-  --  * the controller reset is held a margin after the memory PLL locks, then
-  --    released synchronously on clk_27mhz -- the IP's own reference clock.  This
-  --    sequencer runs on the board oscillator only; it loads no PLL-derived
-  --    fabric clock, so the exclusive PLL placement stays intact.
-  --  * if calibration does not complete within DDR_CAL_WAIT, the controller reset
-  --    is re-asserted and calibration retried automatically -- Gowin DDR3 bring-up
-  --    is occasionally marginal at power-on, so this replaces the manual reset
-  --    presses that were otherwise needed before the RAM test would finish.
-  --  * a long-press full reset re-asserts the controller reset without disturbing
-  --    the free-running memory PLL.
-  ddr_reset_seq : process(clk_27mhz)
-  begin
-    if rising_edge(clk_27mhz) then
-      ddr_lock_sync <= ddr_lock_sync(0) & ddr_pll_lock;
-      ddr_cal_sync  <= ddr_cal_sync(0)  & ddr_calib_complete;
-
-      if ddr_lock_sync(1) = '0' or long_reset = '1' then
-        -- no stable memory clock yet, or a long-press full reset: hold reset
-        ddr_rst_state <= DR_ASSERT;
-        ddr_rst_cnt   <= 0;
-        ddr_rst_n     <= '0';
-      else
-        case ddr_rst_state is
-          when DR_ASSERT =>
-            ddr_rst_n <= '0';
-            if ddr_rst_cnt = DDR_RST_HOLD then
-              ddr_rst_cnt   <= 0;
-              ddr_rst_n     <= '1';
-              ddr_rst_state <= DR_WAIT_CAL;
-            else
-              ddr_rst_cnt <= ddr_rst_cnt + 1;
-            end if;
-
-          when DR_WAIT_CAL =>
-            ddr_rst_n <= '1';
-            if ddr_cal_sync(1) = '1' then
-              ddr_rst_cnt <= 0;                 -- calibrated: stay released
-            elsif ddr_rst_cnt = DDR_CAL_WAIT then
-              ddr_rst_cnt   <= 0;
-              ddr_rst_state <= DR_ASSERT;       -- timeout: re-assert and retry
-            else
-              ddr_rst_cnt <= ddr_rst_cnt + 1;
-            end if;
-        end case;
-      end if;
-    end if;
-  end process;
-
-  ddr_mem_pll_i : Gowin_rPLL
+  -- DDR3 memory PLL at TOP LEVEL (not nested) so INS_LOC pins it to PLL_L[0].
+  -- 27 MHz -> 200 MHz memory_clk (DDR3 CK). Free-runs; output unused when
+  -- FB_DDR3 is off.
+  ddr_pll_i : Gowin_rPLL
     port map (
-      clkout => ddr_memory_clk,   -- ~400 MHz (DDR-800)
+      clkout => ddr_memory_clk,
       lock   => ddr_pll_lock,
-      reset  => '0',              -- free-running: lock ASAP, like the Sipeed reference
+      reset  => '0',
       clkin  => clk_27mhz
     );
+  ddr_resetn <= reset_n and ddr_pll_lock;
 
-  ddr3_ip_i : DDR3_Memory_Interface_Top
-    port map (
-      clk                 => clk_27mhz,
-      memory_clk          => ddr_memory_clk,
-      pll_lock            => ddr_pll_lock,
-      rst_n               => ddr_rst_n,
-      app_burst_number    => (others => '0'), -- one 128-bit user-interface beat
-      cmd_ready           => app_cmd_rdy,
-      cmd                 => app_cmd,
-      cmd_en              => app_cmd_en,
-      addr                => app_addr28,
-      wr_data_rdy         => app_wdata_rdy,
-      wr_data             => app_wdata,
-      wr_data_en          => app_wren,
-      wr_data_end         => app_wdata_end,
-      wr_data_mask        => app_wdata_mask,
-      rd_data             => app_rdata,
-      rd_data_valid       => app_rdata_valid,
-      rd_data_end         => open,
-      sr_req              => '0',
-      ref_req             => '0',
-      sr_ack              => open,
-      ref_ack             => open,
-      init_calib_complete => ddr_calib_complete,
-      clk_out             => ddr_clk_x1,
-      ddr_rst             => open,
-      burst               => '1',
-      O_ddr_addr          => ddr_addr,
-      O_ddr_ba            => ddr_bank,
-      O_ddr_cs_n          => open,   -- ddr_cs pin tied low above
-      O_ddr_ras_n         => ddr_ras,
-      O_ddr_cas_n         => ddr_cas,
-      O_ddr_we_n          => ddr_we,
-      O_ddr_clk           => ddr_ck,
-      O_ddr_clk_n         => ddr_ck_n,
-      O_ddr_cke           => ddr_cke,
-      O_ddr_odt           => ddr_odt,
-      O_ddr_reset_n       => ddr_reset_n,
-      O_ddr_dqm           => ddr_dm,
-      IO_ddr_dq           => ddr_dq,
-      IO_ddr_dqs          => ddr_dqs,
-      IO_ddr_dqs_n        => ddr_dqs_n
-    );
+  -- ── DDR3 framebuffer (official Gowin DDR3 Memory Interface IP) ───────────
+  ddr_fb_g : if FB_DDR3 generate
+    ddr_ip_i : DDR3_Memory_Interface_Top
+      port map (
+        clk                 => clk_27mhz,
+        memory_clk          => ddr_memory_clk,
+        pll_lock            => ddr_pll_lock,
+        rst_n               => ddr_resetn,
+        cmd_ready           => app_cmd_rdy,
+        cmd                 => app_cmd,
+        cmd_en              => app_cmd_en,
+        addr                => app_addr,
+        wr_data_rdy         => app_wdata_rdy,
+        wr_data             => app_wdata,
+        wr_data_en          => app_wren,
+        wr_data_end         => app_wdata_end,
+        wr_data_mask        => app_wdata_mask,
+        rd_data             => app_rdata,
+        rd_data_valid       => app_rdata_valid,
+        rd_data_end         => open,
+        sr_req              => '0',
+        ref_req             => '0',          -- IP auto-refreshes
+        sr_ack              => open,
+        ref_ack             => open,
+        init_calib_complete => ddr_calib,
+        clk_out             => ddr_clk_x1,
+        ddr_rst             => open,
+        burst               => '1',
+        O_ddr_addr          => DDR3_A,
+        O_ddr_ba            => DDR3_BA,
+        O_ddr_cs_n          => DDR3_nCS,
+        O_ddr_ras_n         => DDR3_nRAS,
+        O_ddr_cas_n         => DDR3_nCAS,
+        O_ddr_we_n          => DDR3_nWE,
+        O_ddr_clk           => DDR3_CK,
+        O_ddr_clk_n         => DDR3_CK_N,
+        O_ddr_cke           => DDR3_CKE,
+        O_ddr_odt           => DDR3_ODT,
+        O_ddr_reset_n       => DDR3_nRESET,
+        O_ddr_dqm           => DDR3_DM(0 downto 0),
+        IO_ddr_dq           => DDR3_DQ(7 downto 0),
+        IO_ddr_dqs          => DDR3_DQS(0 downto 0),
+        IO_ddr_dqs_n        => DDR3_DQS_N(0 downto 0)
+      );
 
-  ddr_bridge_i : entity work.ddr3_byte_bridge
-    generic map (ADDR_BITS => 15, MASK_BIT_MASKS => true)
-    port map (
-      clk_sys   => clk_sys,
-      rst_sys_n => reset_n,
-      req       => sram_ext_req,
-      we        => sram_ext_we,
-      addr      => sram_ext_addr,
-      din       => sram_ext_din,
-      dout      => sram_ext_dout,
-      ack       => sram_ext_ack,
-      ram_ready => ram_ready,
+    -- x8 IP uses only the low byte lane DQ[7:0] (bank 5, the only lane with
+    -- internal VREF). Park the unused high byte (bank 4, no VREF): DM[1] masks
+    -- it, DQ[15:8]/DQS[1] stay high-Z.
+    DDR3_DQ(15 downto 8) <= (others => 'Z');
+    DDR3_DM(1)           <= '1';
+    DDR3_DQS(1)          <= 'Z';
+    DDR3_DQS_N(1)        <= 'Z';
 
-      ram_test_active    => ram_test_active,
-      ram_test_done      => ram_test_done,
-      ram_test_error     => ram_test_error,
-      ram_test_phase     => ram_test_phase,
-      ram_test_addr      => ram_test_addr,
-      ram_test_fail_addr => ram_test_fail_addr,
-      ram_test_expected  => ram_test_expected,
-      ram_test_actual    => ram_test_actual,
-
-      clk_x1              => ddr_clk_x1,
-      init_calib_complete => ddr_calib_complete,
-      dbg_pll_lock        => ddr_pll_lock,
-      app_cmd             => app_cmd,
-      app_cmd_en          => app_cmd_en,
-      app_cmd_rdy         => app_cmd_rdy,
-      app_addr            => app_addr27,
-      app_wren            => app_wren,
-      app_wdata           => app_wdata,
-      app_wdata_end       => app_wdata_end,
-      app_wdata_mask      => app_wdata_mask,
-      app_wdata_rdy       => app_wdata_rdy,
-      app_rdata           => app_rdata,
-      app_rdata_valid     => app_rdata_valid
-    );
+    fb_ctrl_i : entity work.vic_fb_ddr3
+      generic map (FB_BASE_WORD => 0, LINE_PIX => 320, NUM_LINES => 200,
+                   APP_ADDR_BITS => 28)
+      port map (
+        clk_sys        => clk_sys,
+        rst_sys_n      => reset_n,
+        fb_frame_start => fb_frame_start,
+        fb_line_adv    => fb_line_adv,
+        fb_rdaddr      => fb_rdaddr,
+        fb_rddata      => fb_rddata,
+        cpu_req        => fb_cpu_req,
+        cpu_we         => fb_cpu_we,
+        cpu_addr       => fb_cpu_addr,
+        cpu_din        => fb_cpu_din,
+        cpu_dout       => fb_cpu_dout,
+        cpu_ack        => fb_cpu_ack,
+        clk_x1          => ddr_clk_x1,
+        calib_done      => ddr_calib,
+        app_cmd_rdy     => app_cmd_rdy,
+        app_cmd         => app_cmd,
+        app_cmd_en      => app_cmd_en,
+        app_addr        => app_addr,
+        app_wdata       => app_wdata,
+        app_wdata_mask  => app_wdata_mask,
+        app_wren        => app_wren,
+        app_wdata_end   => app_wdata_end,
+        app_wdata_rdy   => app_wdata_rdy,
+        app_rdata       => app_rdata,
+        app_rdata_valid => app_rdata_valid
+      );
   end generate;
 
-  -- ── Default low-power BSRAM main-RAM backend ─────────────────────────────
-  bram_backend_g : if not USE_DDR3 generate
+  -- Tie off the framebuffer reply signals + park DDR3 pins when FB_DDR3 is off.
+  no_fb_g : if not FB_DDR3 generate
+    fb_rddata   <= (others => '0');
+    fb_cpu_dout <= (others => '0');
+    fb_cpu_ack  <= '0';
+    ddr_calib   <= ram_ready;     -- no IP; memory PLL still provides ddr_pll_lock
+    DDR3_A   <= (others => '0'); DDR3_BA <= (others => '0');
+    DDR3_nCS <= '1'; DDR3_nRAS <= '1'; DDR3_nCAS <= '1'; DDR3_nWE <= '1';
+    DDR3_CK  <= '0'; DDR3_CK_N <= '1';
+    DDR3_CKE <= '0'; DDR3_ODT <= '0'; DDR3_nRESET <= '0';
+    DDR3_DM  <= (others => '1');
+    DDR3_DQ  <= (others => 'Z'); DDR3_DQS <= (others => 'Z');
+    DDR3_DQS_N <= (others => 'Z');
+  end generate;
+
+  -- ── Main RAM on BSRAM whenever it is not on DDR3 (default and FB_DDR3) ────
+  main_bram_g : if not USE_DDR3 generate
     bram_bridge_i : entity work.bram_byte_bridge
       generic map (BUS_ADDR_BITS => 15, RAM_ADDR_BITS => 13)
       port map (
@@ -940,35 +926,15 @@ begin
         ram_test_expected  => ram_test_expected,
         ram_test_actual    => ram_test_actual
       );
-
-    -- Keep the uninitialised DDR3 device in reset with clocks and termination
-    -- disabled. The bidirectional data/strobe pins remain high impedance.
-    ddr_addr    <= (others => '0');
-    ddr_bank    <= (others => '0');
-    ddr_cs      <= '1';
-    ddr_ras     <= '1';
-    ddr_cas     <= '1';
-    ddr_we      <= '1';
-    ddr_ck      <= '0';
-    ddr_ck_n    <= '1';
-    ddr_cke     <= '0';
-    ddr_odt     <= '0';
-    ddr_reset_n <= '0';
-    ddr_dm      <= (others => '1');
-    ddr_dq      <= (others => 'Z');
-    ddr_dqs     <= (others => 'Z');
-    ddr_dqs_n   <= (others => 'Z');
-
-    -- Reuse the existing boot LEDs as generic memory-backend-ready indicators.
-    ddr_pll_lock       <= ram_ready;
-    ddr_calib_complete <= ram_ready;
   end generate;
+
+  -- (DDR3 pin parking + calib/lock tie-off live in no_fb_g above.)
 
   led(0) <= not (boot_done or sd_init_done) when boot_done = '0' else not via_portb(0);
   led(1) <= not (boot_error or sd_seen_read_end) when boot_done = '0' else not via_portb(1);
-  -- DDR3 bring-up diagnostics until the CPU is released:
-  --   LED2 lit = DDR memory PLL locked, LED3 lit = DDR3 calibration complete.
-  led(2) <= not ddr_pll_lock        when sbc_boot_done = '0' else not via_portb(2);
-  led(3) <= not ddr_calib_complete  when sbc_boot_done = '0' else not via_portb(3);
+  -- DIAGNOSTIC: DDR3 status permanently on LED2/LED3.
+  -- LED2 lit = memory PLL locked, LED3 lit = DDR3 IP calibration complete.
+  led(2) <= not ddr_pll_lock;
+  led(3) <= not ddr_calib;
 
 end architecture;

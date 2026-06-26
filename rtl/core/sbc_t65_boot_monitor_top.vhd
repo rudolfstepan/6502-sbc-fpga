@@ -12,7 +12,14 @@ entity sbc_t65_boot_monitor_top is
     -- Forwarded to vic_vga: true selects exact CEA-861 720x480p (pillarboxed).
     CEA_480P : boolean := false;
     -- PS/2 keyboard layout: "DE" (German QWERTZ) or "US" (US QWERTY).
-    KBD_LAYOUT : string := "DE"
+    KBD_LAYOUT : string := "DE";
+    -- When true the $6000-$7FFF bitmap window and the 320x200 8bpp display mode
+    -- are served by an external DDR3 framebuffer (vic_fb_ddr3 at board level)
+    -- instead of on-chip BRAM. Main RAM stays on its byte backend either way.
+    FB_DDR3 : boolean := false;
+    -- Set false to drop the SID (~1100 LUT + DSP). Frees device resources to
+    -- relieve congestion; $D400 reads return $FF and audio is silenced.
+    ENABLE_SID : boolean := true
   );
   port (
     clk          : in  std_logic;
@@ -58,6 +65,20 @@ entity sbc_t65_boot_monitor_top is
     sram_ext_din  : out data_t;                         -- write byte (latched)
     sram_ext_dout : in  data_t := (others => '0');      -- read byte (held by bridge)
     sram_ext_ack  : in  std_logic := '0';               -- 1-clk pulse: access complete
+
+    -- DDR3 framebuffer interface (driven only when FB_DDR3=true; wired at the
+    -- board level to vic_fb_ddr3). Display side: line control + combinational
+    -- pixel read. CPU side: $6000-$7FFF byte access via req/ack (CPU stalled).
+    fb_frame_start : out std_logic;
+    fb_line_adv    : out std_logic;
+    fb_rdaddr      : out std_logic_vector(9 downto 0);
+    fb_rddata      : in  data_t := (others => '0');
+    fb_cpu_req     : out std_logic;
+    fb_cpu_we      : out std_logic;
+    fb_cpu_addr    : out std_logic_vector(16 downto 0);
+    fb_cpu_din     : out data_t;
+    fb_cpu_dout    : in  data_t := (others => '0');
+    fb_cpu_ack     : in  std_logic := '0';
 
     -- PT8211 audio DAC (I2S-style serial output)
     dac_bck     : out std_logic;
@@ -224,6 +245,13 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal char_glyph_hi : std_logic;
   signal char_data   : data_t;
 
+  -- DDR3 framebuffer ($6000-$7FFF) CPU access state (only used when FB_DDR3)
+  signal vic_fb_mode  : std_logic := '0';
+  signal fb_stall     : std_logic := '0';   -- hold CPU during a DDR3 fb access
+  signal fb_busy      : std_logic := '0';
+  signal fb_dout_reg  : data_t := (others => '0');
+  signal bmp_rd_data  : data_t;              -- $6000 read source (BRAM or DDR3)
+
   signal disk_cs     : std_logic;
   signal disk_we     : std_logic;
   signal disk_dout   : data_t;
@@ -305,7 +333,7 @@ begin
 
   cpu_rdy    <= not vic_stealing and not vic_stealing_d and
                 not vram_wr_pending and not bitmap_wr_pending and not monitor_hold
-                and not sram_stall;
+                and not sram_stall and not fb_stall;
 
   sram_dout  <= sram_ext_dout;
   cpu_irq_n  <= not (via_irq or uart_irq or usb_irq or disk_irq);
@@ -498,7 +526,7 @@ begin
       when DEV_DISK =>
         cpu_din <= disk_dout;
       when DEV_VIC_BMP =>
-        cpu_din <= bitmap_dout;
+        cpu_din <= bmp_rd_data;
       when DEV_SOUND0 | DEV_SOUND1 | DEV_SOUND2 | DEV_SOUND3 =>
         cpu_din <= sound_dout;
       when DEV_MATH =>
@@ -812,18 +840,25 @@ begin
                   when dev_sel = DEV_SOUND0 and cpu_addr(3 downto 0) = "1010"
                   else x"FF";
 
-  sid_i : entity work.sid6581
-    generic map (CLK_HZ => CLK_HZ)
-    port map (
-      clk        => clk,
-      reset_n    => cpu_reset_n,
-      cs         => sid_cs,
-      we         => sid_we,
-      addr       => sid_addr,
-      din        => cpu_dout,
-      dout       => sid_dout,
-      sample_out => sid_sample
-    );
+  sid_g : if ENABLE_SID generate
+    sid_i : entity work.sid6581
+      generic map (CLK_HZ => CLK_HZ)
+      port map (
+        clk        => clk,
+        reset_n    => cpu_reset_n,
+        cs         => sid_cs,
+        we         => sid_we,
+        addr       => sid_addr,
+        din        => cpu_dout,
+        dout       => sid_dout,
+        sample_out => sid_sample
+      );
+  end generate;
+
+  no_sid_g : if not ENABLE_SID generate
+    sid_dout   <= x"FF";
+    sid_sample <= (others => '0');
+  end generate;
 
   dac_i : entity work.pt8211_dac
     generic map (BCK_HALF => CLK_HZ / 3_000_000)
@@ -1023,6 +1058,68 @@ begin
   char_i : entity work.char_rom
     port map (addr => char_addr, glyph_hi => char_glyph_hi, dout => char_data);
 
+  -- ── DDR3 framebuffer ($6000-$7FFF) CPU access ────────────────────────────
+  -- Routes CPU byte reads/writes of the bitmap window to vic_fb_ddr3 (board
+  -- level) and stalls the 6502 for the whole access. The on-chip bitmap RAM is
+  -- left in place (still written) but not displayed; fb_mode reads pixels from
+  -- DDR3. fb_frame_start/fb_line_adv/fb_rdaddr are driven by vic_i directly.
+  fb_ddr3_g : if FB_DDR3 generate
+    signal fb_acc      : std_logic;
+    signal fb_complete : std_logic := '0';
+  begin
+    vic_fb_mode <= vic_mode_reg(4);
+    fb_acc      <= '1' when monitor_hold = '0' and dev_sel = DEV_VIC_BMP else '0';
+    fb_stall    <= '1' when fb_acc = '1' and fb_complete = '0' else '0';
+    bmp_rd_data <= fb_dout_reg;
+
+    process(clk)
+    begin
+      if rising_edge(clk) then
+        if reset_n = '0' then
+          fb_busy     <= '0';
+          fb_complete <= '0';
+          fb_cpu_req  <= '0';
+          fb_cpu_we   <= '0';
+          fb_cpu_addr <= (others => '0');
+          fb_cpu_din  <= (others => '0');
+          fb_dout_reg <= (others => '0');
+        else
+          fb_cpu_req <= '0';
+          if fb_acc = '0' then
+            fb_complete <= '0';
+            fb_busy     <= '0';
+          elsif fb_busy = '0' and fb_complete = '0' then
+            -- launch one DDR3 access: bank = MODE(7:5), offset = addr[12:0]
+            fb_cpu_req  <= '1';
+            -- Use the STABLE write-intent (cpu_we), not the phase-gated strobe
+            -- cpu_bus_we (= cpu_we and not cpu_enable). The launch can fire in
+            -- either cpu_enable phase; latching cpu_bus_we turns a write into a
+            -- read whenever it fires in the cpu_enable='1' phase, so writes never
+            -- commit (reads still work because cpu_we=0 there anyway).
+            fb_cpu_we   <= cpu_we;
+            fb_cpu_addr <= '0' & vic_mode_reg(7 downto 5) & cpu_addr(12 downto 0);
+            fb_cpu_din  <= cpu_dout;
+            fb_busy     <= '1';
+          elsif fb_busy = '1' and fb_cpu_ack = '1' then
+            fb_dout_reg <= fb_cpu_dout;
+            fb_complete <= '1';
+            fb_busy     <= '0';
+          end if;
+        end if;
+      end if;
+    end process;
+  end generate;
+
+  no_fb_ddr3_g : if not FB_DDR3 generate
+    vic_fb_mode <= '0';
+    fb_stall    <= '0';
+    bmp_rd_data <= bitmap_dout;
+    fb_cpu_req  <= '0';
+    fb_cpu_we   <= '0';
+    fb_cpu_addr <= (others => '0');
+    fb_cpu_din  <= (others => '0');
+  end generate;
+
   vic_i : entity work.vic_vga
     generic map (
       CLK_DIV => CLK_HZ / 27_000_000,
@@ -1045,6 +1142,11 @@ begin
       color256_mode    => vic_mode_reg(1),
       color64_mode     => vic_mode_reg(3),
       vic_fetch_bitmap => vic_fetch_bitmap,
+      fb_mode          => vic_fb_mode,
+      fb_frame_start   => fb_frame_start,
+      fb_line_adv      => fb_line_adv,
+      fb_rdaddr        => fb_rdaddr,
+      fb_rddata        => fb_rddata,
       vga_hs       => vga_hs,
       vga_vs       => vga_vs,
       vga_de       => vga_de,

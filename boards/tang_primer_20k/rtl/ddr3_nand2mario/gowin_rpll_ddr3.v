@@ -1,20 +1,19 @@
 //Copyright (C)2014-2022 Gowin Semiconductor Corporation.
 //All rights reserved.
 //File Title: IP file
-//GOWIN Version: V1.9.8.05
+//GOWIN Version: V1.9.8.07
 //Part Number: GW2A-LV18PG256C8/I7
 //Device: GW2A-18C
-//Created Time: Fri May 06 23:06:50 2022
+//Created Time: Sat Sep 17 22:58:08 2022
 
-module Gowin_rPLL (clkout, lock, reset, clkin);
+module Gowin_rPLL_ddr3 (clkout, clkoutp, lock, clkoutd, clkin);
 
 output clkout;
+output clkoutp;
 output lock;
-input reset;
+output clkoutd;
 input clkin;
 
-wire clkoutp_o;
-wire clkoutd_o;
 wire clkoutd3_o;
 wire gw_gnd;
 
@@ -23,10 +22,10 @@ assign gw_gnd = 1'b0;
 rPLL rpll_inst (
     .CLKOUT(clkout),
     .LOCK(lock),
-    .CLKOUTP(clkoutp_o),
-    .CLKOUTD(clkoutd_o),
+    .CLKOUTP(clkoutp),
+    .CLKOUTD(clkoutd),
     .CLKOUTD3(clkoutd3_o),
-    .RESET(reset),
+    .RESET(gw_gnd),
     .RESET_P(gw_gnd),
     .CLKIN(clkin),
     .CLKFB(gw_gnd),
@@ -38,20 +37,25 @@ rPLL rpll_inst (
     .FDLY({gw_gnd,gw_gnd,gw_gnd,gw_gnd})
 );
 
-// DDR3 memory clock: 27 MHz * (FBDIV+1)/(IDIV+1) = 27 * 11/3 = 99 MHz
-// (matches the DDR3 IP regenerated for MEMORY_CLK=100, CLK_RATIO 1:4 -> 25 MHz
-//  user clock).  VCO = fCLKOUT * ODIV = 99 * 8 = 792 MHz, within [400,1200].
-//  Was 198 MHz (FBDIV21/IDIV3/ODIV4) for MEMORY_CLK=200; calib failed on HW
-//  (no internal VREF on bank-4 DQ[15:8]); 99 MHz is the proven-good rate.
+// clkout @ 499.5 Mhz
+//defparam rpll_inst.FBDIV_SEL = 36;
+//defparam rpll_inst.IDIV_SEL = 1;
+//defparam rpll_inst.ODIV_SEL = 2;
+
+// clkout @ 398.25 Mhz
+defparam rpll_inst.FBDIV_SEL = 58;
+defparam rpll_inst.IDIV_SEL = 3;
+defparam rpll_inst.ODIV_SEL = 2;
+
+// clkoutd @ 1/4 * clkout
+defparam rpll_inst.DYN_SDIV_SEL = 4;
+
 defparam rpll_inst.FCLKIN = "27";
 defparam rpll_inst.DYN_IDIV_SEL = "false";
-defparam rpll_inst.IDIV_SEL = 2;
 defparam rpll_inst.DYN_FBDIV_SEL = "false";
-defparam rpll_inst.FBDIV_SEL = 10;
 defparam rpll_inst.DYN_ODIV_SEL = "false";
-defparam rpll_inst.ODIV_SEL = 8;
-defparam rpll_inst.PSDA_SEL = "0000";
-defparam rpll_inst.DYN_DA_EN = "true";
+defparam rpll_inst.PSDA_SEL = "0100";
+defparam rpll_inst.DYN_DA_EN = "false";
 defparam rpll_inst.DUTYDA_SEL = "1000";
 defparam rpll_inst.CLKOUT_FT_DIR = 1'b1;
 defparam rpll_inst.CLKOUTP_FT_DIR = 1'b1;
@@ -61,7 +65,6 @@ defparam rpll_inst.CLKFB_SEL = "internal";
 defparam rpll_inst.CLKOUT_BYPASS = "false";
 defparam rpll_inst.CLKOUTP_BYPASS = "false";
 defparam rpll_inst.CLKOUTD_BYPASS = "false";
-defparam rpll_inst.DYN_SDIV_SEL = 2;
 defparam rpll_inst.CLKOUTD_SRC = "CLKOUT";
 defparam rpll_inst.CLKOUTD3_SRC = "CLKOUT";
 defparam rpll_inst.DEVICE = "GW2A-18C";

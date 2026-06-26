@@ -29,8 +29,8 @@ RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/peripherals/uart6551.vhd rtl/core/peripherals/vic_core.vhd \
       rtl/core/peripherals/uart_rx_ser.vhd rtl/core/peripherals/uart_tx_ser.vhd \
       rtl/core/peripherals/vic_pixel_gen.vhd rtl/core/peripherals/vic_vga.vhd \
-      rtl/core/audio/legacy_sound/sound_voice.vhd rtl/core/peripherals/pt8211_dac.vhd \
-      rtl/core/audio/legacy_sound/sound_voice_full.vhd rtl/core/audio/legacy_sound/sound_chip4.vhd \
+      rtl/core/peripherals/vic_fb_ddr3.vhd \
+      rtl/core/peripherals/pt8211_dac.vhd \
       rtl/core/audio/sid/sid6581.vhd \
       rtl/core/boot/boot_debug_uart.vhd rtl/core/boot/boot_vga_debug.vhd \
       rtl/core/boot/boot_sdram_test.vhd rtl/core/boot/uart_debug_monitor.vhd \
@@ -49,9 +49,10 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_vic_raster_irq.vhd sim/tb/tb_sbc_vic_display.vhd \
       sim/tb/tb_vic_color256.vhd \
       sim/tb/tb_vic_color64.vhd \
+      sim/tb/tb_vic_fb_ddr3.vhd \
       sim/tb/tb_bram_byte_bridge.vhd \
-      sim/tb/tb_sound_voice.vhd sim/tb/tb_vram_steal_race.vhd \
-      sim/tb/tb_vram_read_steal.vhd sim/tb/tb_sound_chip4.vhd \
+      sim/tb/tb_vram_steal_race.vhd \
+      sim/tb/tb_vram_read_steal.vhd \
       sim/tb/tb_d64_sector_map.vhd sim/tb/tb_d64_drive.vhd \
       sim/tb/tb_fat32_reader.vhd sim/tb/tb_d64_subsystem.vhd \
       sim/tb/tb_hdmi_encoder.vhd
@@ -178,14 +179,10 @@ test: roms fat32-card-image
 	$(GHDL) -r $(GHDL_FLAGS) tb_hdmi_encoder $(GHDL_RUN_FLAGS) --stop-time=30ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_bram_byte_bridge
 	$(GHDL) -r $(GHDL_FLAGS) tb_bram_byte_bridge $(GHDL_RUN_FLAGS)
-	$(GHDL) -e $(GHDL_FLAGS) tb_sound_voice
-	$(GHDL) -r $(GHDL_FLAGS) tb_sound_voice $(GHDL_RUN_FLAGS) --stop-time=5ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_vram_steal_race
 	$(GHDL) -r $(GHDL_FLAGS) tb_vram_steal_race $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_vram_read_steal
 	$(GHDL) -r $(GHDL_FLAGS) tb_vram_read_steal $(GHDL_RUN_FLAGS) -gREAD_LATENCY_FIX=true
-	$(GHDL) -e $(GHDL_FLAGS) tb_sound_chip4
-	$(GHDL) -r $(GHDL_FLAGS) tb_sound_chip4 $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_rom_image
 	$(GHDL) -r $(GHDL_FLAGS) tb_rom_image $(GHDL_RUN_FLAGS)
 	$(GHDL) -e $(GHDL_FLAGS) tb_t65_adapter

@@ -67,6 +67,15 @@ entity vic_vga is
     color64_mode  : in  std_logic := '0';
     vic_fetch_bitmap : out std_logic;
 
+    -- 320x200 8bpp (RGB332) framebuffer mode, sourced from the DDR3 controller
+    -- (vic_fb_ddr3) instead of the on-chip bitmap RAM. When fb_mode='1' the VRAM
+    -- steal/fetch FSM is idle; pixels come from fb_rddata, addressed by fb_rdaddr.
+    fb_mode        : in  std_logic := '0';
+    fb_frame_start : out std_logic;                      -- pulse at frame start
+    fb_line_adv    : out std_logic;                      -- pulse per logical line
+    fb_rdaddr      : out std_logic_vector(9 downto 0);   -- disp_line(0)*320 + col
+    fb_rddata      : in  std_logic_vector(7 downto 0) := (others => '0');
+
     -- VGA-Ausgang 640x480
     vga_hs       : out std_logic;
     vga_vs       : out std_logic;
@@ -190,6 +199,14 @@ architecture rtl of vic_vga is
   signal color64      : std_logic_vector(5 downto 0);
   signal in_color64   : std_logic;
 
+  -- 320x200 8bpp DDR3 framebuffer mode
+  signal fb_line     : natural range 0 to 199 := 0;   -- logical line for this scanline
+  signal fb_col      : natural range 0 to 319 := 0;   -- pixel column 0..319
+  signal fb_active   : std_logic;                     -- in 640x400 content window
+  signal fb_prevline : natural range 0 to 199 := 0;
+  signal fb_fs_r     : std_logic := '0';
+  signal fb_adv_r    : std_logic := '0';
+
 begin
   -- Pixel-clock enable: divide by CLK_DIV (2 for 50 MHz, 1 for 27 MHz)
   process(clk)
@@ -266,8 +283,9 @@ begin
         fetch_valid     <= '0';
       else
         if fetching = '0' then
-          -- Trigger beim letzten sichtbaren Pixel
-          if pce = '1' and hc = H_VIS - 1 then
+          -- Trigger beim letzten sichtbaren Pixel (nicht im DDR3-Framebuffer-Modus:
+          -- dort liefert vic_fb_ddr3 die Pixel, kein VRAM-Steal noetig)
+          if pce = '1' and hc = H_VIS - 1 and fb_mode = '0' then
             -- Naechste Scanzeile
             if vc = V_TOT - 1 then nv := 0;
             else nv := vc + 1;
@@ -353,6 +371,37 @@ begin
     end if;
   end process;
 
+  -- DDR3 framebuffer line control: pulse fb_frame_start at the top of each frame
+  -- (controller restarts at line 0) and fb_line_adv once per logical scanline so
+  -- the controller advances its display index and prefetches the next line.
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if reset_n = '0' then
+        fb_fs_r     <= '0';
+        fb_adv_r    <= '0';
+        fb_prevline <= 0;
+      else
+        fb_fs_r  <= '0';
+        fb_adv_r <= '0';
+        if fb_mode = '1' and pce = '1' and hc = 0 then
+          if vc = 0 then
+            fb_fs_r     <= '1';
+            fb_prevline <= 0;
+          elsif vc >= V_BORD and vc < TV_END then
+            if (v_off / 2) /= fb_prevline then
+              fb_adv_r    <= '1';
+              fb_prevline <= v_off / 2;
+            end if;
+          end if;
+        end if;
+      end if;
+    end if;
+  end process;
+
+  fb_frame_start <= fb_fs_r;
+  fb_line_adv    <= fb_adv_r;
+
   -- Bus-Steal-Ausgaenge (kombinatorisch)
   -- Phase 0 Text:   Zeichencodes aus $8000+
   -- Phase 0 Bitmap: Pixeldaten aus ADDR_VIC_BMP_BASE ($6000)
@@ -401,6 +450,15 @@ begin
   pack_base <= (pixel_col64 / 4) * 3;
   pack_sub  <= pixel_col64 mod 4;
 
+  -- 320x200 framebuffer geometry: 640x400 content window (same as text), 2x
+  -- scaled. Logical line = v_off/2 (0..199), pixel column = hx/2 (0..319).
+  fb_active <= '1' when hc >= H_PILL and hc < H_CEND and
+                        vc >= V_BORD and vc < TV_END else '0';
+  fb_line   <= (v_off / 2) when vc >= V_BORD and vc < TV_END else 0;
+  fb_col    <= hx / 2;
+  -- read address selects the displayed double-buffer half by line parity
+  fb_rdaddr <= std_logic_vector(to_unsigned((fb_line mod 2) * 320 + fb_col, 10));
+
   -- Zeichencode und Farbattribut aus Zeilenpuffer
   char_code  <= linebuf(col)  when in_text = '1' else x"00";
   cell_color <= colorbuf(col) when in_text = '1' else x"00";
@@ -441,19 +499,28 @@ begin
 
   -- RGB332 expands directly to RGB565 in 256-colour mode. Replicated high bits
   -- fill the DAC width without needing a 256-entry palette RAM.
-  vga_r <= color64(5 downto 4) & color64(5 downto 4) & color64(5)
+  vga_r <= fb_rddata(7 downto 5) & fb_rddata(7 downto 6)
+           when fb_mode = '1' and fb_active = '1' else
+           "00000" when fb_mode = '1' else
+           color64(5 downto 4) & color64(5 downto 4) & color64(5)
            when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
            "00000" when bitmap_mode = '1' and color64_mode = '1' else
            chunky_color(7 downto 5) & chunky_color(7 downto 6)
            when bitmap_mode = '1' and color256_mode = '1' and in_text = '1' else
            PAL_R(fg_index) when pbit = '1' else PAL_R(bg_index);
-  vga_g <= color64(3 downto 2) & color64(3 downto 2) & color64(3 downto 2)
+  vga_g <= fb_rddata(4 downto 2) & fb_rddata(4 downto 2)
+           when fb_mode = '1' and fb_active = '1' else
+           "000000" when fb_mode = '1' else
+           color64(3 downto 2) & color64(3 downto 2) & color64(3 downto 2)
            when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
            "000000" when bitmap_mode = '1' and color64_mode = '1' else
            chunky_color(4 downto 2) & chunky_color(4 downto 2)
            when bitmap_mode = '1' and color256_mode = '1' and in_text = '1' else
            PAL_G(fg_index) when pbit = '1' else PAL_G(bg_index);
-  vga_b <= color64(1 downto 0) & color64(1 downto 0) & color64(1)
+  vga_b <= fb_rddata(1 downto 0) & fb_rddata(1 downto 0) & fb_rddata(1)
+           when fb_mode = '1' and fb_active = '1' else
+           "00000" when fb_mode = '1' else
+           color64(1 downto 0) & color64(1 downto 0) & color64(1)
            when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
            "00000" when bitmap_mode = '1' and color64_mode = '1' else
            chunky_color(1 downto 0) & chunky_color(1 downto 0) & chunky_color(1)

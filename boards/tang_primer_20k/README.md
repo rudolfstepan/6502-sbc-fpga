@@ -328,8 +328,9 @@ described under *Optional DDR3* before P&R.
 | GowinEDA >= 1.9.8 | Synthesis + P&R + bitstream | `gw_sh` must be on `PATH`               |
 | openFPGALoader    | Flash bitstream to board    | Optional; GowinEDA Programmer also works |
 
-On Windows, add `C:\Gowin\Gowin_V1.9.8.08\IDE\bin` to your `PATH` or set
-`GOWIN=C:/Gowin/Gowin_V1.9.8.08/IDE/bin/gw_sh.exe` when invoking make.
+On Windows, add `C:\Gowin\Gowin_V1.9.11.03_Education_x64\IDE\bin` to your `PATH`
+or set `GOWIN=C:/Gowin/Gowin_V1.9.11.03_Education_x64/IDE/bin/gw_sh.exe` when
+invoking make. (1.9.8.08 also works but its place & route is far slower.)
 
 ### Building the bitstream
 

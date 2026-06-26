@@ -13,5 +13,10 @@ set_multicycle_path 1 -hold -from [get_pins {sbc_i/cpu_i/core_i/*/Q}] -to [get_p
 # PS/2 keyboard clock is asynchronous input (~10-16.7 kHz from keyboard).
 # Sampled through a 3-FF synchroniser; no setup/hold constraints needed.
 
-# USE_DDR3=true requires restoring the DDR clock constraints documented in the
-# board README. They are omitted from the default BSRAM netlist.
+# DDR3 clock profile (official Gowin DDR3 Memory Interface IP). The PLL
+# (ddr_pll_i) makes ddr_memory_clk 99 MHz (DDR3 CK); the IP divides it by 4 to
+# clk_out ~25 MHz (ddr_clk_x1, the user/app clock). Both nets always exist (PLL
+# at top level). The IP's own generated timing handles its internal PHY clocks.
+create_clock -name ddr_memory_clk -period 10 [get_nets {ddr_memory_clk}]
+create_clock -name ddr_clk_x1     -period 40 [get_nets {ddr_clk_x1}]
+set_clock_groups -asynchronous -group [get_clocks {ddr_memory_clk ddr_clk_x1}] -group [get_clocks {clk_27mhz}]
