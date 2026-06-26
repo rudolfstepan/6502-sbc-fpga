@@ -77,3 +77,8 @@ sid_orig/
 # sid-disks).  The packed .d64 images under roms/test_d64/ are committed instead.
 roms/test_d64/prg/
 roms/test_d64/sid/prg/
+
+# Vendor datasheets / board schematics (large binaries) and the paper draft —
+# kept locally, not tracked in the repo.
+boards/tang_primer_20k/docs/
+paper/
