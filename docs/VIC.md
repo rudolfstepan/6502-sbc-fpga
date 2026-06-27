@@ -179,6 +179,62 @@ A worked example that fills the screen with 16 vertical colour bars is in
 [`sw/fb16_test.s`](../sw/fb16_test.s) → `roms/fb16_test.rom` (upload via
 `roms/upload/fb16_test.bat`).
 
+## Displaying a Photograph (image → D64)
+
+A full COLOR16 frame is **38400 bytes** — larger than the `$A000` ROM window
+(12 KiB) and larger than the usable RAM, so a photo cannot be embedded in a ROM
+or a single RAM PRG. Instead it is shipped on a **D64** as a tiny loader plus
+five framebuffer-bank parts and streamed straight into `fb_ram`.
+
+### Tools
+
+| Tool | Purpose |
+| --- | --- |
+| [`tools/img2hires.py`](../tools/img2hires.py) `--color16` | Convert any image to 38400-byte COLOR16 data (`*_c16.bin`) + a preview PNG. Fits the image to 320×240 preserving aspect (letter/pillar-boxed in black), then serpentine Floyd–Steinberg dithers it to the 16-colour palette — every pixel is a free palette index, so the result is near-photo quality. `--brightness/--contrast/--saturation/--gamma` tune the tone before quantising. |
+| [`tools/build_image_disk.py`](../tools/build_image_disk.py) | One-shot pipeline: convert → split → assemble loader → pack D64. |
+| [`sw/show_image.s`](../sw/show_image.s) | The on-board loader (loads at `$2000`). |
+
+### How it works
+
+`DISK_LOAD` loads a PRG to the load address stored in its first two bytes, but the
+`$6000` window is only 8 KiB — one framebuffer bank. So the 38400-byte frame is
+split into five parts, each a PRG whose load address is `$6000`:
+
+```
+IMG0..IMG3 = 8192 bytes   (banks 0..3)
+IMG4       = 5632 bytes   (bank 4)
+```
+
+For each bank the loader writes `VIC_MODE = (bank << 5) | $11` (bit4 COLOR16 + bit0
+BITMAP + the bank bits 7:5), which points the `$6000` window at that bank, then
+`DISK_LOAD`s the matching part so the bytes land directly in `fb_ram`. After all
+five it selects bank 0 (`$11`) to show the picture; a keypress returns to text
+mode. The loader keeps its bank index **in memory, not in X** — `DISK_LOAD`
+clobbers A/X/Y, so a register loop counter would only load the first part.
+
+### Build and run
+
+```sh
+# host: build a disk from any image (jpg/png/…)
+python tools/build_image_disk.py ich.png -o roms/ich_image.d64
+```
+
+Write the `.d64` to the SD card, then on the board:
+
+```text
+LOAD "!"          mount the D64 (cursor-key picker)
+LOAD "SHOWIMG"
+CALL 8192
+```
+
+The image streams in bank-by-bank (you see it fill top-to-bottom), then displays
+the full 320×240 picture.
+
+> The same converter without `--color16` targets the **320×200 hires** bitmap
+> mode (2 colours per 8×8 cell, `$8400` colour RAM) used by
+> [`sw/ich_image.s`](../sw/ich_image.s)/`roms/ich_image.rom`. COLOR16 looks far
+> better for photographs; hires is only worth it when you need exactly 320×200.
+
 ## 16-Colour Palette
 
 The renderer uses the C64 (Pepto) palette, expanded to RGB565. Text mode and
