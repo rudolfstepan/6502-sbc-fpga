@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Build a standalone FPGA ROM (+ Windows upload .bat) for every .sid in a folder.
 
-For each tune under ``sid_orig/`` this wraps the native PSID payload exactly like
-``roms/sound_commando.rom``: it generates the 6502 player source, assembles it
-with ca65, links it with ``sw/soundsid.cfg`` into ``roms/sound_<name>.rom`` and
-writes ``roms/upload/sound_<name>.bat``. Tunes that cannot be wrapped (no play
-address, load address in zero page, or a payload too big for RAM/ROM) are
-skipped and reported.
+For each tune under ``sid_orig/`` this wraps the native PSID/RSID payload in a
+generic player: it generates the 6502 player source, assembles it with ca65,
+links it with ``sw/soundsid.cfg`` (or ``sw/sid_page.cfg`` for $A000-load tunes)
+into ``roms/sound_<name>.rom`` and writes ``roms/upload/sound_<name>.bat``.
+Tunes that cannot be wrapped (load address in zero page, or a payload too big
+for RAM/ROM) are skipped and reported. Curated hand-made ROMs (see ``CURATED``,
+e.g. ``roms/sound_commando.rom``) are left untouched unless ``--rebuild-curated``
+is given.
 
 Usage:
     python tools/build_all_sid_roms.py [--sid-dir sid_orig] [--rom-dir roms]
@@ -25,6 +27,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_native_sid_rom import parse_payload, render_asm, SidUnsupported  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Curated, hand-crafted ROMs that are NOT tooling output and must never be
+# overwritten by the bulk build. `roms/sound_commando.rom` is a bespoke demo
+# (commit "add a new sounddemo based on the c64 sid commando") whose generic
+# wrapper does not reproduce it; clobbering it with the auto-generated player
+# breaks playback. Keyed by the sanitized base name. Use --rebuild-curated to
+# override (e.g. when intentionally replacing one).
+CURATED = {"commando"}
 
 
 def sanitize(stem: str) -> str:
@@ -83,6 +93,9 @@ def main() -> int:
                     help="keep the generated .s sources next to the ROMs")
     ap.add_argument("--list", action="store_true",
                     help="only classify the tunes (build nothing)")
+    ap.add_argument("--rebuild-curated", action="store_true",
+                    help="also (re)build the curated hand-made ROMs that are "
+                         "skipped by default (see CURATED); overwrites them")
     ap.add_argument("--no-verify", action="store_true",
                     help="skip the emulator playability check (build every tune "
                          "that merely fits memory, even if it is silent here)")
@@ -110,6 +123,9 @@ def main() -> int:
     for sid in sids:
         base = sanitize(sid.stem)
         rom_name = f"sound_{base}.rom"
+        if base in CURATED and not args.rebuild_curated:
+            skipped.append((sid.name, "curated hand-made ROM kept (use --rebuild-curated to override)"))
+            continue
         try:
             info = parse_payload(sid.read_bytes())
         except SidUnsupported as e:
@@ -122,17 +138,18 @@ def main() -> int:
             built.append((sid.name, rom_name))
             continue
 
-        asm = render_asm(sid.stem, info["load"], info["init"], info["play"],
-                         info["body"], info["pages"])
+        asm = render_asm(sid.stem, info)
         s_path = src_dir / f"sound_{base}.s"
         o_path = src_dir / f"sound_{base}.o"
         rom_path = args.rom_dir / rom_name
         s_path.write_text(asm, newline="\n")
+        # "page" tunes (load $A000-$CFFF) use the RAM-under-BASIC layout cfg.
+        cfg = (ROOT / "sw" / "sid_page.cfg") if info["mode"] == "page" else args.cfg
         try:
             subprocess.run([args.ca65, "--cpu", "6502", "-t", "none",
                             str(s_path), "-o", str(o_path)],
                            check=True, capture_output=True, text=True)
-            subprocess.run([args.ld65, "-C", str(args.cfg), "-o", str(rom_path),
+            subprocess.run([args.ld65, "-C", str(cfg), "-o", str(rom_path),
                             str(o_path)], check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             failed.append((sid.name, (e.stderr or e.stdout or "build error").strip().splitlines()[-1]))
