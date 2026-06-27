@@ -200,7 +200,7 @@ five framebuffer-bank parts and streamed straight into `fb_ram`.
 `$6000` window is only 8 KiB — one framebuffer bank. So the 38400-byte frame is
 split into five parts, each a PRG whose load address is `$6000`:
 
-```
+```text
 IMG0..IMG3 = 8192 bytes   (banks 0..3)
 IMG4       = 5632 bytes   (bank 4)
 ```
@@ -229,6 +229,16 @@ CALL 8192
 
 The image streams in bank-by-bank (you see it fill top-to-bottom), then displays
 the full 320×240 picture.
+
+### Demo
+
+A photo loading live on the Tang Primer 20K
+([`examples/HighResImageDemo.mp4`](../examples/HighResImageDemo.mp4)):
+
+<video src="https://github.com/rudolfstepan/6502-sbc-fpga/raw/main/examples/HighResImageDemo.mp4" controls width="640">
+  Your browser can't play this video inline —
+  <a href="../examples/HighResImageDemo.mp4">download / view it here</a>.
+</video>
 
 > The same converter without `--color16` targets the **320×200 hires** bitmap
 > mode (2 colours per 8×8 cell, `$8400` colour RAM) used by

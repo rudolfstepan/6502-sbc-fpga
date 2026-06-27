@@ -13,6 +13,18 @@ The FPGA build reuses ROMs and kernel sources from the parent emulator repositor
 submodule inside [6502-sbc-emulator](https://github.com/rudolfstepan/6502-sbc-emulator)
 when building.
 
+## Demo
+
+A photograph displayed in the 320×240 16-colour bitmap mode (`COLOR16`), streamed
+from a D64 into the framebuffer on a Tang Primer 20K. See
+[Displaying a Photograph](docs/VIC.md#displaying-a-photograph-image--d64) for how
+it works.
+
+<video src="https://github.com/rudolfstepan/6502-sbc-fpga/raw/main/examples/HighResImageDemo.mp4" controls width="640">
+  Your browser can't play this video inline —
+  <a href="examples/HighResImageDemo.mp4">download / view it here</a>.
+</video>
+
 ## Current Scope
 
 The first milestone is a hardware skeleton:
