@@ -14,26 +14,31 @@ Every program is built as a RAM PRG whose **entry point is its load address**
 | 3545_II          | SID tune (player PRG)        |
 | AHEAD_CRACK_INTR | SID tune (player PRG)        |
 | CAT              | SID tune (player PRG)        |
+| CHESS            | Chess game (text + PS/2 kbd) |
 | LAST_STARFIGHTER | SID tune (player PRG)        |
 | ZOIDS            | SID tune (player PRG)        |
 | MANDEL           | Mandelbrot coprocessor demo  |
 
 The SID PRGs copy their payload to the tune's native address at startup and play
 it in a loop.  MANDEL renders to the VIC bitmap, waits for a key, then loops.
-All run to completion in their own loop — reset / KEY0 to exit.
+CHESS is the `sw/chess.s` game relinked from its standalone `$C000` ROM down to a
+RAM PRG at `$2000`; it draws on the VIC text screen and reads moves from the PS/2
+keyboard, looping in its own game loop.  All run to completion in their own loop
+— reset / KEY0 to exit.
 
 ## Regenerate
 
 ```sh
-make tunes-d64                 # rebuild testdisk.d64 (SID tunes + MANDEL)
+make tunes-d64                 # rebuild testdisk.d64 (SID tunes + MANDEL + CHESS)
 make TUNES="sid_orig/Zoids.sid" tunes-d64    # custom tune set (+ MANDEL)
 python tools/d64/list_d64.py roms/test_d64/testdisk.d64
 ```
 
 `tools/build_sid_prg.py` wraps a PSID as a RAM PRG (entry = load address); the
-Mandelbrot demo is linked at `$2000` via `sw/mandelbrot_copro_prg.cfg`.
-`tools/d64/pack_d64.py` packs the `.prg` files into the D64.  Programs must load
-and run entirely below the VIC bitmap window (`$6000`).
+Mandelbrot demo is linked at `$2000` via `sw/mandelbrot_copro_prg.cfg`, and the
+chess game via `sw/chess_prg.cfg` (both from `sw/*.s`).  `tools/d64/pack_d64.py`
+packs the `.prg` files into the D64.  Programs must load and run entirely below
+the VIC bitmap window (`$6000`).
 
 ## Full SID collection (`sid/`)
 

@@ -1,0 +1,1529 @@
+; Standalone SBC6502 chess ROM.
+; Derived from 6502 chess by Code Monkey King / Maksim Korzh
+; https://github.com/maksimKorzh/6502-chess
+; License signal from upstream repository: MIT
+
+COLS             = 40
+ROWS             = 25
+SCREEN_BASE      = $8000
+COLOR_BASE       = $8400
+VIC_CURSOR_X     = $9001
+VIC_CURSOR_Y     = $9002
+VIC_TEXT_COLOR   = $9003
+VIC_BG_COLOR     = $9004
+VIC_TEXT_ATTR    = $9005   ; FPGA: bit0 = per-cell text background (colour-RAM high nibble)
+; PS/2 keyboard register file (FPGA, $8820-$8823) - see fpga/rtl/core/ps2/ps2_keyboard.vhd
+KBD_STATUS       = $8820   ; bit7=connected bit0=key_ready
+KBD_ASCII        = $8823   ; ASCII translation; read clears key_ready
+; Audio: the current FPGA bitstream has no synth at $8830 (only the free-running
+; millisecond counter at $883A); sound is produced by the SID at $D400. The
+; tone routines below drive SID voice 1 and time note length off the ms counter.
+MS_TIMER         = $883A   ; free-running 1 kHz counter, low 8 bits (wraps 256 ms)
+SID_FREQ_LO      = $D400
+SID_FREQ_HI      = $D401
+SID_PW_LO        = $D402
+SID_PW_HI        = $D403
+SID_CTRL         = $D404   ; bit4 = triangle, bit0 = gate
+SID_AD           = $D405   ; attack/decay
+SID_SR           = $D406   ; sustain/release
+SID_VOL          = $D418   ; mode/volume (low nibble = master volume)
+KBD_READY        = $01
+UI_BG_ATTR       = $B0
+UI_TEXT_ATTR     = $BF
+BORDER_ATTR      = $BC
+LIGHT_SQUARE_BG  = $F0
+DARK_SQUARE_BG   = $B0
+PLAYER_HL_BG     = $60
+ENGINE_HL_BG     = $80
+WHITE_PIECE_FG   = $01
+BLACK_PIECE_FG   = $00
+
+.segment "ZEROPAGE"
+scrptr_lo:        .res 1
+scrptr_hi:        .res 1
+strptr_lo:        .res 1
+strptr_hi:        .res 1
+tmp1:             .res 1
+tmp2:             .res 1
+tmp3:             .res 1
+tmp4:             .res 1
+tmp5:             .res 1
+tmp6:             .res 1
+current_color:    .res 1
+snd_lo:           .res 1
+snd_hi:           .res 1
+snd_dur:          .res 1
+snd_w0:           .res 1
+snd_w1:           .res 1
+snd_start:        .res 1
+
+.segment "BSS"
+board:            .res 128
+mscore:           .res 1
+pscore:           .res 1
+score:            .res 1
+bestsrc:          .res 1
+bestdst:          .res 1
+side:             .res 1
+tsrc:             .res 1
+tdst:             .res 1
+player_src:       .res 1
+player_dst:       .res 1
+player_last_src:  .res 1
+player_last_dst:  .res 1
+engine_last_src:  .res 1
+engine_last_dst:  .res 1
+input_buf:        .res 4
+input_len:        .res 1
+captured_piece:   .res 1
+
+.segment "RODATA"
+board_init:
+    .byte $16, $14, $15, $17, $13, $15, $14, $16, $00, $00, $00, $00, $00, $00, $00, $00
+    .byte $12, $12, $12, $12, $12, $12, $12, $12, $00, $00, $00, $00, $00, $00, $00, $00
+    .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $01, $01, $01, $01, $00, $00
+    .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $01, $02, $02, $01, $00, $00
+    .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $01, $02, $02, $01, $00, $00
+    .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $01, $01, $01, $01, $00, $00
+    .byte $09, $09, $09, $09, $09, $09, $09, $09, $00, $00, $00, $00, $00, $00, $00, $00
+    .byte $0E, $0C, $0D, $0F, $0B, $0D, $0C, $0E, $00, $00, $00, $00, $00, $00, $00, $00
+
+offsets:
+    .byte $00, $0F, $10, $11, $00
+    .byte $F1, $F0, $EF, $00
+    .byte $01, $10, $FF, $F0, $00
+    .byte $01, $10, $FF, $F0, $0F, $F1, $11, $EF, $00
+    .byte $0E, $F2, $12, $EE, $1F, $E1, $21, $DF, $00
+    .byte $04, $00, $0D, $16, $11, $08, $0D
+
+weights:
+    .byte $00, $00, $FD, $00, $F7, $F7, $F1, $E5, $00
+    .byte $03, $00, $00, $09, $09, $0F, $1B
+
+offboard_mask:
+    .byte $88
+
+white_side_mask:
+    .byte $08
+
+pieces:
+    .byte $20, $00, $80, $85, $81, $82, $83, $84, $00
+    .byte $80, $00, $85, $81, $82, $83, $84
+
+row_offsets:
+    .byte $00, $10, $20, $30, $40, $50, $60, $70
+
+title_msg:
+    .byte "SBC6502 CHESS", $00
+
+move_msg:
+    .byte "ENGINE MOVE ", $00
+
+side_msg:
+    .byte "SIDE TO MOVE ", $00
+
+black_msg:
+    .byte "BLACK", $00
+
+white_msg:
+    .byte "WHITE", $00
+
+demo_msg:
+    .byte "TYPE MOVE LIKE E7E5", $00
+
+demo_black_msg:
+    .byte "TYPE MOVE LIKE D7D5", $00
+
+files_msg:
+    .byte "    A   B   C   D   E   F   G   H", $00
+
+files_rev_msg:
+    .byte "    H   G   F   E   D   C   B   A", $00
+
+sep_msg:
+    .byte "  +---+---+---+---+---+---+---+---+", $00
+
+footer_msg:
+    .byte "MOVE> ", $00
+
+status_ready_msg:
+    .byte "BLACK TO PLAY           ", $00
+
+status_white_msg:
+    .byte "WHITE TO PLAY           ", $00
+
+status_invalid_msg:
+    .byte "INVALID MOVE - TRY AGAIN", $00
+
+capture_freq_lo:
+    .byte $DC, $26, $5D, $88, $B8, $0B, $93, $10
+
+capture_freq_hi:
+    .byte $00, $01, $01, $01, $01, $02, $02, $03
+
+capture_dur:
+    .byte $64, $6E, $78, $82, $8C, $AA, $D2, $A0
+
+.segment "CODE"
+reset:
+    cld
+    ldx #$ff
+    txs
+    lda #$0f
+    sta VIC_TEXT_COLOR
+    lda #$0b
+    sta VIC_BG_COLOR
+    lda #$01                 ; FPGA: per-cell text background (board square tiles)
+    sta VIC_TEXT_ATTR
+    jsr sid_init
+    jsr clear_screen
+    jsr init_position
+    jsr play_title_melody
+    lda #$01
+    jsr search
+    jsr engine_move
+game_loop:
+    jsr render_screen
+    jsr read_player_move
+    lda #$01
+    jsr search
+    jsr engine_move
+    jmp game_loop
+
+halt:
+    jmp halt
+
+init_position:
+    ldx #$00
+copy_board:
+    lda board_init,x
+    sta board,x
+    inx
+    cpx #$80
+    bne copy_board
+    lda #$00
+    sta mscore
+    sta pscore
+    sta score
+    sta bestsrc
+    sta bestdst
+    sta tsrc
+    sta tdst
+    sta input_len
+    lda #$ff
+    sta player_last_src
+    sta player_last_dst
+    sta engine_last_src
+    sta engine_last_dst
+    lda #UI_TEXT_ATTR
+    sta current_color
+    lda #$08
+    sta side
+    rts
+
+clear_screen:
+    lda #<SCREEN_BASE
+    sta scrptr_lo
+    lda #>SCREEN_BASE
+    sta scrptr_hi
+    lda #$20
+    ldy #$00
+    ldx #$04
+clear_loop:
+    sta (scrptr_lo),y
+    iny
+    bne clear_loop
+    inc scrptr_hi
+    dex
+    bne clear_loop
+    lda #<COLOR_BASE
+    sta scrptr_lo
+    lda #>COLOR_BASE
+    sta scrptr_hi
+    lda #UI_TEXT_ATTR
+    ldy #$00
+    ldx #$04
+clear_color_loop:
+    sta (scrptr_lo),y
+    iny
+    bne clear_color_loop
+    inc scrptr_hi
+    dex
+    bne clear_color_loop
+    lda #$00
+    sta VIC_CURSOR_X
+    sta VIC_CURSOR_Y
+    rts
+
+putc:
+    sta tmp5
+    txa
+    pha
+    sty tmp4
+    lda tmp5
+    cmp #$0d
+    beq putc_newline
+    cmp #$0a
+    beq putc_done
+    jsr calc_ptr
+    ldy #$00
+    lda tmp5
+    sta (scrptr_lo),y
+    clc
+    lda scrptr_hi
+    adc #$04
+        sta tmp6
+        lda tmp6
+    sta scrptr_hi
+    lda current_color
+    sta (scrptr_lo),y
+    inc VIC_CURSOR_X
+    lda VIC_CURSOR_X
+    cmp #COLS
+    bcc putc_done
+putc_newline_from_wrap:
+    lda #$00
+    sta VIC_CURSOR_X
+    inc VIC_CURSOR_Y
+    lda VIC_CURSOR_Y
+    cmp #ROWS
+    bcc putc_done
+    lda #(ROWS - 1)
+    sta VIC_CURSOR_Y
+putc_newline:
+    jmp putc_newline_from_wrap
+putc_done:
+    ldy tmp4
+    pla
+    tax
+    lda tmp5
+    rts
+
+calc_ptr:
+    lda #<SCREEN_BASE
+    sta scrptr_lo
+    lda #>SCREEN_BASE
+    sta scrptr_hi
+    ldx VIC_CURSOR_Y
+calc_row:
+    cpx #$00
+    beq calc_col
+    clc
+    lda scrptr_lo
+    adc #COLS
+    sta scrptr_lo
+    lda scrptr_hi
+    adc #$00
+    sta scrptr_hi
+    dex
+    jmp calc_row
+calc_col:
+    clc
+    lda scrptr_lo
+    adc VIC_CURSOR_X
+    sta scrptr_lo
+    lda scrptr_hi
+    adc #$00
+    sta scrptr_hi
+    rts
+
+print_string:
+    sta strptr_lo
+    sty strptr_hi
+print_string_loop:
+    ldy #$00
+    lda (strptr_lo),y
+    beq print_string_done
+    jsr putc
+    inc strptr_lo
+    bne print_string_loop
+    inc strptr_hi
+    jmp print_string_loop
+print_string_done:
+    rts
+
+read_key:
+read_key_loop:
+    lda KBD_STATUS
+    and #KBD_READY
+    beq read_key_loop
+    lda KBD_ASCII
+    cmp #'a'
+    bcc read_key_done
+    cmp #'z'+1
+    bcs read_key_done
+    and #$DF
+read_key_done:
+    rts
+
+set_cursor:
+    sta VIC_CURSOR_X
+    sty VIC_CURSOR_Y
+    rts
+
+set_draw_color:
+    ora #UI_BG_ATTR
+    sta current_color
+    rts
+
+set_draw_attr:
+    sta current_color
+    rts
+
+compute_square_bg:
+    lda tmp1
+    eor tmp2
+    and #$01
+    beq light_square_attr
+    lda #DARK_SQUARE_BG
+    sta tmp6
+    rts
+light_square_attr:
+    lda #LIGHT_SQUARE_BG
+    sta tmp6
+    rts
+
+apply_move_highlight:
+    tya
+    cmp engine_last_src
+    beq apply_engine_highlight
+    cmp engine_last_dst
+    beq apply_engine_highlight
+    cmp player_last_src
+    beq apply_player_highlight
+    cmp player_last_dst
+    beq apply_player_highlight
+    rts
+apply_engine_highlight:
+    lda #ENGINE_HL_BG
+    sta tmp6
+    rts
+apply_player_highlight:
+    lda #PLAYER_HL_BG
+    sta tmp6
+    rts
+
+set_square_bg_attr:
+    jsr compute_square_bg
+    lda tmp6
+    jmp set_draw_attr
+
+set_square_attr:
+    jsr compute_square_bg
+square_piece_attr:
+    lda board,y
+    beq square_empty_attr
+    bit white_side_mask
+    bne square_white_attr
+    lda tmp6
+    ora #BLACK_PIECE_FG
+    jmp set_draw_attr
+square_white_attr:
+    lda tmp6
+    ora #WHITE_PIECE_FG
+    jmp set_draw_attr
+square_empty_attr:
+    lda tmp6
+    jmp set_draw_attr
+
+show_status:
+    sta strptr_lo
+    sty strptr_hi
+    lda #$0f
+    jsr set_draw_color
+    lda #$00
+    ldy #$17
+    jsr set_cursor
+    lda strptr_lo
+    ldy strptr_hi
+    jsr print_string
+    rts
+
+draw_move_prompt:
+    lda #$00
+    sta input_len
+    lda #$0f
+    jsr set_draw_color
+    lda #$00
+    ldy #$18
+    jsr set_cursor
+    lda #<footer_msg
+    ldy #>footer_msg
+    jsr print_string
+    ldx #$00
+draw_prompt_fill:
+    lda #'_'
+    jsr putc
+    inx
+    cpx #$04
+    bne draw_prompt_fill
+    rts
+
+redraw_input:
+    lda #$0f
+    jsr set_draw_color
+    lda #$00
+    ldy #$18
+    jsr set_cursor
+    lda #<footer_msg
+    ldy #>footer_msg
+    jsr print_string
+    ldx #$00
+redraw_input_loop:
+    cpx input_len
+    bcs redraw_placeholder
+    lda input_buf,x
+    jsr putc
+    inx
+    cpx #$04
+    bne redraw_input_loop
+    jmp redraw_done
+redraw_placeholder:
+    lda #'_'
+    jsr putc
+    inx
+    cpx #$04
+    bne redraw_input_loop
+redraw_done:
+    rts
+
+is_valid_input_char:
+    ldx input_len
+    cpx #$00
+    beq need_file
+    cpx #$02
+    beq need_file
+need_rank:
+    cmp #'1'
+    bcc invalid_input_char
+    cmp #'8'+1
+    bcs invalid_input_char
+    sec
+    rts
+need_file:
+    cmp #'A'
+    bcc invalid_input_char
+    cmp #'H'+1
+    bcs invalid_input_char
+    sec
+    rts
+invalid_input_char:
+    clc
+    rts
+
+parse_square_at:
+    lda input_buf,x
+    sec
+    sbc #'A'
+    sta tmp1
+    inx
+    lda #'8'
+    sec
+    sbc input_buf,x
+    sta tmp2
+    lda tmp2
+    asl a
+    asl a
+    asl a
+    asl a
+    ora tmp1
+    rts
+
+play_move_beep:
+    lda tmp5
+    bne play_move_capture
+    jmp play_normal_beep
+play_move_capture:
+    jmp play_capture_beep
+
+; ---------------------------------------------------------------------------
+; SID tone engine (replaces the emulator soundchip at $8830).
+;   sid_init   : one-time SID setup (volume, envelope).
+;   sid_note   : A=freq lo (Hz), X=freq hi (Hz), Y=duration (ms). Plays a
+;                triangle note for Y ms (blocking, timed off MS_TIMER).
+;   delay_ms   : waits snd_dur milliseconds (silent).
+; The frequency is given in Hz like the old soundchip; the SID phase increment
+; is freq*17 (16777216/985248 = 17.03 at the PAL phi2 rate), computed inline.
+; ---------------------------------------------------------------------------
+sid_init:
+    lda #$0f
+    sta SID_VOL              ; master volume max, filter off
+    lda #$00
+    sta SID_AD               ; attack 0, decay 0
+    lda #$f0
+    sta SID_SR               ; sustain 15, release 0
+    lda #$00
+    sta SID_PW_LO
+    lda #$08
+    sta SID_PW_HI            ; ~50% (unused by triangle, harmless)
+    rts
+
+sid_note:
+    sta snd_lo
+    stx snd_hi
+    sty snd_dur
+    lda snd_lo
+    sta snd_w0
+    lda snd_hi
+    sta snd_w1
+    ldx #$04                 ; snd_w = freq << 4
+@shl:
+    asl snd_w0
+    rol snd_w1
+    dex
+    bne @shl
+    clc                      ; snd_w = freq*16 + freq = freq*17
+    lda snd_w0
+    adc snd_lo
+    sta SID_FREQ_LO
+    lda snd_w1
+    adc snd_hi
+    sta SID_FREQ_HI
+    lda #$11                 ; triangle + gate on
+    sta SID_CTRL
+    jsr delay_ms
+    lda #$10                 ; gate off -> release
+    sta SID_CTRL
+    rts
+
+delay_ms:
+    lda MS_TIMER
+    sta snd_start
+@wait:
+    lda MS_TIMER
+    sec
+    sbc snd_start
+    cmp snd_dur
+    bcc @wait
+    rts
+
+queue_tone:
+    jmp sid_note
+
+queue_rest:
+    sty snd_dur
+    jmp delay_ms
+
+play_title_melody:
+    ; Heroic retro fanfare with two phrases and cadence.
+    lda #$0B              ; C5
+    ldx #$02
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$93              ; E5
+    ldx #$02
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$10              ; G5
+    ldx #$03
+    ldy #$8C
+    jsr queue_tone
+    ldy #$28
+    jsr queue_rest
+
+    lda #$16              ; C6
+    ldx #$04
+    ldy #$C8
+    jsr queue_tone
+    ldy #$3C
+    jsr queue_rest
+
+    lda #$70              ; A5
+    ldx #$03
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$10              ; G5
+    ldx #$03
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$93              ; E5
+    ldx #$02
+    ldy #$8C
+    jsr queue_tone
+    ldy #$28
+    jsr queue_rest
+
+    lda #$4B              ; D5
+    ldx #$02
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$93              ; E5
+    ldx #$02
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$10              ; G5
+    ldx #$03
+    ldy #$B4
+    jsr queue_tone
+    ldy #$32
+    jsr queue_rest
+
+    lda #$70              ; A5
+    ldx #$03
+    ldy #$8C
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$10              ; G5
+    ldx #$03
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$93              ; E5
+    ldx #$02
+    ldy #$78
+    jsr queue_tone
+    ldy #$1E
+    jsr queue_rest
+
+    lda #$4B              ; D5
+    ldx #$02
+    ldy #$A0
+    jsr queue_tone
+    ldy #$28
+    jsr queue_rest
+
+    lda #$0B              ; C5
+    ldx #$02
+    ldy #$F0
+    jsr queue_tone
+    rts
+
+play_normal_beep:
+    lda #$70              ; 880 Hz (low byte)
+    ldx #$03              ; 880 Hz (high byte)
+    ldy #$5A              ; 90 ms
+    jmp sid_note
+
+play_capture_beep:
+    lda captured_piece
+    and #$07
+    tax
+    lda capture_freq_lo,x
+    sta snd_lo
+    lda capture_freq_hi,x
+    sta snd_hi
+    lda capture_dur,x
+    sta snd_dur
+    lda snd_lo
+    ldx snd_hi
+    ldy snd_dur
+    jmp sid_note
+
+apply_player_move:
+    ldx #$00
+    jsr parse_square_at
+    sta player_src
+    ldx #$02
+    jsr parse_square_at
+    sta player_dst
+
+    ldy player_src
+    lda board,y
+    beq player_move_invalid
+    sta tmp3
+    bit side
+    beq player_move_invalid
+
+    ldy player_dst
+    lda #$00
+    sta tmp5
+    sta captured_piece
+    lda board,y
+    beq player_move_commit
+    sta captured_piece
+    bit side
+    bne player_move_invalid
+    lda #$01
+    sta tmp5
+
+player_move_commit:
+    lda player_src
+    sta player_last_src
+    lda player_dst
+    sta player_last_dst
+    ldy player_dst
+    lda tmp3
+    sta board,y
+    ldy player_src
+    lda #$00
+    sta board,y
+    lda #$18
+    sec
+    sbc side
+    sta side
+    jsr play_move_beep
+    sec
+    rts
+
+player_move_invalid:
+    clc
+    rts
+
+read_player_move:
+    lda side
+    bit white_side_mask
+    bne read_move_status_white
+    lda #<status_ready_msg
+    ldy #>status_ready_msg
+    jmp read_move_status_draw
+read_move_status_white:
+    lda #<status_white_msg
+    ldy #>status_white_msg
+read_move_status_draw:
+    jsr show_status
+    jsr draw_move_prompt
+read_move_loop:
+    jsr read_key
+    cmp #$08
+    beq handle_backspace
+    cmp #$0D
+    beq handle_enter
+    cmp #'-'
+    beq read_move_loop
+    cmp #' '
+    beq read_move_loop
+    jsr is_valid_input_char
+    bcc read_move_loop
+    ldx input_len
+    cpx #$04
+    bcs read_move_loop
+    sta input_buf,x
+    inc input_len
+    jsr redraw_input
+    jmp read_move_loop
+
+handle_backspace:
+    lda input_len
+    beq read_move_loop
+    dec input_len
+    jsr redraw_input
+    jmp read_move_loop
+
+handle_enter:
+    lda input_len
+    cmp #$04
+    bne read_move_loop
+    jsr apply_player_move
+    bcs player_move_done
+    lda #<status_invalid_msg
+    ldy #>status_invalid_msg
+    jsr show_status
+    jsr draw_move_prompt
+    jmp read_move_loop
+
+player_move_done:
+    rts
+
+print_rank_fill:
+    lda #$07
+    jsr set_draw_color
+    lda #' '
+    jsr putc
+    lda #' '
+    jsr putc
+    lda #' '
+    jsr putc
+    lda #$00
+    sta tmp2
+rank_fill_loop:
+    ldy tmp1
+    lda row_offsets,y
+    clc
+    adc tmp2
+    tay
+    jsr set_square_bg_attr
+    lda #' '
+    jsr putc
+    lda #' '
+    jsr putc
+    lda #' '
+    jsr putc
+    lda #' '
+    jsr putc
+    inc tmp2
+    lda tmp2
+    cmp #$08
+    bne rank_fill_loop
+    rts
+
+print_square:
+    sta tmp4
+    lda tmp4
+    and #$0f
+    clc
+    adc #'A'
+    jsr putc
+    lda tmp4
+    lsr a
+    lsr a
+    lsr a
+    lsr a
+    sta tmp1
+    lda #'8'
+    sec
+    sbc tmp1
+    jmp putc
+
+print_rank:
+    lda #$07
+    jsr set_draw_color
+    lda side
+    bit white_side_mask
+    bne rank_left_white
+    lda #'1'
+    clc
+    adc tmp1
+    jmp rank_left_done
+rank_left_white:
+    lda #'8'
+    sec
+    sbc tmp1
+rank_left_done:
+    sta tmp3
+    jsr putc
+    lda #' '
+    jsr putc
+    lda #' '
+    jsr putc
+    lda #$00
+    sta tmp2
+rank_file_loop:
+    lda side
+    bit white_side_mask
+    bne rank_white_coords
+    lda #$07
+    sec
+    sbc tmp1
+    tay
+    lda row_offsets,y
+    sta tmp4
+    lda #$07
+    sec
+    sbc tmp2
+    clc
+    adc tmp4
+    jmp rank_coords_done
+rank_white_coords:
+    ldy tmp1
+    lda row_offsets,y
+    clc
+    adc tmp2
+rank_coords_done:
+    tay
+    jsr set_square_bg_attr
+    lda #' '
+    jsr putc
+
+    lda board,y
+    beq rank_piece_empty
+    jsr set_square_attr
+    lda board,y
+    and #$0f
+    tax
+    lda pieces,x
+    jsr putc
+    jmp rank_piece_done
+rank_piece_empty:
+    jsr set_square_bg_attr
+    lda #' '
+    jsr putc
+rank_piece_done:
+    jsr set_square_bg_attr
+    lda #' '
+    jsr putc
+    lda #' '
+    jsr putc
+    inc tmp2
+    lda tmp2
+    cmp #$08
+    bne rank_file_loop
+    lda #' '
+    jsr putc
+    lda tmp3
+    jsr putc
+    rts
+
+render_screen:
+    jsr clear_screen
+    lda #$0f
+    jsr set_draw_color
+    lda #$0d
+    ldy #$00
+    jsr set_cursor
+    lda #<title_msg
+    ldy #>title_msg
+    jsr print_string
+
+    lda #$02
+    ldy #$01
+    jsr set_cursor
+    lda #<move_msg
+    ldy #>move_msg
+    jsr print_string
+    lda bestsrc
+    jsr print_square
+    lda #'-'
+    jsr putc
+    lda bestdst
+    jsr print_square
+
+    lda #$02
+    ldy #$02
+    jsr set_cursor
+    lda #<side_msg
+    ldy #>side_msg
+    jsr print_string
+    lda side
+    bit white_side_mask
+    bne render_white
+    lda #<black_msg
+    ldy #>black_msg
+    jmp render_side
+render_white:
+    lda #<white_msg
+    ldy #>white_msg
+render_side:
+    jsr print_string
+
+    lda #$02
+    ldy #$03
+    jsr set_cursor
+    lda side
+    bit white_side_mask
+    bne render_demo_white
+    lda #<demo_black_msg
+    ldy #>demo_black_msg
+    jmp render_demo
+render_demo_white:
+    lda #<demo_msg
+    ldy #>demo_msg
+render_demo:
+    jsr print_string
+
+    lda #$02
+    ldy #$04
+    jsr set_cursor
+    lda #$07
+    jsr set_draw_color
+    lda side
+    bit white_side_mask
+    bne render_top_files_white
+    lda #<files_rev_msg
+    ldy #>files_rev_msg
+    jmp render_top_files
+render_top_files_white:
+    lda #<files_msg
+    ldy #>files_msg
+render_top_files:
+    jsr print_string
+
+    lda #$00
+    sta tmp1
+render_rank_loop:
+    lda tmp1
+    asl a
+    clc
+    adc #$05
+    sta tmp2
+
+    lda #$02
+    ldy tmp2
+    jsr set_cursor
+    jsr print_rank_fill
+
+    lda tmp1
+    asl a
+    clc
+    adc #$06
+    tay
+    lda #$02
+    jsr set_cursor
+    jsr print_rank
+
+    inc tmp1
+    lda tmp1
+    cmp #$08
+    bne render_rank_loop
+
+    lda #$02
+    ldy #$16
+    jsr set_cursor
+    lda #$07
+    jsr set_draw_color
+    lda side
+    bit white_side_mask
+    bne render_bottom_files_white
+    lda #<files_rev_msg
+    ldy #>files_rev_msg
+    jmp render_bottom_files
+render_bottom_files_white:
+    lda #<files_msg
+    ldy #>files_msg
+render_bottom_files:
+    jsr print_string
+
+    lda #$00
+    ldy #$17
+    jsr set_cursor
+    lda #$0f
+    jsr set_draw_color
+    lda side
+    bit white_side_mask
+    bne render_status_white
+    lda #<status_ready_msg
+    ldy #>status_ready_msg
+    jmp render_status
+render_status_white:
+    lda #<status_white_msg
+    ldy #>status_white_msg
+render_status:
+    jsr print_string
+
+    jsr draw_move_prompt
+    rts
+
+evaluator_bridge:
+    jmp evaluate
+
+search:
+    pha
+    tsx
+    txa
+    sec
+    sbc #$0a
+    tax
+    txs
+    lda #$81
+    pha
+    tsx
+    txa
+    clc
+    adc #$0c
+    tax
+    lda $0100,x
+    cmp #$00
+    beq evaluator_bridge
+    dex
+    lda #$00
+    sta $0100,x
+    jmp sq_loop
+
+evaluate:
+    lda #$00
+    sta mscore
+    sta pscore
+    ldy #$00
+brd_loop:
+    tya
+    bit offboard_mask
+    bne skip_sq
+    tay
+    lda board,y
+    cmp #$00
+    bne scr
+    jmp skip_sq
+scr:
+    and #$0f
+    tax
+    lda mscore
+    clc
+    adc weights,x
+    sta mscore
+    lda board,y
+    bit white_side_mask
+    beq pos_b
+pos_w:
+    tya
+    clc
+    adc #$08
+    tax
+    lda pscore
+    clc
+    adc board,x
+    sta pscore
+    jmp skip_sq
+pos_b:
+    tya
+    clc
+    adc #$08
+    tax
+    lda pscore
+    sec
+    sbc board,x
+    sta pscore
+skip_sq:
+    tya
+    cmp #$80
+    beq ret_eval
+    tay
+    iny
+    jmp brd_loop
+ret_eval:
+    tsx
+    inx
+    inx
+    lda side
+    bit white_side_mask
+    beq minus
+plus:
+    lda mscore
+    clc
+    adc pscore
+    sta $0100,x
+    jmp end_eval
+minus:
+    lda #$00
+    sec
+    sbc mscore
+    sec
+    sbc pscore
+    sta $0100,x
+end_eval:
+    jmp return
+
+engine_move:
+    lda #$00
+    sta tmp5
+    sta captured_piece
+    ldy bestdst
+    lda board,y
+    beq engine_move_apply
+    sta captured_piece
+    lda #$01
+    sta tmp5
+engine_move_apply:
+    lda bestsrc
+    sta engine_last_src
+    lda bestdst
+    sta engine_last_dst
+    ldx bestsrc
+    ldy bestdst
+    lda board,x
+    sta board,y
+    lda #$00
+    sta board,x
+    lda #$18
+    sec
+    sbc side
+    sta side
+    jsr play_move_beep
+    rts
+
+sq_loop:
+    bit offboard_mask
+    bne sq_bridge
+    tay
+    lda board,y
+    dex
+    dex
+    sta $0100,x
+    bit side
+    beq sq_bridge
+    and #$07
+    dex
+    sta $0100,x
+    clc
+    adc #$1f
+    tay
+    lda offsets,y
+    dex
+    dex
+    sta $0100,x
+offset_loop:
+    tsx
+    txa
+    clc
+    adc #$06
+    tax
+    inc $0100,x
+    lda $0100,x
+    tay
+    lda offsets,y
+    dex
+    sta $0100,x
+    cmp #$00
+    beq sq_bridge
+    txa
+    clc
+    adc #$06
+    tax
+    lda $0100,x
+    dex
+    sta $0100,x
+    jmp slide_loop
+sq_bridge:
+    jmp next_square
+slide_loop:
+    tsx
+    txa
+    clc
+    adc #$05
+    tax
+    ldy $0100,x
+    txa
+    clc
+    adc #$05
+    tax
+    tya
+    clc
+    adc $0100,x
+    sta $0100,x
+    bit offboard_mask
+    bne off_bridge
+    tay
+    tsx
+    txa
+    clc
+    adc #$07
+    tax
+    tya
+    lda board,y
+    sta $0100,x
+    bit side
+    bne off_bridge
+    inx
+    lda $0100,x
+    sec
+    cmp #$03
+    bcc is_pawn
+    jmp check_king
+off_bridge:
+    jmp next_offset
+is_pawn:
+    dex
+    lda $0100,x
+    tay
+    dex
+    dex
+    lda $0100,x
+    and #$07
+    cmp #$00
+    beq pawn_push
+    bne pawn_capture
+pawn_push:
+    tya
+    cmp #$00
+    bne off_bridge
+    jmp check_king
+pawn_capture:
+    tya
+    cmp #$00
+    beq off_bridge
+check_king:
+    tsx
+    txa
+    clc
+    adc #$07
+    tax
+    lda $0100,x
+    and #$07
+    cmp #$03
+    beq is_king
+    jmp make_move
+is_king:
+    tsx
+    inx
+    inx
+    lda #$7f
+    sta $0100,x
+    jmp return
+make_move:
+    tsx
+    txa
+    clc
+    adc #$0a
+    tax
+    ldy $0100,x
+    dex
+    lda $0100,x
+    sta board,y
+    inx
+    inx
+    ldy $0100,x
+    lda #$00
+    sta board,y
+    lda #$18
+    sec
+    sbc side
+    sta side
+recursion:
+    tsx
+    txa
+    clc
+    adc #$0c
+    tax
+    lda $0100,x
+    sec
+    sbc #$01
+    jsr search
+    tsx
+    txa
+    sec
+    sbc #$0c
+    tax
+    lda #$00
+    sec
+    sbc $0100,x
+    sta score
+take_back:
+    tsx
+    txa
+    clc
+    adc #$0a
+    tax
+    ldy $0100,x
+    dex
+    dex
+    dex
+    lda $0100,x
+    sta board,y
+    inx
+    inx
+    inx
+    inx
+    ldy $0100,x
+    dex
+    dex
+    lda $0100,x
+    sta board,y
+    lda #$18
+    sec
+    sbc side
+    sta side
+compare_score:
+    tsx
+    inx
+    lda $0100,x
+    sec
+    sbc score
+    bvc done_cmp
+    eor #$80
+done_cmp:
+    bmi update_score
+    jmp cont
+update_score:
+    lda score
+    sta $0100,x
+    tsx
+    txa
+    clc
+    adc #$0b
+    tax
+    lda $0100,x
+    sta tsrc
+    dex
+    lda $0100,x
+    sta tdst
+    tsx
+    inx
+    inx
+    inx
+    lda tdst
+    sta $0100,x
+    inx
+    lda tsrc
+    sta $0100,x
+cont:
+    tsx
+    txa
+    clc
+    adc #$07
+    tax
+    lda $0100,x
+    tay
+    inx
+    lda $0100,x
+    sec
+    cmp #$03
+    bcc is_double
+    sec
+    cmp #$05
+    bcc next_offset
+end_slide:
+    tya
+    cmp #$00
+    bne next_offset
+    jmp slide_loop
+next_offset:
+    jmp offset_loop
+is_double:
+    tsx
+    txa
+    clc
+    adc #$0a
+    tax
+    lda $0100,x
+    and #$70
+    clc
+    adc side
+    adc side
+    adc side
+    adc side
+    adc side
+    adc side
+    cmp #$80
+    beq end_slide
+    jmp next_offset
+next_square:
+    tsx
+    txa
+    clc
+    adc #$0b
+    tax
+    inc $0100,x
+    lda $0100,x
+    cmp #$80
+    bne rep_sq
+    beq return_best
+rep_sq:
+    jmp sq_loop
+return_best:
+    tsx
+    inx
+    lda $0100,x
+    inx
+    sta $0100,x
+    tsx
+    inx
+    inx
+    inx
+    lda $0100,x
+    sta bestdst
+    inx
+    lda $0100,x
+    sta bestsrc
+return:
+    tsx
+    txa
+    clc
+    adc #$0c
+    tax
+    txs
+    rts
+
+.segment "VECTORS"
+    .word halt
+    .word reset
+    .word halt

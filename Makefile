@@ -117,6 +117,11 @@ tunes-d64:
 	$(LD65) -C sw/mandelbrot_copro_prg.cfg -o $(TUNE_PRG_DIR)/mandel.bin $(TUNE_PRG_DIR)/mandel.o
 	$(PYTHON) -c "import sys; b=open('$(TUNE_PRG_DIR)/mandel.bin','rb').read(); open('$(TUNE_PRG_DIR)/MANDEL.prg','wb').write(bytes([0x00,0x20])+b)"
 	@rm -f $(TUNE_PRG_DIR)/mandel.o $(TUNE_PRG_DIR)/mandel.bin
+	# Chess game, relinked from its $$C000 ROM down to a RAM PRG at $$2000 (CALL 8192).
+	$(CA65) --cpu 6502 -o $(TUNE_PRG_DIR)/chess.o sw/chess.s
+	$(LD65) -C sw/chess_prg.cfg -o $(TUNE_PRG_DIR)/chess.bin $(TUNE_PRG_DIR)/chess.o
+	$(PYTHON) -c "import sys; b=open('$(TUNE_PRG_DIR)/chess.bin','rb').read(); open('$(TUNE_PRG_DIR)/CHESS.prg','wb').write(bytes([0x00,0x20])+b)"
+	@rm -f $(TUNE_PRG_DIR)/chess.o $(TUNE_PRG_DIR)/chess.bin
 	$(PYTHON) tools/d64/pack_d64.py -o $(TEST_D64) $(TUNE_PRG_DIR)/*.prg
 
 ## D64 GoDrive: convert EVERY convertible SID tune to a RAM PRG and pack them
