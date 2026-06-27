@@ -78,7 +78,12 @@ sid_orig/
 roms/test_d64/prg/
 roms/test_d64/sid/prg/
 
-# Vendor datasheets / board schematics (large binaries) and the paper draft —
-# kept locally, not tracked in the repo.
+# Vendor datasheets / board schematics (large binaries) — kept locally,
+# not tracked in the repo.
 boards/tang_primer_20k/docs/
-paper/
+
+# Paper: track only the 6502 paper source and its built PDF; keep LaTeX
+# build artefacts and any other local documents out of the repo.
+paper/*
+!paper/6502_fpga_paper.tex
+!paper/6502_fpga_paper.pdf
