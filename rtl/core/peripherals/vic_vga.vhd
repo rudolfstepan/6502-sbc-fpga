@@ -67,6 +67,10 @@ entity vic_vga is
     color256_mode : in  std_logic := '0';
     color64_mode  : in  std_logic := '0';
     color16_mode  : in  std_logic := '0';
+    -- $9005[0]: in text mode, take the per-cell background from the colour-RAM
+    -- high nibble instead of the global $D021 colour (e.g. the chess board's
+    -- coloured squares). Default 0 keeps the C64 global-background model.
+    cell_bg_mode  : in  std_logic := '0';
     vic_fetch_bitmap : out std_logic;
 
     -- VIC-II $D020 border colour (palette index). Colours the visible area
@@ -473,9 +477,11 @@ begin
   char_code  <= linebuf(col)  when in_text = '1' else x"00";
   cell_color <= colorbuf(col) when in_text = '1' else x"00";
   fg_index   <= to_integer(unsigned(cell_color(3 downto 0)));
-  -- Background is now the global VIC-II $D021 colour (C64 text-mode model),
-  -- not the per-cell high nibble. Foreground stays per-cell (color RAM).
-  bg_index   <= to_integer(unsigned(bg_color));
+  -- Background is the global VIC-II $D021 colour (C64 text-mode model) by
+  -- default; with cell_bg_mode ($9005[0]) it comes from the colour-RAM high
+  -- nibble per cell, so apps like chess can paint coloured square tiles.
+  bg_index   <= to_integer(unsigned(cell_color(7 downto 4))) when cell_bg_mode = '1'
+                else to_integer(unsigned(bg_color));
   chunky_color <= linebuf(pixel_col) when in_text = '1' else x"00";
   color64 <= linebuf(pack_base)(7 downto 2) when pack_sub = 0 else
              linebuf(pack_base)(1 downto 0) & linebuf(pack_base + 1)(7 downto 4)

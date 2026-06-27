@@ -218,6 +218,10 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vic_text_color : data_t := x"01";
   signal vic_bg_color   : data_t := x"00";
   signal vic_mode_reg     : data_t := x"00";
+  -- $9005 TEXT_ATTR: bit0 = per-cell text background (colour-RAM high nibble)
+  -- instead of the global $D021 background. Cleared on cpu_reset_n like the mode
+  -- register so a returning BASIC text screen keeps the C64-style global bg.
+  signal vic_text_attr  : data_t := x"00";
   -- VIC-II register block ($D000-$D03F). $20 = border, $21 = background (drive
   -- the display); $11/$12 read back the current raster line; the rest are a
   -- read/write register file for compatibility.
@@ -568,6 +572,7 @@ begin
         vic_cursor_x <= (others => '0');
         vic_cursor_y <= (others => '0');
         vic_mode_reg <= (others => '0');   -- back to text mode
+        vic_text_attr <= (others => '0');  -- back to global background
       elsif vic_reg_we = '1' then
         case cpu_addr(3 downto 0) is
           when x"0" =>
@@ -584,6 +589,8 @@ begin
             vic_text_color <= cpu_dout;
           when x"4" =>
             vic_bg_color <= cpu_dout;
+          when x"5" =>
+            vic_text_attr <= cpu_dout;
           when others =>
             null;
         end case;
@@ -591,7 +598,8 @@ begin
     end if;
   end process;
 
-  process(cpu_addr, vic_cursor_x, vic_cursor_y, vic_text_color, vic_bg_color, vic_mode_reg)
+  process(cpu_addr, vic_cursor_x, vic_cursor_y, vic_text_color, vic_bg_color,
+          vic_mode_reg, vic_text_attr)
   begin
     case cpu_addr(3 downto 0) is
       when x"0" =>
@@ -604,6 +612,8 @@ begin
         vic_reg_dout <= vic_text_color;
       when x"4" =>
         vic_reg_dout <= vic_bg_color;
+      when x"5" =>
+        vic_reg_dout <= vic_text_attr;
       when others =>
         vic_reg_dout <= x"00";
     end case;
@@ -1124,6 +1134,7 @@ begin
       color256_mode    => vic_mode_reg(1),
       color64_mode     => vic_mode_reg(3),
       color16_mode     => vic_mode_reg(4),
+      cell_bg_mode     => vic_text_attr(0),
       border_color     => vic2_regs(16#20#)(3 downto 0),
       bg_color         => vic2_regs(16#21#)(3 downto 0),
       raster           => vic_raster,

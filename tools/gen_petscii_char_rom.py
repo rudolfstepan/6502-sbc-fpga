@@ -4,10 +4,21 @@ The FPGA firmware writes ASCII-like bytes today, so this builds a hybrid:
 printable ASCII remains readable, low Commodore screen-code letters are added,
 and the upper punctuation/lowercase area carries PETSCII-style block graphics.
 The display path treats bit 7 as reverse video.
+
+.. warning::
+   **This generator is STALE and DESTRUCTIVE.** It emits a *flat 128-glyph*
+   ``char_rom.vhd`` whose display path uses bit 7 as reverse video. The current
+   ``rtl/core/mem/char_rom.vhd`` is a *hand-maintained 256-glyph* ROM built by a
+   ``build_rom`` function, where bit 7 is ``glyph_hi`` (upper bank) and which
+   carries German umlauts AND the chess piece glyphs ($80-$85). Running this
+   tool would overwrite all of that and break umlauts/chess. It therefore
+   refuses to run unless ``--force`` is given. Edit ``char_rom.vhd`` directly.
 """
 from __future__ import annotations
 
+import argparse
 import re
+import sys
 from pathlib import Path
 
 
@@ -136,6 +147,19 @@ def render(rom: list[list[int]]) -> str:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Generate the legacy 128-glyph char ROM.")
+    ap.add_argument(
+        "--force", action="store_true",
+        help="overwrite the hand-maintained 256-glyph char_rom.vhd anyway "
+             "(this DESTROYS the umlauts and chess piece glyphs -- see the "
+             "module docstring). Almost never what you want.")
+    args = ap.parse_args()
+    if not args.force:
+        sys.exit(
+            f"refusing to run: {OUT} is now a hand-maintained 256-glyph ROM "
+            "(umlauts + chess pieces). This stale generator would overwrite it "
+            "with a flat 128-glyph version and break them. Edit char_rom.vhd "
+            "directly, or pass --force if you really mean to regenerate.")
     base = parse_existing(OUT)
     OUT.write_text(render(build_rom(base)), encoding="utf-8")
 

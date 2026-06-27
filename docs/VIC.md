@@ -35,15 +35,23 @@ data-island / AVI-InfoFrame side lives in
 
 ## Register Map (`$9000`–`$900F`, `DEV_VIC_REG`)
 
-Only offsets 0–4 are decoded ([`sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc_t65_boot_monitor_top.vhd)).
+Only offsets 0–5 are decoded ([`sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc_t65_boot_monitor_top.vhd)).
 
 | Address | Offset | Register | Function |
 | --- | --- | --- | --- |
 | `$9000` | +0 | MODE | Display mode select (see bit table) |
 | `$9001` | +1 | CURSOR_X | Text cursor column 0–39 (writes ≥40 ignored) |
 | `$9002` | +2 | CURSOR_Y | Text cursor row 0–24 (writes ≥25 ignored) |
-| `$9003` | +3 | TEXT_COLOR | Default text colour register |
-| `$9004` | +4 | BG_COLOR | Default background colour register |
+| `$9003` | +3 | TEXT_COLOR | Default text colour register (legacy, not wired to display) |
+| `$9004` | +4 | BG_COLOR | Default background colour register (legacy, not wired to display) |
+| `$9005` | +5 | TEXT_ATTR | bit0 = per-cell text background (colour-RAM high nibble) |
+
+`TEXT_ATTR` bit 0 switches the text background source: `0` (default) keeps the
+C64 model — global background from `$D021`, per-cell foreground from colour RAM;
+`1` takes the background from each cell's colour-RAM **high** nibble (foreground
+stays the low nibble), so an app can paint coloured square tiles (e.g. the chess
+board). It is cleared on `cpu_reset_n`, like MODE, so a returning BASIC text
+screen keeps the global background.
 
 A long reset clears MODE to `$00` (text mode) so a returning BASIC text screen is
 never hidden behind a leftover bitmap — see [Reset architecture](./02_MODULES.md).
