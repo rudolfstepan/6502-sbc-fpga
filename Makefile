@@ -60,7 +60,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
-        sid-disks reist
+        sid-disks reist adventure-rom
 
 ## ============================================================================
 ## Simulation targets
@@ -123,6 +123,15 @@ tunes-d64:
 	$(PYTHON) -c "import sys; b=open('$(TUNE_PRG_DIR)/chess.bin','rb').read(); open('$(TUNE_PRG_DIR)/CHESS.prg','wb').write(bytes([0x00,0x20])+b)"
 	@rm -f $(TUNE_PRG_DIR)/chess.o $(TUNE_PRG_DIR)/chess.bin
 	$(PYTHON) tools/d64/pack_d64.py -o $(TEST_D64) $(TUNE_PRG_DIR)/*.prg
+
+## Crypt of the 6502 -- standalone, uploadable adventure ROM (16 KB split image).
+## Upload: python tools/upload_monitor_hex.py roms/adventure.rom --split-rom --run
+##     or: roms/upload/adventure.bat
+adventure-rom:
+	$(CA65) --cpu 6502 -o roms/adventure.o sw/adventure.s
+	$(LD65) -C sw/adventure.cfg -o roms/adventure.rom roms/adventure.o
+	@rm -f roms/adventure.o
+	@echo "Built roms/adventure.rom (16 KB). Upload with roms/upload/adventure.bat"
 
 ## D64 GoDrive: convert EVERY convertible SID tune to a RAM PRG and pack them
 ## into numbered disk images (roms/test_d64/sid/tunesNN.d64).  Tunes that can't
