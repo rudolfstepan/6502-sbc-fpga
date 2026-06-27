@@ -16,7 +16,7 @@
 <div class="head"><div class="wrap">
   <div class="crumb"><a href="../6502_fpga_computer.html">Overview</a> / Component 04</div>
   <span class="kicker">Input / Output</span>
-  <h1>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h1>
+  <h1>VIA 6522 · UART 6551 · CIA-1 <span class="reg">$8800 · $8810 · $DC00</span></h1>
   <p class="lead">The two classic I/O chips: a versatile interface adapter with timers and GPIO,
      and a serial port for terminal and upload.</p>
 </div></div>
@@ -37,8 +37,8 @@
   <div class="facts">
     <div class="f"><div class="k">VIA window</div><div class="v">$8800–$880F (16 B)</div></div>
     <div class="f"><div class="k">UART window</div><div class="v">$8810–$8813 (4 B)</div></div>
-    <div class="f"><div class="k">Serial rate</div><div class="v">115200 8N1</div></div>
-    <div class="f"><div class="k">IRQ</div><div class="v">VIA · UART · VIC (OR)</div></div>
+    <div class="f"><div class="k">CIA-1 window</div><div class="v">$DC00–$DC0F (16 B)</div></div>
+    <div class="f"><div class="k">IRQ</div><div class="v">VIA · UART · Kbd · Disk · CIA-1 (OR)</div></div>
   </div>
 
   <h2>UART 6551 — serial port</h2>
@@ -49,15 +49,27 @@
   <p>Verified functions (GHDL): status read, TX write, RX read, RDRF clearing, overrun detection,
      programmed reset and RX IRQ behavior.</p>
 
+  <h2>CIA-1 — Timer A ($DC00)</h2>
+  <p>For better C64 compatibility a <strong>MOS 6526 subset</strong> sits at the original
+     <code class="inl">$DC00–$DC0F</code> addresses: Timer&nbsp;A as a down-counter with a latch
+     (<code class="inl">$DC04/$DC05</code>), control register <code class="inl">$DC0E</code> (start,
+     one-shot, force-load) and the interrupt control register <code class="inl">$DC0D</code>
+     (mask/status, read acknowledges). This lets <strong>interrupt-driven SID players</strong>
+     call their player from a Timer-A IRQ exactly as on a real C64.</p>
+
   <h2>Keyboard through the serial bridge</h2>
   <p>A peculiarity of the FPGA implementation: a <strong>PS/2 keyboard</strong> attaches to a PMOD,
      and its keystrokes are <em>injected</em> directly into the serial receive path. To EhBASIC this
-     looks like ordinary serial input — it never has to tell UART and keyboard apart. Local typing on
-     the HDMI screen works without a separate keyboard controller.</p>
+     looks like ordinary serial input — it never has to tell UART and keyboard apart. The layout is
+     <strong>switchable between German and US</strong> via a generic (Y/Z swap, AltGr for
+     <code class="inl">@ { [ ] } \ ~ |</code>, umlauts as Latin-1 rendered by the 256-glyph character
+     ROM). The <strong>USB HID host is only prepared</strong> (port stubs) — the active input path is
+     PS/2.</p>
 
   <h2>How the interrupts combine</h2>
-  <p>The IRQ lines from VIA, UART and VIC are OR-combined and routed together to the CPU:</p>
-  <pre class="code">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</pre>
+  <p>The IRQ lines from VIA, UART, keyboard, disk controller and CIA-1 are OR-combined and routed
+     together to the CPU:</p>
+  <pre class="code">cpu_irq_n = NOT (via_irq OR uart_irq OR usb_irq OR disk_irq OR cia1_irq)</pre>
   <p>The 6502 then branches through the interrupt vector at <code class="inl">$FFFE–$FFFF</code> into
      the appropriate handler.</p>
 

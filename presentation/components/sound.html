@@ -80,30 +80,50 @@
      die Hardware exakt so, wie der Original-Player sie erzeugt</strong>. Es läuft echter C64-Player-Code
      auf dem echten 6502-Kern, der einen echten SID-Nachbau ansteuert.</p>
 
-  <h3>Voraussetzungen einer Tune</h3>
+  <h3>Lade-Layout &amp; Antrieb</h3>
+  <p>Der Wrapper wählt das Layout automatisch nach der Ladeadresse der Tune:</p>
   <ul>
-    <li>echte <code class="inl">play</code>-Adresse (kein IRQ/CIA-getriebenes RSID),</li>
-    <li>lädt in den linearen RAM <code class="inl">$0200–$5FFF</code>,</li>
-    <li>Payload passt ins 12-KB-ROM-Fenster bei <code class="inl">$A000</code>,</li>
-    <li>Single-Speed-PAL (50 Hz <code class="inl">play</code>).</li>
+    <li><b>$0200–$5FFF</b> — der Wrapper bei <code class="inl">$A000</code> kopiert den Payload an seine Ladeadresse.</li>
+    <li><b>$A000–$CFFF</b> — <em>RAM-under-BASIC</em>: die Tune liegt direkt im ausgeblendeten BASIC-ROM-Fenster, der Player wohnt bei <code class="inl">$F000</code> (kein Kopieren).</li>
   </ul>
+  <p>Den Antrieb bestimmt die <code class="inl">play</code>-Adresse:</p>
+  <ul>
+    <li><b>play ≠ 0 — gepollt:</b> <code class="inl">init</code> einmal, dann <code class="inl">play</code> alle ~20 ms über den Millisekundenzähler <code class="inl">$883A</code>; ein frei laufender CIA-Timer&nbsp;A steht für Tunes bereit, die <code class="inl">$DC04</code> lesen.</li>
+    <li><b>play == 0 — interruptgetrieben:</b> die Tune installiert in <code class="inl">init</code> ihren eigenen CIA-Timer + <code class="inl">$0314</code>-Handler; der Wrapper liefert nur die <code class="inl">$FFFE → JMP ($0314)</code>-Brücke.</li>
+  </ul>
+  <p>Nach <code class="inl">init</code> setzt der Wrapper immer <code class="inl">SEI</code> — manche
+     RSID-<code class="inl">init</code>-Routinen machen <code class="inl">CLI</code>, sonst würde ein
+     streunender IRQ über die ROM-<code class="inl">$FFFE</code>-Brücke in ein uninitialisiertes
+     <code class="inl">$0314</code> springen und abstürzen.</p>
+
+  <h3>Raster-IRQ-Tunes (Arkanoid)</h3>
+  <p>Einige RSID-Tunes geben <code class="inl">play=$0000</code> an, weil ihre eigentliche Play-Routine in
+     einem <strong>VIC-Raster-Interrupt</strong>-Handler steckt — den die FPGA nicht bedient (keine
+     VIC-Interrupts, <code class="inl">$FFFE/$FFFF</code> ist ROM, kein <code class="inl">$01</code>-Banking).
+     Eine <code class="inl">OVERRIDES</code>-Tabelle zeigt <code class="inl">play</code> dann per Disassembly
+     auf die innere Routine, sodass der gepollte Pfad sie direkt antreibt. So spielt
+     <code class="inl">sound_arkanoid.rom</code>: dessen Raster-Handler ruft die SID-Aktualisierung bei
+     <code class="inl">$4141</code>, die wir mit 50 Hz pollen.</p>
 
   <h3>Mitgelieferte Beispiele</h3>
   <table class="sheet">
     <thead><tr><th>ROM</th><th>Tune</th><th>Besonderheit</th></tr></thead>
     <tbody>
       <tr><td class="a">soundsid.rom</td><td>World_Record_2.sid</td><td>ohne Filter/Sync/Ring</td></tr>
-      <tr><td class="a">sound_commando.rom</td><td>Commando.sid</td><td>nutzt den Tiefpassfilter stark</td></tr>
+      <tr><td class="a">sound_commando.rom</td><td>Commando.sid</td><td>handgemachtes Demo (kuratiert)</td></tr>
+      <tr><td class="a">sound_arkanoid.rom</td><td>Arkanoid.sid</td><td>Raster-IRQ-RSID über OVERRIDES</td></tr>
+      <tr><td class="a">sound_*.rom</td><td>HVSC-Auswahl</td><td>Bulk-Build aus <code class="inl">sid_orig/</code></td></tr>
     </tbody>
   </table>
-  <pre class="code"><span class="c"># eine Tune wrappen und abspielen</span>
+  <pre class="code"><span class="c"># eine Tune wrappen</span>
 python tools/build_native_sid_rom.py path/to/tune.sid sw/&lt;name&gt;.s
-make -C sw upload-sound-commando      <span class="c"># Build + Upload in einem Schritt</span>
 
 <span class="c"># oder gleich eine ganze Sammlung wrappen</span>
 python tools/build_all_sid_roms.py    <span class="c"># baut spielbare ROMs + .bat-Dateien</span></pre>
   <p>Der Bulk-Builder lässt jede Tune zusätzlich durch den Bare-Metal-6502-SID-Emulator laufen und
-     <strong>überspringt stumme Tunes</strong> — Player, die ohne CIA/VIC/KERNAL keinen Ton erzeugen.</p>
+     <strong>überspringt stumme Tunes</strong>. Handgemachte ROMs wie
+     <code class="inl">sound_commando.rom</code> stehen in einer <code class="inl">CURATED</code>-Liste und
+     werden nie überschrieben (<code class="inl">--rebuild-curated</code> erzwingt es).</p>
 
   <h2>SID-Register ($D400)</h2>
   <p>Standard-6581-Layout, drei Stimmen je 7 Register plus globale Filter-/Volume-Register:</p>

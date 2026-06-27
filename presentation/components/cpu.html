@@ -52,9 +52,9 @@
     <li><b>Reset-Sequenz:</b> Nach dem Loslassen von <code class="inl">reset_n</code> durchläuft
         die CPU ihre 7 internen Zyklen und liest den Reset-Vektor aus
         <code class="inl">$FFFC–$FFFD</code> im ROM, bevor sie zur Startadresse springt.</li>
-    <li><b>Interrupts:</b> Die IRQ-Quellen von VIA, UART und VIC werden ODER-verknüpft
-        (<code class="inl">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</code>); der Kern
-        verzweigt über den Vektor bei <code class="inl">$FFFE–$FFFF</code>.</li>
+    <li><b>Interrupts:</b> Die IRQ-Quellen von VIA, UART, Tastatur, Disk und CIA-1 werden ODER-verknüpft
+        (<code class="inl">cpu_irq_n = NOT (via_irq OR uart_irq OR usb_irq OR disk_irq OR cia1_irq)</code>);
+        der Kern verzweigt über den Vektor bei <code class="inl">$FFFE–$FFFF</code>.</li>
     <li><b>Bus-Stealing:</b> Über den <code class="inl">RDY</code>-Eingang hält der VIC die CPU
         an, während er die Austastlücke nutzt, um Videodaten zu holen — die CPU verliert
         dabei keine Schreibzugriffe.</li>

@@ -226,10 +226,11 @@
     <a class="item" href="components/vic.html">
       <div class="idx">02</div>
       <div class="body">
-        <h3>VIC-Grafik <span class="reg">$8000 · $9000</span></h3>
-        <p>Textmodus 40×25 mit 16-Farben-Palette, Legacy-Bitmap 320×200, 256-Farben
-           RGB332 und gepacktes 64-Farben RGB222 — über C64-artiges Bus-Stealing während
-           der Austastlücke, mit Overhead von nur 4,8 % im Textmodus.</p>
+        <h3>VIC-Grafik <span class="reg">$9000 · $D020</span></h3>
+        <p>Textmodus 40×25, ein 320×240-Bitmap mit 16 Farben sowie Legacy-Modi (320×200,
+           256-Farben RGB332, 64-Farben RGB222) — über C64-artiges Bus-Stealing mit nur
+           4,8 % Overhead im Textmodus. Dazu C64-kompatible VIC-II-Register: Rahmen/Hintergrund
+           ($D020/$D021) und Raster-Read-back ($D011/$D012).</p>
         <span class="more">Details ansehen →</span>
       </div>
     </a>
@@ -239,18 +240,18 @@
         <h3>SID-kompatibler Sound-Chip <span class="reg">$D400–$D418</span></h3>
         <p>Ein recht vollständiges MOS-6581-Modell: 3 Stimmen, kombinierte Wellenformen,
            zyklusgenaue ADSR und Multimode-Filter. Die Demo spielt <strong>originale
-           <span class="mono">.sid</span>-Dateien samt ihrem 6502-Player-Code</strong> mit
-           leichter Konvertierung direkt auf der Hardware — über den PT8211-DAC.</p>
+           <span class="mono">.sid</span>-Dateien samt ihrem 6502-Player-Code</strong> direkt
+           auf der Hardware — gepollt oder über den CIA-Timer, ausgegeben über den PT8211-DAC.</p>
         <span class="more">Details ansehen →</span>
       </div>
     </a>
     <a class="item" href="components/io.html">
       <div class="idx">04</div>
       <div class="body">
-        <h3>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h3>
-        <p>Timer, GPIO und IRQ-Flags der VIA; vollständige TX/RX-Logik der UART mit
-           Statusregistern und RX-Interrupt. PS/2-Tastatureingaben werden in den
-           seriellen Empfangspfad eingespeist.</p>
+        <h3>VIA 6522 · UART 6551 · CIA-1 <span class="reg">$8800 · $8810 · $DC00</span></h3>
+        <p>Timer, GPIO und IRQ-Flags der VIA; vollständige TX/RX-Logik der UART. Dazu ein
+           CIA-1-Timer&nbsp;A ($DC00) für interruptgetriebene Player und eine PS/2-Tastatur mit
+           umschaltbarem DE/US-Layout (USB-HID nur vorbereitet).</p>
         <span class="more">Details ansehen →</span>
       </div>
     </a>
@@ -295,6 +296,10 @@
       <figcaption><b>Mandelbrot · 1-bpp</b><span>320×200 Legacy-Bitmap</span></figcaption></figure>
     <figure><img src="images/tang_primer_debug_screen.jpg" alt="Boot-Diagnose">
       <figcaption><b>Boot-Diagnose</b><span>Self-Test: RAM · VRAM · VIA · UART</span></figcaption></figure>
+    <figure><img src="images/color_border_bg_demo1.jpg" alt="Rahmen- und Hintergrundfarbe per POKE">
+      <figcaption><b>POKE 53280/53281</b><span>VIC-II $D020/$D021 — Rahmen &amp; Hintergrund</span></figcaption></figure>
+    <figure><img src="images/color_border_bg_demo2.jpg" alt="Andere Rahmen-/Hintergrund-Kombination per POKE">
+      <figcaption><b>C64-Farbregister live</b><span>POKE 53280,3 : 53281,6</span></figcaption></figure>
   </div>
 </div></section>
 
@@ -344,30 +349,33 @@
       <tr><td class="a">$8000–$87FF</td><td class="s">2 KB</td><td>VIC Text- &amp; Farb-RAM</td></tr>
       <tr><td class="a">$8800–$880F</td><td class="s">16 B</td><td>VIA 6522</td></tr>
       <tr><td class="a">$8810–$8813</td><td class="s">4 B</td><td>UART 6551</td></tr>
+      <tr><td class="a">$8820–$8823</td><td class="s">4 B</td><td>Tastatur (PS/2-Controller; USB-HID nur vorbereitet)</td></tr>
       <tr><td class="a">$8824</td><td class="s">—</td><td>D64 GoDrive Register</td></tr>
       <tr><td class="a">$88B0–$88BF</td><td class="s">16 B</td><td>Math-Coprozessor (8.24 FPU)</td></tr>
       <tr><td class="a">$9000–$900F</td><td class="s">16 B</td><td>VIC-Steuerregister</td></tr>
       <tr><td class="a">$A000–$CFFF</td><td class="s">12 KB</td><td>Shadow-ROM Anwendungsfenster</td></tr>
-      <tr><td class="a">$D400–$D418</td><td class="s">25 B</td><td>SID-kompatible Audio-Register</td></tr>
+      <tr><td class="a">$D000–$D03F</td><td class="s">64 B</td><td>VIC-II-Register — Rahmen/Hintergrund + $D011/$D012 Raster</td></tr>
+      <tr><td class="a">$D400–$D41C</td><td class="s">29 B</td><td>SID-kompatible Audio-Register (inkl. OSC3/ENV3)</td></tr>
+      <tr><td class="a">$DC00–$DC0F</td><td class="s">16 B</td><td>CIA-1 — Timer A + Interrupt-Control</td></tr>
       <tr><td class="a">$F000–$FFFF</td><td class="s">4 KB</td><td>Shadow-ROM Kernel &amp; Vektoren</td></tr>
     </tbody>
   </table>
   <div class="two">
     <div class="deflist">
       <div class="h">Video</div>
-      <div class="r"><span>Ausgabe (Tang)</span><span>HDMI/DVI 640×480 @ 60 Hz</span></div>
+      <div class="r"><span>Ausgabe (Tang)</span><span>HDMI/DVI 720×480p (CEA-861)</span></div>
       <div class="r"><span>Pixeltakt</span><span>27 MHz · TMDS 135 MHz</span></div>
       <div class="r"><span>Textmodus</span><span>40×25, 16 Farben</span></div>
-      <div class="r"><span>Bitmap-Modi</span><span>1-bpp · RGB332 · RGB222</span></div>
+      <div class="r"><span>Bitmap-Modi</span><span>320×240 16-Farb · RGB332 · RGB222 · 1-bpp</span></div>
       <div class="r"><span>Bus-Overhead</span><span>4,8 % – 9,4 %</span></div>
     </div>
     <div class="deflist">
       <div class="h">Audio &amp; I/O</div>
       <div class="r"><span>Sound</span><span>SID 6581 · 3 Stimmen + Filter</span></div>
       <div class="r"><span>DAC</span><span>PT8211 I²S · ~47 kHz</span></div>
-      <div class="r"><span>Oszillator</span><span>24-Bit Phasenakkumulator</span></div>
+      <div class="r"><span>Timer</span><span>VIA · CIA-1 Timer A</span></div>
       <div class="r"><span>UART</span><span>115200 8N1 (CH340)</span></div>
-      <div class="r"><span>Eingabe</span><span>PS/2-Tastatur · UART</span></div>
+      <div class="r"><span>Eingabe</span><span>PS/2 (DE/US) · UART</span></div>
     </div>
   </div>
 </div></section>
@@ -524,10 +532,11 @@
     <a class="item" href="components/vic_en.html">
       <div class="idx">02</div>
       <div class="body">
-        <h3>VIC graphics <span class="reg">$8000 · $9000</span></h3>
-        <p>40×25 text mode with a 16-color palette, legacy 320×200 bitmap, 256-color
-           RGB332 and packed 64-color RGB222 — all via C64-style bus stealing during the
-           blanking interval, with as little as 4.8 % overhead in text mode.</p>
+        <h3>VIC graphics <span class="reg">$9000 · $D020</span></h3>
+        <p>40×25 text mode, a 320×240 16-color bitmap plus legacy modes (320×200, 256-color
+           RGB332, packed 64-color RGB222) — all via C64-style bus stealing, with as little as
+           4.8 % overhead in text mode. Plus C64-compatible VIC-II registers: border/background
+           ($D020/$D021) and raster read-back ($D011/$D012).</p>
         <span class="more">View details →</span>
       </div>
     </a>
@@ -538,17 +547,17 @@
         <p>A fairly complete MOS 6581 model: 3 voices, combined waveforms,
            cycle-accurate ADSR and a multimode filter. The demo plays <strong>original
            <span class="mono">.sid</span> files together with their 6502 player code</strong>
-           with light conversion, straight on the hardware — out through the PT8211 DAC.</p>
+           straight on the hardware — polled or CIA-timer driven, out through the PT8211 DAC.</p>
         <span class="more">View details →</span>
       </div>
     </a>
     <a class="item" href="components/io_en.html">
       <div class="idx">04</div>
       <div class="body">
-        <h3>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h3>
-        <p>VIA timers, GPIO and IRQ flags; full UART TX/RX logic with status registers
-           and RX interrupt. PS/2 keystrokes are injected into the serial receive path so
-           firmware sees them as UART input.</p>
+        <h3>VIA 6522 · UART 6551 · CIA-1 <span class="reg">$8800 · $8810 · $DC00</span></h3>
+        <p>VIA timers, GPIO and IRQ flags; full UART TX/RX logic. Plus a CIA-1 Timer&nbsp;A
+           ($DC00) for interrupt-driven players and a PS/2 keyboard with a switchable DE/US
+           layout (USB HID only prepared).</p>
         <span class="more">View details →</span>
       </div>
     </a>
@@ -593,6 +602,10 @@
       <figcaption><b>Mandelbrot · 1-bpp</b><span>320×200 legacy bitmap</span></figcaption></figure>
     <figure><img src="images/tang_primer_debug_screen.jpg" alt="Boot diagnostics">
       <figcaption><b>Boot diagnostics</b><span>Self-test: RAM · VRAM · VIA · UART</span></figcaption></figure>
+    <figure><img src="images/color_border_bg_demo1.jpg" alt="Border and background color via POKE">
+      <figcaption><b>POKE 53280/53281</b><span>VIC-II $D020/$D021 — border &amp; background</span></figcaption></figure>
+    <figure><img src="images/color_border_bg_demo2.jpg" alt="Different border/background combination via POKE">
+      <figcaption><b>C64 color registers live</b><span>POKE 53280,3 : 53281,6</span></figcaption></figure>
   </div>
 </div></section>
 
@@ -642,30 +655,33 @@
       <tr><td class="a">$8000–$87FF</td><td class="s">2 KB</td><td>VIC text &amp; color RAM</td></tr>
       <tr><td class="a">$8800–$880F</td><td class="s">16 B</td><td>VIA 6522</td></tr>
       <tr><td class="a">$8810–$8813</td><td class="s">4 B</td><td>UART 6551</td></tr>
+      <tr><td class="a">$8820–$8823</td><td class="s">4 B</td><td>Keyboard (PS/2 controller; USB HID only prepared)</td></tr>
       <tr><td class="a">$8824</td><td class="s">—</td><td>D64 GoDrive registers</td></tr>
       <tr><td class="a">$88B0–$88BF</td><td class="s">16 B</td><td>Math coprocessor (8.24 FPU)</td></tr>
       <tr><td class="a">$9000–$900F</td><td class="s">16 B</td><td>VIC control registers</td></tr>
       <tr><td class="a">$A000–$CFFF</td><td class="s">12 KB</td><td>Shadow-ROM application window</td></tr>
-      <tr><td class="a">$D400–$D418</td><td class="s">25 B</td><td>SID-compatible audio registers</td></tr>
+      <tr><td class="a">$D000–$D03F</td><td class="s">64 B</td><td>VIC-II registers — border/background + $D011/$D012 raster</td></tr>
+      <tr><td class="a">$D400–$D41C</td><td class="s">29 B</td><td>SID-compatible audio registers (incl. OSC3/ENV3)</td></tr>
+      <tr><td class="a">$DC00–$DC0F</td><td class="s">16 B</td><td>CIA-1 — Timer A + interrupt control</td></tr>
       <tr><td class="a">$F000–$FFFF</td><td class="s">4 KB</td><td>Shadow-ROM kernel &amp; vectors</td></tr>
     </tbody>
   </table>
   <div class="two">
     <div class="deflist">
       <div class="h">Video</div>
-      <div class="r"><span>Output (Tang)</span><span>HDMI/DVI 640×480 @ 60 Hz</span></div>
+      <div class="r"><span>Output (Tang)</span><span>HDMI/DVI 720×480p (CEA-861)</span></div>
       <div class="r"><span>Pixel clock</span><span>27 MHz · TMDS 135 MHz</span></div>
       <div class="r"><span>Text mode</span><span>40×25, 16 colors</span></div>
-      <div class="r"><span>Bitmap modes</span><span>1-bpp · RGB332 · RGB222</span></div>
+      <div class="r"><span>Bitmap modes</span><span>320×240 16-color · RGB332 · RGB222 · 1-bpp</span></div>
       <div class="r"><span>Bus overhead</span><span>4.8 % – 9.4 %</span></div>
     </div>
     <div class="deflist">
       <div class="h">Audio &amp; I/O</div>
       <div class="r"><span>Sound</span><span>SID 6581 · 3 voices + filter</span></div>
       <div class="r"><span>DAC</span><span>PT8211 I²S · ~47 kHz</span></div>
-      <div class="r"><span>Oscillator</span><span>24-bit phase accumulator</span></div>
+      <div class="r"><span>Timers</span><span>VIA · CIA-1 Timer A</span></div>
       <div class="r"><span>UART</span><span>115200 8N1 (CH340)</span></div>
-      <div class="r"><span>Input</span><span>PS/2 keyboard · UART</span></div>
+      <div class="r"><span>Input</span><span>PS/2 (DE/US) · UART</span></div>
     </div>
   </div>
 </div></section>

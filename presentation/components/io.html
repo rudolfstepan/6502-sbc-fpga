@@ -16,7 +16,7 @@
 <div class="head"><div class="wrap">
   <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 04</div>
   <span class="kicker">Ein-/Ausgabe</span>
-  <h1>VIA 6522 &amp; UART 6551 <span class="reg">$8800 · $8810</span></h1>
+  <h1>VIA 6522 · UART 6551 · CIA-1 <span class="reg">$8800 · $8810 · $DC00</span></h1>
   <p class="lead">Die beiden klassischen I/O-Bausteine: ein vielseitiger Schnittstellen-
      adapter mit Timern und GPIO, und eine serielle Schnittstelle für Terminal und Upload.</p>
 </div></div>
@@ -38,8 +38,8 @@
   <div class="facts">
     <div class="f"><div class="k">VIA-Fenster</div><div class="v">$8800–$880F (16 B)</div></div>
     <div class="f"><div class="k">UART-Fenster</div><div class="v">$8810–$8813 (4 B)</div></div>
-    <div class="f"><div class="k">Serielle Rate</div><div class="v">115200 8N1</div></div>
-    <div class="f"><div class="k">IRQ</div><div class="v">VIA · UART · VIC (ODER)</div></div>
+    <div class="f"><div class="k">CIA-1-Fenster</div><div class="v">$DC00–$DC0F (16 B)</div></div>
+    <div class="f"><div class="k">IRQ</div><div class="v">VIA · UART · Kbd · Disk · CIA-1 (ODER)</div></div>
   </div>
 
   <h2>UART 6551 — serielle Schnittstelle</h2>
@@ -50,17 +50,28 @@
   <p>Verifizierte Funktionen (GHDL): Status-Lesen, TX-Schreiben, RX-Lesen, RDRF-Clearing,
      Overrun-Erkennung, programmierter Reset und RX-IRQ-Verhalten.</p>
 
+  <h2>CIA-1 — Timer A ($DC00)</h2>
+  <p>Für bessere C64-Kompatibilität liegt an den originalen Adressen <code class="inl">$DC00–$DC0F</code>
+     eine <strong>MOS-6526-Teilmenge</strong>: Timer&nbsp;A als Abwärtszähler mit Latch
+     (<code class="inl">$DC04/$DC05</code>), Steuerregister <code class="inl">$DC0E</code> (Start,
+     One-Shot, Force-Load) und das Interrupt-Control-Register <code class="inl">$DC0D</code>
+     (Maske/Status, Lesen quittiert). Damit können <strong>interruptgetriebene SID-Player</strong>
+     ihren Player wie auf dem echten C64 aus einem Timer-A-IRQ heraus aufrufen.</p>
+
   <h2>Tastatur über die serielle Brücke</h2>
   <p>Eine Besonderheit der FPGA-Umsetzung: Eine <strong>PS/2-Tastatur</strong> wird am PMOD
      angeschlossen, und ihre Tastendrücke werden direkt in den seriellen Empfangspfad
      <em>eingespeist</em>. Für EhBASIC sieht das wie normale serielle Eingabe aus — es muss
-     nicht zwischen UART und Tastatur unterscheiden. So funktioniert lokales Tippen am
-     HDMI-Bildschirm ganz ohne separaten Tastatur-Controller.</p>
+     nicht zwischen UART und Tastatur unterscheiden. Das Layout ist per Generic
+     <strong>umschaltbar zwischen Deutsch und US</strong> (Y/Z-Tausch, AltGr für
+     <code class="inl">@ { [ ] } \ ~ |</code>, Umlaute als Latin-1, vom 256-Glyphen-Zeichen-ROM
+     dargestellt). Der <strong>USB-HID-Host ist nur vorbereitet</strong> (Port-Stubs) — die
+     aktive Eingabe läuft über PS/2.</p>
 
   <h2>Zusammenspiel der Interrupts</h2>
-  <p>Die IRQ-Leitungen von VIA, UART und VIC werden ODER-verknüpft und gemeinsam an die
-     CPU geführt:</p>
-  <pre class="code">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</pre>
+  <p>Die IRQ-Leitungen von VIA, UART, Tastatur, Disk-Controller und CIA-1 werden ODER-verknüpft
+     und gemeinsam an die CPU geführt:</p>
+  <pre class="code">cpu_irq_n = NOT (via_irq OR uart_irq OR usb_irq OR disk_irq OR cia1_irq)</pre>
   <p>Der 6502 verzweigt dann über den Interrupt-Vektor bei <code class="inl">$FFFE–$FFFF</code>
      in den passenden Handler.</p>
 

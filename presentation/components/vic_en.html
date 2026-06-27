@@ -16,7 +16,7 @@
 <div class="head"><div class="wrap">
   <div class="crumb"><a href="../6502_fpga_computer.html">Overview</a> / Component 02</div>
   <span class="kicker">Graphics</span>
-  <h1>VIC graphics <span class="reg">$8000 · $9000</span></h1>
+  <h1>VIC graphics <span class="reg">$9000 · $D020</span></h1>
   <p class="lead">The video controller produces the picture: text, color and several bitmap
      modes — output as VGA or HDMI, timed straight from FPGA logic.</p>
 </div></div>
@@ -30,10 +30,10 @@
      the PIX16.</p>
 
   <div class="facts">
-    <div class="f"><div class="k">Resolution</div><div class="v">640×480 @ 60 Hz</div></div>
+    <div class="f"><div class="k">Resolution</div><div class="v">720×480p (CEA-861)</div></div>
     <div class="f"><div class="k">Pixel clock</div><div class="v">27 MHz</div></div>
     <div class="f"><div class="k">Text mode</div><div class="v">40×25, 16 colors</div></div>
-    <div class="f"><div class="k">Bitmap modes</div><div class="v">1-bpp · RGB332 · RGB222</div></div>
+    <div class="f"><div class="k">Bitmap modes</div><div class="v">320×240 16-color · RGB332 · RGB222 · 1-bpp</div></div>
   </div>
 
   <h2>What it does</h2>
@@ -46,13 +46,16 @@
 
   <h3>Bitmap modes</h3>
   <ul>
+    <li><b>320×240 16 colors</b> — the new full-screen framebuffer (4 bpp), shown centered; the
+        surrounding border takes the <code class="inl">$D020</code> color.</li>
     <li><b>320×200 1-bpp</b> — legacy bitmap, 2× scaled to 640×400, 16 colors per 8×8 cell.</li>
     <li><b>160×100 RGB332</b> — 256 colors, one byte per pixel, 4× scaled to 640×400.</li>
     <li><b>180×120 RGB222</b> — 64 colors packed (4 pixels in 3 bytes), 3× scaled to 540×360.</li>
   </ul>
-  <p>The 16 KB framebuffer is exposed through an 8 KB CPU window at <code class="inl">$6000–$7FFF</code>;
-     a MODE bit selects the bank. The control register <code class="inl">$9000</code> switches
-     between modes.</p>
+  <p>The framebuffer (<code class="inl">fb_ram</code>, 38,400 bytes for 320×240 @ 4 bpp) is exposed
+     through an 8 KB CPU window at <code class="inl">$6000–$7FFF</code>; in 16-color mode three bank
+     bits in <code class="inl">$9000[7:5]</code> select the bank. The MODE register
+     <code class="inl">$9000</code> switches between modes.</p>
 
   <h3>Bus stealing — the shared bus</h3>
   <p>VIC and CPU share a single-port video memory. During each horizontal blanking interval the
@@ -61,15 +64,20 @@
      <strong>9.4 %</strong> for RGB332. CPU writes to video RAM are never lost — a pending write is
      buffered and committed on the first free clock.</p>
 
-  <h2>Color registers</h2>
+  <h2>Control &amp; color registers</h2>
   <table class="sheet">
     <thead><tr><th>Address</th><th>Register</th><th>Function</th></tr></thead>
     <tbody>
-      <tr><td class="a">$9000</td><td>MODE</td><td>bit 0 bitmap, bit 1 RGB332, bit 2 bank, bit 3 RGB222</td></tr>
-      <tr><td class="a">$9003</td><td>TEXT_COLOR</td><td>foreground color 0–15</td></tr>
-      <tr><td class="a">$9004</td><td>BG_COLOR</td><td>background color 0–15</td></tr>
+      <tr><td class="a">$9000</td><td>MODE</td><td>bit 0 bitmap, bit 1 RGB332, bit 3 RGB222, bit 4 16-color, bits 7:5 bank</td></tr>
+      <tr><td class="a">$D011</td><td>VIC-II CONTROL 1</td><td>read: bit 7 = raster line bit 8 (live)</td></tr>
+      <tr><td class="a">$D012</td><td>VIC-II RASTER</td><td>read: current raster line (low 8 bits, live)</td></tr>
+      <tr><td class="a">$D020</td><td>VIC-II BORDER</td><td>border color 0–15 — <code class="inl">POKE 53280,c</code></td></tr>
+      <tr><td class="a">$D021</td><td>VIC-II BACKGROUND</td><td>global background color — <code class="inl">POKE 53281,c</code></td></tr>
     </tbody>
   </table>
+  <p>The VIC-II registers sit at the original C64 addresses so classic
+     <code class="inl">POKE</code>s work. Reading <code class="inl">$D012</code>/<code class="inl">$D011</code>
+     returns the live raster line — essential so raster-synchronised players don't hang in a wait loop.</p>
 
   <h2>From BASIC</h2>
   <pre class="code"><span class="c">REM bitmap mode on, set a pixel</span>

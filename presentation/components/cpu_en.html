@@ -51,9 +51,9 @@
     <li><b>Reset sequence:</b> After <code class="inl">reset_n</code> is released, the CPU runs its
         7 internal cycles and reads the reset vector from <code class="inl">$FFFC–$FFFD</code> in
         ROM before jumping to the start address.</li>
-    <li><b>Interrupts:</b> The IRQ sources from VIA, UART and VIC are OR-combined
-        (<code class="inl">cpu_irq_n = NOT (via_irq OR uart_irq OR vic_irq)</code>); the core
-        branches through the vector at <code class="inl">$FFFE–$FFFF</code>.</li>
+    <li><b>Interrupts:</b> The IRQ sources from VIA, UART, keyboard, disk and CIA-1 are OR-combined
+        (<code class="inl">cpu_irq_n = NOT (via_irq OR uart_irq OR usb_irq OR disk_irq OR cia1_irq)</code>);
+        the core branches through the vector at <code class="inl">$FFFE–$FFFF</code>.</li>
     <li><b>Bus stealing:</b> Through the <code class="inl">RDY</code> input the VIC holds the CPU
         while it uses the blanking interval to fetch video data — without the CPU losing any writes.</li>
   </ul>

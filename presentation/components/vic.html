@@ -16,7 +16,7 @@
 <div class="head"><div class="wrap">
   <div class="crumb"><a href="../6502_fpga_computer.html">Übersicht</a> / Komponente 02</div>
   <span class="kicker">Grafik</span>
-  <h1>VIC-Grafik <span class="reg">$8000 · $9000</span></h1>
+  <h1>VIC-Grafik <span class="reg">$9000 · $D020</span></h1>
   <p class="lead">Der Video-Controller erzeugt das Bild: Text, Farben und mehrere
      Bitmap-Modi — ausgegeben als VGA oder HDMI, getaktet direkt aus der FPGA-Logik.</p>
 </div></div>
@@ -30,10 +30,10 @@
      auf dem Tang Primer 20K als HDMI/DVI, auf dem PIX16 als VGA.</p>
 
   <div class="facts">
-    <div class="f"><div class="k">Auflösung</div><div class="v">640×480 @ 60 Hz</div></div>
+    <div class="f"><div class="k">Auflösung</div><div class="v">720×480p (CEA-861)</div></div>
     <div class="f"><div class="k">Pixeltakt</div><div class="v">27 MHz</div></div>
     <div class="f"><div class="k">Textmodus</div><div class="v">40×25, 16 Farben</div></div>
-    <div class="f"><div class="k">Bitmap-Modi</div><div class="v">1-bpp · RGB332 · RGB222</div></div>
+    <div class="f"><div class="k">Bitmap-Modi</div><div class="v">320×240 16-Farb · RGB332 · RGB222 · 1-bpp</div></div>
   </div>
 
   <h2>Was es macht</h2>
@@ -46,13 +46,16 @@
 
   <h3>Bitmap-Modi</h3>
   <ul>
+    <li><b>320×240 16 Farben</b> — der neue Vollbild-Framebuffer (4 bpp), zentriert dargestellt;
+        der Rahmen außenherum hat die <code class="inl">$D020</code>-Farbe.</li>
     <li><b>320×200 1-bpp</b> — Legacy-Bitmap, 2× skaliert auf 640×400, 16 Farben pro 8×8-Zelle.</li>
     <li><b>160×100 RGB332</b> — 256 Farben, ein Byte je Pixel, 4× skaliert auf 640×400.</li>
     <li><b>180×120 RGB222</b> — 64 Farben gepackt (4 Pixel in 3 Bytes), 3× skaliert auf 540×360.</li>
   </ul>
-  <p>Der 16-KB-Framebuffer wird über ein 8-KB-CPU-Fenster bei <code class="inl">$6000–$7FFF</code>
-     sichtbar; ein MODE-Bit wählt die Bank. Das Steuerregister <code class="inl">$9000</code>
-     schaltet zwischen den Modi um.</p>
+  <p>Der Framebuffer (<code class="inl">fb_ram</code>, 38 400 Byte für 320×240 @ 4 bpp) wird über
+     ein 8-KB-CPU-Fenster bei <code class="inl">$6000–$7FFF</code> sichtbar; im 16-Farben-Modus
+     wählen drei Bank-Bits in <code class="inl">$9000[7:5]</code> die Bank. Das MODE-Register
+     <code class="inl">$9000</code> schaltet zwischen den Modi um.</p>
 
   <h3>Bus-Stealing — der geteilte Bus</h3>
   <p>VIC und CPU teilen sich einen Single-Port-Videospeicher. Während jeder horizontalen
@@ -62,15 +65,21 @@
      Video-RAM gehen dabei nie verloren — eine ausstehende Schreiboperation wird
      gepuffert und im ersten freien Takt committet.</p>
 
-  <h2>Farb-Register</h2>
+  <h2>Steuer- &amp; Farb-Register</h2>
   <table class="sheet">
     <thead><tr><th>Adresse</th><th>Register</th><th>Funktion</th></tr></thead>
     <tbody>
-      <tr><td class="a">$9000</td><td>MODE</td><td>Bit 0 Bitmap, Bit 1 RGB332, Bit 2 Bank, Bit 3 RGB222</td></tr>
-      <tr><td class="a">$9003</td><td>TEXT_COLOR</td><td>Vordergrundfarbe 0–15</td></tr>
-      <tr><td class="a">$9004</td><td>BG_COLOR</td><td>Hintergrundfarbe 0–15</td></tr>
+      <tr><td class="a">$9000</td><td>MODE</td><td>Bit 0 Bitmap, Bit 1 RGB332, Bit 3 RGB222, Bit 4 16-Farb, Bits 7:5 Bank</td></tr>
+      <tr><td class="a">$D011</td><td>VIC-II CONTROL 1</td><td>Lesen: Bit 7 = Rasterzeile Bit 8 (live)</td></tr>
+      <tr><td class="a">$D012</td><td>VIC-II RASTER</td><td>Lesen: aktuelle Rasterzeile (untere 8 Bit, live)</td></tr>
+      <tr><td class="a">$D020</td><td>VIC-II BORDER</td><td>Rahmenfarbe 0–15 — <code class="inl">POKE 53280,c</code></td></tr>
+      <tr><td class="a">$D021</td><td>VIC-II BACKGROUND</td><td>globale Hintergrundfarbe — <code class="inl">POKE 53281,c</code></td></tr>
     </tbody>
   </table>
+  <p>Die VIC-II-Register liegen an den originalen C64-Adressen, sodass klassische
+     <code class="inl">POKE</code>s funktionieren. <code class="inl">$D012</code>/<code class="inl">$D011</code>
+     liefern beim Lesen die laufende Rasterzeile — wichtig, damit rastersynchrone Player nicht in einer
+     Warteschleife hängen.</p>
 
   <h2>Aus BASIC</h2>
   <pre class="code"><span class="c">REM Bitmap-Modus an, Pixel setzen</span>

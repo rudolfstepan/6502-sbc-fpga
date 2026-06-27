@@ -79,30 +79,50 @@
      hardware exactly as the original player produces it</strong>. Real C64 player code runs on the real
      6502 core, driving a real SID recreation.</p>
 
-  <h3>What a tune needs</h3>
+  <h3>Load layout &amp; drive</h3>
+  <p>The wrapper picks the layout automatically from the tune's load address:</p>
   <ul>
-    <li>a real <code class="inl">play</code> address (not an IRQ/CIA-driven RSID),</li>
-    <li>it loads into linear RAM <code class="inl">$0200–$5FFF</code>,</li>
-    <li>its payload fits the 12 KB ROM window at <code class="inl">$A000</code>,</li>
-    <li>single-speed PAL (50 Hz <code class="inl">play</code>).</li>
+    <li><b>$0200–$5FFF</b> — the wrapper at <code class="inl">$A000</code> copies the payload down to its load address.</li>
+    <li><b>$A000–$CFFF</b> — <em>RAM-under-BASIC</em>: the tune sits directly in the paged-out BASIC ROM window, the player lives at <code class="inl">$F000</code> (no copy).</li>
   </ul>
+  <p>The play drive is chosen from the <code class="inl">play</code> address:</p>
+  <ul>
+    <li><b>play ≠ 0 — polled:</b> <code class="inl">init</code> once, then <code class="inl">play</code> every ~20 ms off the <code class="inl">$883A</code> millisecond counter; a free-running CIA Timer&nbsp;A is started for tunes that read <code class="inl">$DC04</code>.</li>
+    <li><b>play == 0 — interrupt-driven:</b> the tune installs its own CIA timer + <code class="inl">$0314</code> handler in <code class="inl">init</code>; the wrapper only supplies the <code class="inl">$FFFE → JMP ($0314)</code> bridge.</li>
+  </ul>
+  <p>After <code class="inl">init</code> the wrapper always issues <code class="inl">SEI</code> — some RSID
+     <code class="inl">init</code> routines end with <code class="inl">CLI</code>, otherwise a stray IRQ would
+     vector through the ROM <code class="inl">$FFFE</code> bridge into an uninitialised
+     <code class="inl">$0314</code> and crash.</p>
+
+  <h3>Raster-IRQ tunes (Arkanoid)</h3>
+  <p>A few RSID tunes declare <code class="inl">play=$0000</code> only because their real play routine is
+     buried inside a <strong>VIC raster-interrupt</strong> handler — which the FPGA cannot service (no VIC
+     interrupts, <code class="inl">$FFFE/$FFFF</code> is ROM, no <code class="inl">$01</code> banking). An
+     <code class="inl">OVERRIDES</code> table then points <code class="inl">play</code> at the inner routine
+     found by disassembly, so the polled path drives it directly. That is how
+     <code class="inl">sound_arkanoid.rom</code> plays: its raster handler calls the SID update at
+     <code class="inl">$4141</code>, which we poll at 50 Hz.</p>
 
   <h3>Bundled examples</h3>
   <table class="sheet">
     <thead><tr><th>ROM</th><th>Tune</th><th>Note</th></tr></thead>
     <tbody>
       <tr><td class="a">soundsid.rom</td><td>World_Record_2.sid</td><td>no filter/sync/ring</td></tr>
-      <tr><td class="a">sound_commando.rom</td><td>Commando.sid</td><td>leans on the low-pass filter</td></tr>
+      <tr><td class="a">sound_commando.rom</td><td>Commando.sid</td><td>bespoke hand-made demo (curated)</td></tr>
+      <tr><td class="a">sound_arkanoid.rom</td><td>Arkanoid.sid</td><td>raster-IRQ RSID via OVERRIDES</td></tr>
+      <tr><td class="a">sound_*.rom</td><td>HVSC selection</td><td>bulk-built from <code class="inl">sid_orig/</code></td></tr>
     </tbody>
   </table>
-  <pre class="code"><span class="c"># wrap one tune and play it</span>
+  <pre class="code"><span class="c"># wrap one tune</span>
 python tools/build_native_sid_rom.py path/to/tune.sid sw/&lt;name&gt;.s
-make -C sw upload-sound-commando      <span class="c"># build + upload in one step</span>
 
 <span class="c"># or wrap a whole collection at once</span>
 python tools/build_all_sid_roms.py    <span class="c"># builds playable ROMs + .bat files</span></pre>
   <p>The bulk builder also runs each tune through the bare-metal 6502 SID emulator and <strong>skips
-     silent tunes</strong> — players that produce no sound without a CIA/VIC/KERNAL to rely on.</p>
+     silent tunes</strong>. Hand-made ROMs like <code class="inl">sound_commando.rom</code> are listed in a
+     <code class="inl">CURATED</code> set and never overwritten (<code class="inl">--rebuild-curated</code>
+     forces it).</p>
 
   <h2>SID registers ($D400)</h2>
   <p>Standard 6581 layout: three voices of 7 registers each, plus global filter/volume registers:</p>
