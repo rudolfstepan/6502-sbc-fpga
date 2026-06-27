@@ -38,15 +38,28 @@ and run entirely below the VIC bitmap window (`$6000`).
 ## Full SID collection (`sid/`)
 
 `make sid-disks` converts **every** convertible PSID under `sid_orig/` to a RAM
-PRG and packs them into numbered images `sid/tunesNN.d64` (filled to the 35-track
-capacity).  Tunes that can't run in this machine's RAM are skipped: those that
-load into high RAM (`$A000+`/`$E000`), IRQ/CIA-driven tunes with no play address,
-or payloads too large.  ~87 of ~199 tunes convert.
+PRG and packs them into numbered images `sid/tunesNN.d64`, **at most 20 tunes per
+image** so each directory fits one screen without scrolling (`--max-files`).
+Tunes that can't run in this machine's RAM are skipped: those that load into the
+shadow-ROM windows (`$A000+`/`$F000`, read-only here — no `$01` banking), IRQ/CIA
+tunes with no play address, or payloads too large for RAM.  `Commando` is also
+excluded — it only plays as the bespoke `roms/sound_commando.rom`, not via the
+generic wrapper.  ~115 of ~199 tunes convert.
 
-Each PRG's entry point is its load address (chosen automatically just above the
-tune's native region), so it runs with `CALL <load address>` — and `LOAD "NAME"`
-prints that address.  Copy a `tunesNN.d64` to the data SD card as `TESTDISK.D64`
-(or mount it), then `LOAD "$"` to see the list.
+`build_sid_prg.py` wraps each tune one of two ways, chosen automatically:
+
+- **copy-up** (default): the PRG loads at `$2000`, carries an embedded payload
+  copy, and copies it down/up to the tune's native address at startup — so
+  `CALL 8192` runs every one of these.
+- **in-place** (fallback for tunes that load too high for two payload copies to
+  fit under the `$6000` bitmap window): the payload loads straight at its native
+  address with a ~`$80`-byte player just below it, so the entry point is that
+  player, not `$2000`.
+
+Either way the entry point is the PRG's load address, so it runs with
+`CALL <load address>` — and `LOAD "NAME"` prints that address.  Copy a
+`tunesNN.d64` to the data SD card as `TESTDISK.D64` (or mount it), then
+`LOAD "$"` to see the list.
 
 The intermediate per-tune `.prg` files (`prg/`, `sid/prg/`) are build products
 and are not committed; the `.d64` images are.

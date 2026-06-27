@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import re
 import subprocess
 import sys
 
@@ -29,21 +30,46 @@ from d64_common import D64_35_TRACK_SIZE, sectors_per_track  # noqa: E402
 from pack_d64 import d64_name  # noqa: E402
 
 VIC_BITMAP = 0x6000
+RAM_FLOOR = 0x2000      # lowest safe PRG load addr (BASIC/loader live below this)
+PLAYER_RESERVE = 0x80   # bytes build_sid_prg reserves below an in-place payload
+
+# Tunes the generic wrapper cannot reproduce, so they must not be auto-packed.
+# `Commando` is hand-built as a bespoke ROM (sw/sound_commando.s relocates a
+# custom payload to $1000 with init/play trampolines); the generic player driven
+# from the original PSID ($5000, init=$5F80, play=$5012) does not play it. It
+# stays available as the curated roms/sound_commando.rom (upload via .bat).
+# Keyed by the sanitized base name, mirroring build_all_sid_roms.CURATED.
+CURATED = {"commando"}
+
+
+def _sanitize(stem: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").lower()
+    return name or "tune"
 # Usable data blocks on a 35-track disk minus the directory track (18).
 USABLE_BLOCKS = sum(sectors_per_track(t) for t in range(1, 36)) \
     - sectors_per_track(18)   # 683 - 19 = 664
 
 
 def convertible_base(info: dict) -> int | None:
-    """Return the auto PRG base for a tune, or None if it cannot run in RAM."""
+    """Return True-ish (an int entry addr) if build_sid_prg can wrap this tune.
+
+    Mirrors build_sid_prg.py: first the copy-up wrapper (stub + an embedded
+    payload copy at `base`, copied to `load`), then the in-place fallback (the
+    payload loads straight at its native address with a small player just below
+    it). Returns the resolved entry address, or None if neither layout fits RAM.
+    """
     load = info["load"]
     pad_end = load + info["pages"] * 256
     base = max(0x2000, (pad_end + 0xFF) & ~0xFF) if load < VIC_BITMAP else 0x2000
-    if not (pad_end <= base or load >= VIC_BITMAP):
-        return None
-    if base + 64 + info["pages"] * 256 > VIC_BITMAP:
-        return None
-    return base
+    copyup_ok = (pad_end <= base or load >= VIC_BITMAP) \
+        and (base + 64 + info["pages"] * 256 <= VIC_BITMAP)
+    if copyup_ok:
+        return base
+    # in-place fallback (auto base): payload at its native address, player below
+    entry = load - PLAYER_RESERVE
+    if pad_end <= VIC_BITMAP and entry >= RAM_FLOOR:
+        return entry
+    return None
 
 
 def prg_blocks(prg_path: Path) -> int:
@@ -59,6 +85,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--prg-dir", type=Path,
                     default=ROOT / "roms" / "test_d64" / "sid" / "prg")
     ap.add_argument("--prefix", default="tunes")
+    ap.add_argument("--max-files", type=int, default=20,
+                    help="max PRGs per D64 so the directory fits on screen "
+                         "without scrolling (default 20)")
     ap.add_argument("--python", default=sys.executable)
     args = ap.parse_args(argv)
 
@@ -69,6 +98,9 @@ def main(argv: list[str]) -> int:
     prgs: list[Path] = []
     skipped = 0
     for sid in sorted(args.sid_dir.glob("*.sid")):
+        if _sanitize(sid.stem) in CURATED:
+            skipped += 1
+            continue
         try:
             info = parse_payload(sid.read_bytes())
         except SidUnsupported:
@@ -88,7 +120,8 @@ def main(argv: list[str]) -> int:
         prgs.append(out)
     print(f"Converted {len(prgs)} tunes, skipped {skipped}.")
 
-    # 2. Distribute PRGs across D64 images, filling each up to USABLE_BLOCKS.
+    # 2. Distribute PRGs across D64 images, capped at --max-files each (so the
+    #    directory listing fits one screen) and never exceeding disk capacity.
     disk_idx = 0
     builder = D64Builder()
     used = 0
@@ -110,7 +143,7 @@ def main(argv: list[str]) -> int:
 
     for p in prgs:
         blocks = prg_blocks(p)
-        if used + blocks > USABLE_BLOCKS:
+        if count >= args.max_files or used + blocks > USABLE_BLOCKS:
             flush()
         data = p.read_bytes()
         load = data[0] | (data[1] << 8)
