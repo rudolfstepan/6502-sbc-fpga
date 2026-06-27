@@ -34,7 +34,7 @@ $DeviceCfgText = if (Test-Path $DeviceCfg) {
 # Locate gw_sh — check PATH first, then common install location
 $GwSh = (Get-Command gw_sh -ErrorAction SilentlyContinue)?.Source
 if (-not $GwSh) {
-    $GwSh = 'C:\Gowin\Gowin_V1.9.11.03_Education_x64\IDE\bin\gw_sh.exe'
+    $GwSh = 'C:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin\gw_sh.exe'
     if (-not (Test-Path $GwSh)) {
         Write-Error "gw_sh not found on PATH and not at '$GwSh'. Add GowinEDA bin/ to PATH or install to the default location."
     }
@@ -111,7 +111,7 @@ if ($Program) {
         }
         Write-Host "Done."
     } else {
-        $ProgrammerCli = 'C:\Gowin\Gowin_V1.9.11.03_Education_x64\Programmer\bin\programmer_cli.exe'
+        $ProgrammerCli = 'C:\Gowin\Gowin_V1.9.12.03_x64\Programmer\bin\programmer_cli.exe'
         if (-not (Test-Path $ProgrammerCli)) {
             Write-Error "Neither openFPGALoader nor Gowin programmer_cli found. Install openFPGALoader or Gowin Programmer CLI."
         }
