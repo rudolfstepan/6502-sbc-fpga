@@ -54,6 +54,9 @@ KERNAL_CHROUT   = $F003     ; write char A to VIC + mirror to UART
 KERNAL_CHRIN    = $F006     ; blocking read + echo (uppercase)
 KERNAL_CHRIN_NB = $F009     ; non-blocking: A=char, C=1 ready
 KERNAL_CLRSCR   = $F00C     ; clear VIC screen, home cursor
+VIC_TEXT_COLOR  = $9003     ; foreground colour for subsequent CHROUT cells
+VIC_BORDER      = $D020     ; VIC-II border colour  (C64 $D020)
+VIC_BACKGROUND  = $D021     ; VIC-II global screen background (C64 $D021)
 KERNAL_DISK_MOUNT = $F01E   ; mount first .d64 on SD2  (C=0 ok)
 KERNAL_DISK_DIR   = $F021   ; print directory of the mounted image
 KERNAL_DISK_LOAD  = $F024   ; load PRG by name; DK_PTR -> name; C=0 ok
@@ -167,23 +170,80 @@ RESET_ENTRY:
 
     jmp LAB_COLD                ; EhBASIC cold start (never returns)
 
+; Colourful boot banner with a C64-style backdrop: light-blue border ($D020),
+; blue screen background ($D021), and each line printed in its own foreground
+; colour via VIC_TEXT_COLOR, framed by PETSCII horizontal rules ($60).  Ends by
+; leaving light-blue (the C64 default text colour) for the EhBASIC cold-start
+; text (BYTES FREE / READY) and the prompt.
 print_boot_banner:
-    ldx #0
-boot_banner_loop:
-    lda boot_banner,x
-    beq boot_banner_done
-    jsr KERNAL_CHROUT
-    inx
-    bne boot_banner_loop
-boot_banner_done:
+    lda #$0E                ; light blue border  (C64 power-on)
+    sta VIC_BORDER
+    lda #$06                ; blue background    (C64 power-on)
+    sta VIC_BACKGROUND
+
+    lda #$01                ; white rule (visible on blue)
+    ldx #<ban_rule
+    ldy #>ban_rule
+    jsr banner_seg
+    lda #$07                ; yellow
+    ldx #<ban_title
+    ldy #>ban_title
+    jsr banner_seg
+    lda #$0D                ; light green
+    ldx #<ban_sys
+    ldy #>ban_sys
+    jsr banner_seg
+    lda #$03                ; cyan
+    ldx #<ban_feat
+    ldy #>ban_feat
+    jsr banner_seg
+    lda #$01                ; white rule
+    ldx #<ban_rule2
+    ldy #>ban_rule2
+    jsr banner_seg
+    lda #$0E                ; light blue for the BASIC text + prompt (C64 look)
+    sta VIC_TEXT_COLOR
     rts
 
-boot_banner:
-    .byte $0D
-    .byte " **** 6502 SBC BASIC V2 ****", $0D
-    .byte " TANG PRIMER 20K FPGA SYSTEM", $0D
-    .byte " 6502 CPU  HDMI  UART  SD DISK", $0D
-    .byte 0
+; banner_seg: A = colour, X/Y = lo/hi of a null-terminated string.
+; The kernel STROUT is unreliable -- its pointer high byte ($EE) aliases nothing
+; useful while the indirect load reads $EC, which is CHROUT's own screen-pointer
+; scratch -- so we print the bytes ourselves.  CHROUT preserves A/X/Y and only
+; clobbers $EC/$ED, so a transient ZP pointer in the disk scratch ($F2/$F3,
+; unused until the first LOAD) survives the loop.
+BANPTR = $F2
+banner_seg:
+    sta VIC_TEXT_COLOR
+    stx BANPTR
+    sty BANPTR+1
+    ldy #0
+banner_seg_loop:
+    lda (BANPTR),y
+    beq banner_seg_done
+    jsr KERNAL_CHROUT
+    iny
+    bne banner_seg_loop     ; each banner string is < 256 bytes
+banner_seg_done:
+    rts
+
+ban_rule:
+    .byte $0D, " "
+    .repeat 36
+    .byte $60
+    .endrepeat
+    .byte $0D, 0
+ban_title:
+    .byte " **** 6502 SBC BASIC V2 ****", $0D, 0
+ban_sys:
+    .byte " TANG PRIMER 20K FPGA SYSTEM", $0D, 0
+ban_feat:
+    .byte " 6502 . HDMI . UART . SD DISK", $0D, 0
+ban_rule2:
+    .byte " "
+    .repeat 36
+    .byte $60
+    .endrepeat
+    .byte $0D, 0
 
 ; ============================================================
 ; IRQ / NMI handlers — live in ROM (shadow BRAM), not SDRAM.
