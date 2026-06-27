@@ -13,12 +13,12 @@ This page describes the **Tang Primer 20K split-ROM map** used by
 | `$0000`–`$00FF` | 256 B | Zero page | on-chip BSRAM |
 | `$0100`–`$01FF` | 256 B | CPU stack | on-chip BSRAM |
 | `$0200`–`$3FFF` | ~15.5 KiB | Program / BASIC working RAM | on-chip BSRAM |
-| `$4000`–`$5FFF` | 8 KiB | RAM (decoded as SRAM; aliases — physical RAM is 16 KiB) | on-chip BSRAM |
+| `$4000`–`$5FFF` | 8 KiB | RAM (SRAM region, separate from zero-page RAM) | `bram_byte_bridge` 8 KB BSRAM (or DDR3 when `USE_DDR3`) |
 | `$6000`–`$7FFF` | 8 KiB | **VIC bitmap window** (banked into the framebuffer) | `fb_ram` |
 | `$8000`–`$87FF` | 2 KiB | VIC text RAM (char `$8000`+, colour `$8400`+) | BSRAM |
 | `$8800`–`$880F` | 16 B | VIA 6522 (parallel I/O, timers) | — |
 | `$8810`–`$8813` | 4 B | UART 6551 (serial) | — |
-| `$8820`–`$8823` | 4 B | USB HID keyboard host | — |
+| `$8820`–`$8823` | 4 B | Keyboard registers — served by the **PS/2 keyboard** controller (German/US layout). USB HID host is only *prepared* (port stubs, not active) | — |
 | `$8824`–`$882F` | 12 B | Disk controller (D64 GoDrive) | — |
 | `$8830`–`$883D` | 14 B | Sound channel 0 + ms timer + SID PW ext | — |
 | `$8840`–`$884F` | 16 B | VIC blitter (reserved) | — |
@@ -30,9 +30,8 @@ This page describes the **Tang Primer 20K split-ROM map** used by
 | `$8900`–`$89FF` | 256 B | VIC sprite pattern data (reserved) | — |
 | `$9000`–`$900F` | 16 B | VIC control registers | — |
 | `$A000`–`$CFFF` | 12 KiB | **EhBASIC ROM** | shadow ROM (SD-loaded) |
-| `$D000`–`$D01F` | 32 B | free I/O | — |
-| `$D020`–`$D02F` | 16 B | VIC-II colour registers (border `$D020`, background `$D021`) — C64-compatible | — |
-| `$D030`–`$D3FF` | ~976 B | free I/O | — |
+| `$D000`–`$D03F` | 64 B | VIC-II register block — C64-compatible. `$D011`/`$D012` read back the live raster line; `$D020` border, `$D021` background; rest is a R/W register file | — |
+| `$D040`–`$D3FF` | ~960 B | free I/O | — |
 | `$D400`–`$D41C` | 29 B | SID (MOS 6581-compatible, incl. OSC3/ENV3 read regs) | — |
 | `$D41D`–`$EFFF` | ~11 KiB | free I/O (unmapped → `DEV_NONE`) | — |
 | `$F000`–`$FFFF` | 4 KiB | **Kernel ROM** (incl. vectors) | shadow ROM (SD-loaded) |
@@ -55,9 +54,13 @@ So `$6000`–`$7FFF` is the framebuffer, not RAM; usable contiguous RAM is
 
 ## RAM
 
-The system RAM is **16 KiB of on-chip BSRAM** (`sync_ram ADDR_WIDTH=14`), mapped
-at `$0000`–`$3FFF`. EhBASIC is configured for working RAM `$0200`–`$3FFF`.
-Addresses `$4000`–`$5FFF` still decode as `DEV_SRAM` but alias the 16 KiB array.
+Two banks back the `DEV_SRAM` region:
+
+- **`$0000`–`$3FFF`** (`zp_cs`): 16 KiB on-chip BSRAM (`zp_ram`, `sync_ram
+  ADDR_WIDTH=14`). EhBASIC working RAM is `$0200`–`$3FFF`.
+- **`$4000`–`$5FFF`**: a separate 8 KiB RAM reached through the `sram_ext`
+  bridge — `bram_byte_bridge` (on-chip BSRAM) on the default build, or DDR3 when
+  `USE_DDR3`. (This is real RAM, not an alias of `$0000`–`$1FFF`.)
 
 ## ROM (split-ROM layout)
 

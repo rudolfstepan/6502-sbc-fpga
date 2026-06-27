@@ -64,7 +64,7 @@ failure while the CPU remains held.
 | $883A | 1 B | Millisecond counter | Timing source retained for native SID playback |
 | $88B0-$88BF | 16 B | Math coprocessor (FPU) | Signed 32×32 fixed-point multiply (8.24); see [Math Coprocessor](./FPU.md) |
 | $A000-$CFFF | 12 KB | Shadow ROM application window | EhBASIC or standalone application |
-| $D000-$EFFF | 8 KB | I/O / reserved | VIC-II colour regs $D020-$D02F (border/background); SID at $D400-$D41C (incl. OSC3/ENV3 reads); not shadow ROM |
+| $D000-$EFFF | 8 KB | I/O / reserved | VIC-II regs $D000-$D03F (border/background + $D011/$D012 raster read-back); SID at $D400-$D41C (incl. OSC3/ENV3 reads); not shadow ROM |
 | $F000-$FFFF | 4 KB | Shadow ROM kernel window | Kernel and hardware vectors |
 
 The two ROM windows share one physical 16 KB `boot_shadow_rom`. Image offsets
@@ -211,8 +211,9 @@ board top through `sbc_t65_boot_monitor_top`. The German table swaps Y/Z, uses t
 German shifted number row, evaluates AltGr (right Alt) for `@ { [ ] } \ ~ |`, handles
 the 102nd `<>|` key, and emits umlauts as Latin-1 code points (ä=`$E4` ö=`$F6` ü=`$FC`
 Ä=`$C4` Ö=`$D6` Ü=`$DC` ß=`$DF`), which the 256-glyph `char_rom` renders. EhBASIC passes
-these 8-bit bytes through unmodified, so umlauts work end to end. The USB-HID host path
-is unchanged (US only).
+these 8-bit bytes through unmodified, so umlauts work end to end. (The USB-HID host at
+`$8820`–`$8823` is only *prepared* — port stubs, not the active input; the keyboard runs
+through the PS/2 controller.)
 
 ### Color Support
 

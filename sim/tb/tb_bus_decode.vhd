@@ -39,9 +39,11 @@ begin
     addr <= x"7FFF"; wait for 1 ns; assert sel = DEV_VIC_BMP report "VIC bitmap window end decode failed" severity failure;
     addr <= x"C000"; wait for 1 ns; assert sel = DEV_ROM report "ROM decode failed" severity failure;
     addr <= x"B000"; wait for 1 ns; assert sel = DEV_ROM report "BASIC ROM decode failed" severity failure;
-    addr <= x"D000"; wait for 1 ns; assert sel = DEV_NONE report "I/O hole decode failed" severity failure;
+    addr <= x"D000"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II block start decode failed" severity failure;
+    addr <= x"D012"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II raster ($D012) decode failed" severity failure;
     addr <= x"D020"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II border/bg decode failed" severity failure;
-    addr <= x"D02F"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II colour end decode failed" severity failure;
+    addr <= x"D03F"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II block end decode failed" severity failure;
+    addr <= x"D040"; wait for 1 ns; assert sel = DEV_NONE report "I/O hole decode failed" severity failure;
     addr <= x"D400"; wait for 1 ns; assert sel = DEV_SID report "SID decode failed" severity failure;
     addr <= x"D41C"; wait for 1 ns; assert sel = DEV_SID report "SID OSC3/ENV3 decode failed" severity failure;
     addr <= x"DC00"; wait for 1 ns; assert sel = DEV_CIA1 report "CIA-1 decode failed" severity failure;

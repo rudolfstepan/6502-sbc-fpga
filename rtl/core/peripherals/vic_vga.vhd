@@ -76,6 +76,9 @@ entity vic_vga is
     -- C64-style (foreground stays per-cell). Default 0 = black, as before.
     bg_color      : in  std_logic_vector(3 downto 0) := "0000";
 
+    -- Current raster line (scan counter), for the VIC-II $D011/$D012 registers.
+    raster       : out std_logic_vector(9 downto 0);
+
     -- VGA-Ausgang 640x480
     vga_hs       : out std_logic;
     vga_vs       : out std_logic;
@@ -500,6 +503,9 @@ begin
           when in_text = '1' and bitmap_mode = '1' else
           (char_data(7 - cpix) or cursor_pixel)
           when in_text = '1' else '0';
+
+  -- Current raster line for $D011/$D012 (free-running scan counter).
+  raster <= std_logic_vector(to_unsigned(vc, 10));
 
   -- VGA-Sync (aktiv-low)
   vga_hs <= '0' when hc >= H_SS and hc < H_SE else '1';

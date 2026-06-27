@@ -65,24 +65,32 @@ display.
 Set BITMAP (bit 0) together with exactly one sub-mode bit. COLOR16 has priority in
 the renderer if multiple are set.
 
-## VIC-II Colour Registers (`$D020`–`$D02F`)
+## VIC-II Register Block (`$D000`–`$D03F`)
 
-For C64 compatibility there is a small VIC-II-style colour register file at the
-C64 addresses, decoded as `DEV_VICII`. All 16 bytes are read/write (so classic
-pokes — including sprite-colour pokes — land in real registers); two of them
-drive the display:
+For C64 compatibility there is a VIC-II-style register block at the C64 addresses,
+decoded as `DEV_VICII`. All 64 bytes are read/write (so classic pokes — including
+sprite-position and sprite-colour pokes — land in real registers). A few have
+live behaviour:
 
-| Address | C64 POKE | Register | Effect |
+| Address | C64 POKE / read | Register | Effect |
 | --- | --- | --- | --- |
+| `$D011` | `PEEK 53265` | CONTROL 1 | Bits 0–6 stored; **read bit 7 = raster line bit 8** (live) |
+| `$D012` | `PEEK 53266` | RASTER | **Read** returns the current raster line (low 8 bits, live); writes stored |
 | `$D020` | `POKE 53280,c` | BORDER | Colour of the visible area outside the active text/bitmap content |
 | `$D021` | `POKE 53281,c` | BACKGROUND | Global text background (behind characters) |
-| `$D022`–`$D02F` | — | (stored) | Read/write only; not yet wired to the display |
+| others | — | (stored) | Read/write only; not yet wired to the display |
 
-Only the low nibble (palette index 0–15) is used. Both default to 0 (black), so
-the original look is unchanged until poked. *Why this exists:* it lets standard
-C64 BASIC/assembly set border and background the familiar way. The border itself
-is rendered by `vic_vga`; the value is held in the top-level register file and
-fed in as `border_color`/`bg_color`.
+Colour registers use only the low nibble (palette index 0–15); border and
+background default to 0 (black), so the original look is unchanged until poked.
+
+*Why this exists:* it lets standard C64 BASIC/assembly set border/background the
+familiar way **and** lets raster-synchronised SID players (e.g. Commando) busy-
+wait on `$D012`/`$D011` for a stable line instead of hanging on a constant
+open-bus value. The raster line comes from `vic_vga`'s vertical scan counter
+(`raster` output); border/background are held in the top-level register file and
+fed back to `vic_vga` as `border_color`/`bg_color`. Because the active timing is
+CEA-480p (525 lines), the raster counts 0–524 rather than the C64's 0–262/311 —
+each target line still occurs once per frame, so equality waits resolve.
 
 ## Text Mode (default)
 

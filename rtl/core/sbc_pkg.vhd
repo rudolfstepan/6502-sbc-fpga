@@ -32,7 +32,9 @@ package sbc_pkg is
   constant ADDR_UART_BASE       : unsigned(15 downto 0) := x"8810";
   constant ADDR_UART_LAST       : unsigned(15 downto 0) := x"8813";
 
-  -- USB HID host: keyboard register file (4 bytes)
+  -- Keyboard register file (4 bytes). Active backend is the PS/2 keyboard
+  -- controller; the USB HID host is only prepared (port stubs, not wired as the
+  -- active input). The DEV_USB/ADDR_USB_* names are kept for historical reasons.
   constant ADDR_USB_BASE        : unsigned(15 downto 0) := x"8820";
   constant ADDR_USB_LAST        : unsigned(15 downto 0) := x"8823";
 
@@ -88,11 +90,12 @@ package sbc_pkg is
   -- C64-compatible OSC3/ENV3 ($D41B/$D41C) decode to the SID, not DEV_NONE.
   constant ADDR_SID_LAST        : unsigned(15 downto 0) := x"D41C";
 
-  -- VIC-II colour registers ($D020-$D02F): C64-compatible border ($D020) and
-  -- background ($D021) plus the rest of the colour block, so classic POKEs to
-  -- 53280/53281 (and sprite-colour pokes) land in a real register file.
-  constant ADDR_VICII_BASE      : unsigned(15 downto 0) := x"D020";
-  constant ADDR_VICII_LAST      : unsigned(15 downto 0) := x"D02F";
+  -- VIC-II register block ($D000-$D03F): C64-compatible. Border ($D020) and
+  -- background ($D021) drive the display; $D011/$D012 read back the current
+  -- raster line (so raster-timed players like Commando run); the rest are a
+  -- read/write register file (classic POKEs to 53280/53281 etc.).
+  constant ADDR_VICII_BASE      : unsigned(15 downto 0) := x"D000";
+  constant ADDR_VICII_LAST      : unsigned(15 downto 0) := x"D03F";
 
   -- CIA-1 ($DC00-$DC0F): MOS 6526 Timer A + interrupt control, C64-compatible,
   -- so SID tunes can drive their player from a Timer-A IRQ.
@@ -118,7 +121,7 @@ package sbc_pkg is
     DEV_VIC_TEXT,  -- VIC text display memory
     DEV_VIA,       -- Parallel I/O controller
     DEV_UART,      -- Serial UART interface
-    DEV_USB,       -- USB HID host keyboard
+    DEV_USB,       -- Keyboard registers (PS/2 controller active; USB HID prepared only)
     DEV_DISK,      -- Disk controller
     DEV_SOUND0,    -- Synthesis channel 0
     DEV_VIC_BLIT,  -- Hardware graphics blitter

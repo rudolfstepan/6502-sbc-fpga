@@ -185,6 +185,11 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal rom_load_we_mux   : std_logic;
   signal rom_load_addr_mux : std_logic_vector(13 downto 0);
   signal rom_load_data_mux : data_t;
+  -- "RAM under BASIC": let the running CPU write the $A000-$CFFF shadow-ROM
+  -- window so it becomes 12 KB of usable RAM (reusing the existing BSRAM, no new
+  -- block RAM). The kernel window $F000-$FFFF stays read-only (vectors). EhBASIC
+  -- never writes its own code region, so normal operation is unaffected.
+  signal cpu_rom_we        : std_logic;
   signal vram_we     : std_logic;
   signal vram_we_mux : std_logic;
   signal vic_reg_we  : std_logic;
@@ -213,14 +218,14 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vic_text_color : data_t := x"01";
   signal vic_bg_color   : data_t := x"00";
   signal vic_mode_reg     : data_t := x"00";
-  -- VIC-II colour registers ($D020-$D02F). [0] = border ($D020), [1] =
-  -- background ($D021); the rest are stored for read-back compatibility. Only
-  -- the border drives the display so far (POKE 53280); $D021 is not yet wired to
-  -- the per-cell text background model.
-  type vic2_regs_t is array (0 to 15) of data_t;
+  -- VIC-II register block ($D000-$D03F). $20 = border, $21 = background (drive
+  -- the display); $11/$12 read back the current raster line; the rest are a
+  -- read/write register file for compatibility.
+  type vic2_regs_t is array (0 to 63) of data_t;
   signal vic2_regs : vic2_regs_t := (others => (others => '0'));
   signal vic2_we   : std_logic;
   signal vic2_dout : data_t;
+  signal vic_raster : std_logic_vector(9 downto 0);
   signal vic_fetch_bitmap : std_logic;
   signal bitmap_dout      : data_t;
   -- 16-bit framebuffer address (fb_ram is 38400 bytes for 320x240 4bpp). Old
@@ -378,11 +383,20 @@ begin
   rom_addr_mux <= rom_offset(mon_addr_lat) when monitor_hold = '1' and
                   (mon_mem_state = M_ROM_RD_WAIT or mon_mem_state = M_ROM_RD_READY) else
                   rom_offset(cpu_addr);
+  -- CPU write to the $A000-$CFFF BASIC window (RAM-under-BASIC). Kernel window
+  -- ($F000-$FFFF) is excluded so its vectors cannot be clobbered.
+  cpu_rom_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_ROM
+                             and in_range(cpu_addr, ADDR_BASROM_BASE, ADDR_BASROM_LAST)
+                else '0';
+
   rom_load_we_mux <= '1' when monitor_hold = '1' and mon_mem_state = M_ROM_WR_WAIT and mon_we_lat = '1' else
+                     cpu_rom_we when cpu_rom_we = '1' else
                      rom_load_we;
   rom_load_addr_mux <= rom_offset(mon_addr_lat) when monitor_hold = '1' and mon_mem_state = M_ROM_WR_WAIT else
+                       rom_offset(cpu_addr) when cpu_rom_we = '1' else
                        rom_load_addr;
   rom_load_data_mux <= mon_wdata_lat when monitor_hold = '1' and mon_mem_state = M_ROM_WR_WAIT else
+                       cpu_dout when cpu_rom_we = '1' else
                        rom_load_data;
 
   vram_addr   <= vic_addr(10 downto 0) when vic_stealing = '1' and vic_fetch_bitmap = '0' else cpu_addr(10 downto 0);
@@ -595,19 +609,23 @@ begin
     end case;
   end process;
 
-  -- VIC-II colour register file ($D020-$D02F): write-through register array,
-  -- combinational read-back. vic2_regs(0) = border ($D020), (1) = bg ($D021).
+  -- VIC-II register file ($D000-$D03F): write-through array; reads return the
+  -- live raster line for $D012 (low 8 bits) and $D011 (bit 7 = raster bit 8),
+  -- else the stored value. $D020 = border, $D021 = background.
   process(clk)
   begin
     if rising_edge(clk) then
       if cpu_reset_n = '0' then
         vic2_regs <= (others => (others => '0'));
       elsif vic2_we = '1' then
-        vic2_regs(to_integer(unsigned(cpu_addr(3 downto 0)))) <= cpu_dout;
+        vic2_regs(to_integer(unsigned(cpu_addr(5 downto 0)))) <= cpu_dout;
       end if;
     end if;
   end process;
-  vic2_dout <= vic2_regs(to_integer(unsigned(cpu_addr(3 downto 0))));
+  vic2_dout <= vic_raster(7 downto 0) when cpu_addr(5 downto 0) = "010010" else        -- $D012
+               vic_raster(8) & vic2_regs(16#11#)(6 downto 0)
+                 when cpu_addr(5 downto 0) = "010001" else                              -- $D011
+               vic2_regs(to_integer(unsigned(cpu_addr(5 downto 0))));
 
   process(clk)
   begin
@@ -1106,8 +1124,9 @@ begin
       color256_mode    => vic_mode_reg(1),
       color64_mode     => vic_mode_reg(3),
       color16_mode     => vic_mode_reg(4),
-      border_color     => vic2_regs(0)(3 downto 0),
-      bg_color         => vic2_regs(1)(3 downto 0),
+      border_color     => vic2_regs(16#20#)(3 downto 0),
+      bg_color         => vic2_regs(16#21#)(3 downto 0),
+      raster           => vic_raster,
       vic_fetch_bitmap => vic_fetch_bitmap,
       vga_hs       => vga_hs,
       vga_vs       => vga_vs,
