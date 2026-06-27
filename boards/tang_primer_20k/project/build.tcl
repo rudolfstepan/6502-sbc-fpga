@@ -14,6 +14,7 @@ add_file -type vhdl {../../../rtl/core/peripherals/vic_vga.vhd}
 add_file -type vhdl {../../../rtl/core/audio/legacy_sound/sound_voice_full.vhd}
 add_file -type vhdl {../../../rtl/core/audio/legacy_sound/sound_chip4.vhd}
 add_file -type vhdl {../../../rtl/core/audio/sid/sid6581.vhd}
+add_file -type vhdl {../../../rtl/core/peripherals/cia6526.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/pt8211_dac.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/d64_sector_map.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/d64_drive.vhd}

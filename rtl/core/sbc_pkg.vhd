@@ -94,6 +94,11 @@ package sbc_pkg is
   constant ADDR_VICII_BASE      : unsigned(15 downto 0) := x"D020";
   constant ADDR_VICII_LAST      : unsigned(15 downto 0) := x"D02F";
 
+  -- CIA-1 ($DC00-$DC0F): MOS 6526 Timer A + interrupt control, C64-compatible,
+  -- so SID tunes can drive their player from a Timer-A IRQ.
+  constant ADDR_CIA1_BASE       : unsigned(15 downto 0) := x"DC00";
+  constant ADDR_CIA1_LAST       : unsigned(15 downto 0) := x"DC0F";
+
   -- ROM (legacy single-window constants, still used by the older boot monitors).
   constant ADDR_ROM_BASE        : unsigned(15 downto 0) := x"C000";
   constant ADDR_ROM_LAST        : unsigned(15 downto 0) := x"FFFF";
@@ -127,6 +132,7 @@ package sbc_pkg is
     DEV_MATH,      -- Fixed-point math coprocessor
     DEV_SID,       -- MOS 6581-compatible audio registers
     DEV_VICII,     -- VIC-II colour registers ($D020-$D02F): border/background
+    DEV_CIA1,      -- CIA-1 ($DC00-$DC0F): Timer A + interrupt control
     DEV_ROM        -- Read-only firmware
   );
 

@@ -44,6 +44,8 @@ begin
     addr <= x"D02F"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II colour end decode failed" severity failure;
     addr <= x"D400"; wait for 1 ns; assert sel = DEV_SID report "SID decode failed" severity failure;
     addr <= x"D41C"; wait for 1 ns; assert sel = DEV_SID report "SID OSC3/ENV3 decode failed" severity failure;
+    addr <= x"DC00"; wait for 1 ns; assert sel = DEV_CIA1 report "CIA-1 decode failed" severity failure;
+    addr <= x"DC0F"; wait for 1 ns; assert sel = DEV_CIA1 report "CIA-1 end decode failed" severity failure;
 
     report "tb_bus_decode passed";
     finish;

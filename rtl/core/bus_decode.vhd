@@ -83,6 +83,9 @@ begin
     -- 0xD400-0xD41C: SID registers (cleanly in the I/O region, no ROM overlap).
     elsif in_range(addr, ADDR_SID_BASE, ADDR_SID_LAST) then
       sel <= DEV_SID;
+    -- 0xDC00-0xDC0F: CIA-1 (Timer A + interrupt control).
+    elsif in_range(addr, ADDR_CIA1_BASE, ADDR_CIA1_LAST) then
+      sel <= DEV_CIA1;
     -- 0xA000-0xCFFF: EhBASIC ROM (12KB)
     elsif in_range(addr, ADDR_BASROM_BASE, ADDR_BASROM_LAST) then
       sel <= DEV_ROM;

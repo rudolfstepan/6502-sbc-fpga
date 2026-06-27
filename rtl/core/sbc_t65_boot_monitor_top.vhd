@@ -143,6 +143,11 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal sid_dout     : data_t;
   signal sid_sample   : std_logic_vector(15 downto 0);
   signal sid_addr     : std_logic_vector(4 downto 0);
+  signal cia1_cs      : std_logic;
+  signal cia1_we      : std_logic;
+  signal cia1_dout    : data_t;
+  signal cia1_irq_n   : std_logic;
+  signal cia1_irq     : std_logic;
 
   signal zp_cs       : std_logic;
   signal zp_we       : std_logic;
@@ -321,7 +326,7 @@ begin
                 and not sram_stall;
 
   sram_dout  <= sram_ext_dout;
-  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq or disk_irq);
+  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq or disk_irq or cia1_irq);
   usb_cs     <= '1' when monitor_hold = '0' and dev_sel = DEV_USB else '0';
 
   -- Low 16 KB ($0000-$3FFF) is on-chip BRAM. $4000-$5FFF is served through
@@ -340,6 +345,9 @@ begin
   math_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
   sid_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_SID      else '0';
   sid_we  <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_SID      else '0';
+  cia1_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_CIA1     else '0';
+  cia1_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_CIA1     else '0';
+  cia1_irq <= not cia1_irq_n;
   sid_addr <= std_logic_vector(resize(unsigned(cpu_addr) - ADDR_SID_BASE, 5));
 
   -- Per-voice chip-selects, shared write strobe, and the register offset for
@@ -486,7 +494,7 @@ begin
 
   process(dev_sel, zp_cs, zp_dout, sram_dout, rom_dout, vram_dout, vic_reg_dout, via_dout,
           uart_dout, mon_jump_vector_active, mon_jump_vector, cpu_addr, bitmap_dout,
-          sound_dout, math_dout, sid_dout, disk_dout, vic2_dout)
+          sound_dout, math_dout, sid_dout, disk_dout, vic2_dout, cia1_dout)
   begin
     case dev_sel is
       when DEV_SRAM =>
@@ -527,6 +535,8 @@ begin
         cpu_din <= sid_dout;
       when DEV_VICII =>
         cpu_din <= vic2_dout;
+      when DEV_CIA1 =>
+        cpu_din <= cia1_dout;
       when others =>
         cpu_din <= x"FF";
     end case;
@@ -859,6 +869,21 @@ begin
       din        => cpu_dout,
       dout       => sid_dout,
       sample_out => sid_sample
+    );
+
+  -- CIA-1 Timer A: ~1 MHz PHI2 tick from the system clock so C64 tune period
+  -- values give compatible interrupt rates; its IRQ feeds cpu_irq_n.
+  cia1_i : entity work.cia6526
+    generic map (TICK_DIV => CLK_HZ / 1_000_000)
+    port map (
+      clk     => clk,
+      reset_n => cpu_reset_n,
+      cs      => cia1_cs,
+      we      => cia1_we,
+      addr    => cpu_addr(3 downto 0),
+      din     => cpu_dout,
+      dout    => cia1_dout,
+      irq_n   => cia1_irq_n
     );
 
   dac_i : entity work.pt8211_dac
