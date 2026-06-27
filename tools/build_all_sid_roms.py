@@ -127,7 +127,7 @@ def main() -> int:
             skipped.append((sid.name, "curated hand-made ROM kept (use --rebuild-curated to override)"))
             continue
         try:
-            info = parse_payload(sid.read_bytes())
+            info = parse_payload(sid.read_bytes(), sid.name)
         except SidUnsupported as e:
             skipped.append((sid.name, str(e)))
             continue

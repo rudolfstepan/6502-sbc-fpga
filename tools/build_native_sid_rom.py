@@ -32,12 +32,27 @@ ROM_PAYLOAD_MAX = 12000
 # CIA-1 Timer A period for ~50 Hz at the FPGA's ~1 MHz PHI2 tick (1e6 / 50).
 PERIOD_50HZ = 20000
 
+# Per-tune overrides for players the generic header cannot describe. Some RSID
+# tunes declare play=$0000 because their real play routine is buried inside a
+# VIC raster-IRQ handler the FPGA cannot service (no VIC interrupts, $FFFE/$FFFF
+# is ROM, no $01 banking). For those we point `play` at the inner routine found
+# by disassembly so the POLLED low-RAM wrapper drives it directly at ~50 Hz,
+# bypassing the interrupt entirely. Keyed by .sid file name (case-insensitive).
+#   Arkanoid: init=$4000 installs a 2x raster IRQ whose handler ($4086/$40B3)
+#   calls the actual SID update at $4141; song 0 is single-speed.
+OVERRIDES = {
+    "arkanoid.sid": dict(play=0x4141, song=0),
+}
 
-def parse_payload(data: bytes) -> dict:
+
+def parse_payload(data: bytes, name: str | None = None) -> dict:
     """Parse a PSID/RSID image and return its payload + entry points.
 
     Raises SidUnsupported only for memory limits now (a missing play address is
     allowed: such tunes drive themselves from a CIA interrupt installed by init).
+
+    `name` (the .sid file name) selects a per-tune OVERRIDES entry, used to point
+    `play`/`song` at a routine the PSID header does not expose (see OVERRIDES).
     """
     if data[:4] not in (b"PSID", b"RSID"):
         raise SidUnsupported("not a PSID/RSID file")
@@ -71,6 +86,12 @@ def parse_payload(data: bytes) -> dict:
     if init == 0:
         init = load                     # convention: init defaults to load addr
     song = start - 1 if start > 0 else 0
+    ov = OVERRIDES.get((name or "").lower())
+    if ov:
+        play = ov.get("play", play)     # buried play routine -> POLLED wrapper
+        song = ov.get("song", song)
+        if ov.get("play"):
+            mode = "low" if top <= RAM_TOP else mode
     body = body + bytes(padded - payload_len)
     return dict(load=load, init=init, play=play, body=body,
                 payload_len=payload_len, pages=pages, song=song, mode=mode)
@@ -111,6 +132,7 @@ def _render_page(name: str, info: dict) -> str:
             "    lda #$FF", "    sta CIA_TALO", "    lda #$FF", "    sta CIA_TAHI",
             "    lda #$01", "    sta CIA_CRA",
             f"    lda #{song}", "    tax", "    tay", f"    jsr ${init:04X}",
+            "    sei",   # re-mask: some inits CLI (see low-wrapper note)
             "    lda TIME_MS", "    sta LAST_MS", "play_loop:", "@wait:",
             "    lda TIME_MS", "    sec", "    sbc LAST_MS", "    cmp #20", "    bcc @wait",
             "    lda TIME_MS", "    sta LAST_MS", f"    jsr ${play:04X}", "    jmp play_loop",
@@ -170,6 +192,9 @@ def _render_low(name: str, info: dict) -> str:
             "    lda #$01", "    sta CIA_CRA",
             # init, then poll the ms timer and call play at ~50 Hz
             f"    lda #{song}", "    tax", "    tay", f"    jsr ${init:04X}",
+            # some inits (e.g. RSID raster players) CLI; re-mask so a stray IRQ
+            # cannot vector through the ROM $FFFE bridge into uninitialised $0314.
+            "    sei",
             "    lda TIME_MS", "    sta LAST_MS", "play_loop:", "@wait:",
             "    lda TIME_MS", "    sec", "    sbc LAST_MS", "    cmp #20", "    bcc @wait",
             "    lda TIME_MS", "    sta LAST_MS", f"    jsr ${play:04X}", "    jmp play_loop",
@@ -200,7 +225,7 @@ def main():
     ap.add_argument("output", type=Path)
     a = ap.parse_args()
     try:
-        info = parse_payload(a.sid.read_bytes())
+        info = parse_payload(a.sid.read_bytes(), a.sid.name)
     except SidUnsupported as e:
         raise SystemExit(f"{a.sid.name}: {e}")
     a.output.write_text(render_asm(a.sid.name, info), newline="\n")

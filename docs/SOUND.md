@@ -298,63 +298,89 @@ wanted.
 
 `tools/build_native_sid_rom.py` turns a PSID/RSID tune into a playable ROM. It
 does **not** do a lossy 50 Hz register conversion — it embeds the original 6502
-payload, copies it to its native load address, calls the tune's `init` routine
-once, then invokes `play` every 20 ms. All frequency, pulse-width, control, ADSR
+payload, runs it at its native load address, calls the tune's `init` routine
+once, then drives its `play` routine. All frequency, pulse-width, control, ADSR
 **and filter** writes therefore reach the hardware exactly as the original
 player produces them.
 
-A tune can be wrapped only if it fits the board: it needs a real play address
-(not an IRQ/CIA-driven RSID), it must load into the linear RAM at
-`$0200-$5FFF` (above that are the VIC bitmap window, text VRAM, I/O and ROM),
-and its payload must fit the 12 KB `$A000` ROM window. Single-speed PAL tunes
-are assumed (50 Hz `play`).
+**Load-address layout** (chosen automatically from the tune's load address):
 
-`roms/soundsid.rom` (`World_Record_2.sid`, no filter/sync/ring) and
-`roms/sound_commando.rom` (`Commando.sid`, leans on the low-pass filter) are two
-hand-picked examples. Each wrapper is linked at `$A000` with a padding window at
-`$F000-$FFF9` and vectors at `$FFFA-$FFFF`, a 16 KB image in physical
-shadow-RAM order. Upload with the split-image mode:
+| Tune loads at | Layout | cc65 config |
+| --- | --- | --- |
+| `$0200-$5FFF` | wrapper at `$A000` copies the payload **down** to its load address | `sw/soundsid.cfg` |
+| `$A000-$CFFF` | **RAM-under-BASIC ("page") mode** — the tune sits directly in the paged-out BASIC ROM window, no copy; the player lives at `$F000` | `sw/sid_page.cfg` |
+
+Tunes that load anywhere else (`$6000-$9FFF`, `$E000+`) cannot be wrapped. The
+payload must also fit the 12 KB `$A000-$CFFF` ROM window.
+
+**Play drive** (chosen from the PSID `play` address):
+
+- **`play != 0` → polled.** `init` once, then `play` every ~20 ms off the
+  `$883A` millisecond counter. No interrupt needed, so it never depends on the
+  CIA/VIC. A free-running CIA Timer A is also started so tunes that *read*
+  `$DC04` see a live timer. The start song is `startSong - 1`.
+- **`play == 0` → IRQ-driven.** The tune installs its own CIA timer + `$0314`
+  handler in `init`; the wrapper only supplies a default `$0314` vector and a
+  `$FFFE → JMP ($0314)` bridge. This path needs the FPGA CIA (`$DC00`).
+
+After `jsr init` the wrapper always issues **`SEI`**. Some RSID `init` routines
+end with `CLI` (they expect to run interrupt-driven); without re-masking, a
+stray IRQ would vector through the ROM `$FFFE` bridge into an uninitialised
+`$0314` and crash. For an ordinary tune whose `init` does not `CLI`, the `SEI`
+is a harmless no-op.
+
+**Raster-IRQ tunes — `OVERRIDES`.** A few RSID tunes declare `play=$0000` only
+because their real per-frame update is buried inside a **VIC raster-interrupt**
+handler — which the FPGA cannot service (no VIC interrupts, `$FFFE/$FFFF` is
+ROM, no `$01` banking). The `OVERRIDES` table in `build_native_sid_rom.py`
+points `play`/`song` at the inner update routine (found by disassembly) so the
+**polled** path drives it directly and the interrupt is bypassed.
+
+> Example — `sid_orig/Arkanoid.sid`: `init=$4000` installs a 2×-speed raster IRQ
+> whose handler (`$4086`/`$40B3`) calls the actual SID update at `$4141`. The
+> override plays single-speed song 0 by polling `$4141`, so it runs with no
+> interrupt at all.
+
+`roms/soundsid.rom` (`World_Record_2.sid`) and the bespoke
+`roms/sound_commando.rom` are checked-in examples. Each wrapper is linked with a
+`$F000` window and vectors at `$FFFA-$FFFF`, a 16 KB image in physical
+shadow-RAM order. Upload with the split-image mode; on Windows
+`roms\upload\sound_<name>.bat` uploads an already-built image:
 
 ```sh
 python tools/upload_monitor_hex.py roms/sound_commando.rom --split-rom \
        --port COM15 --baud 115200 --run --verbose
-make -C sw upload-sound-commando      # build + upload in one step
-make -C sw upload-soundsid            # World_Record_2
-```
-
-On Windows, `roms\upload\sound_<name>.bat` uploads an already-built image.
-
-Regenerate or add a single wrapper with:
-
-```sh
-python tools/build_native_sid_rom.py path/to/tune.sid sw/<name>.s
-make -C sw sound-commando             # or: make -C sw soundsid
+python tools/build_native_sid_rom.py path/to/tune.sid sw/<name>.s   # one wrapper
 ```
 
 ### Bulk-building a whole `.sid` collection
 
 `tools/build_all_sid_roms.py` wraps **every** suitable tune under `sid_orig/` at
 once, emitting `roms/sound_<name>.rom` and a matching
-`roms/upload/sound_<name>.bat` for each, and reporting the tunes it has to skip.
+`roms/upload/sound_<name>.bat` for each (page-mode tunes are linked with
+`sw/sid_page.cfg` automatically), and reporting the tunes it has to skip.
 
 By default it also runs each tune through the bare-6502 SID emulator
 (`tools/sid_dump_full.exe`) and **skips tunes that produce no sound here** — a
 player that never sets master volume or never gates a voice is silent on this
-hardware (there is no CIA/VIC/KERNAL for it to rely on). This keeps the output
-to genuinely playable ROMs and, as a side effect, leaves a hand-validated ROM
-like `sound_commando.rom` untouched when its `sid_orig` source is a silent rip.
+hardware.
+
+**Curated ROMs are protected.** `roms/sound_commando.rom` is a bespoke,
+hand-made demo that the generic wrapper does **not** reproduce. Its base name is
+listed in the `CURATED` set, so the bulk build never overwrites it; pass
+`--rebuild-curated` to overwrite curated ROMs on purpose.
 
 ```sh
-python tools/build_all_sid_roms.py            # build playable ROMs + .bat files
-python tools/build_all_sid_roms.py --list     # classify only, build nothing
+python tools/build_all_sid_roms.py             # build playable ROMs + .bat files
+python tools/build_all_sid_roms.py --list      # classify only, build nothing
 python tools/build_all_sid_roms.py --no-verify # build everything that fits memory
+python tools/build_all_sid_roms.py --rebuild-curated  # also overwrite curated ROMs
 python tools/build_all_sid_roms.py --port COM7 --baud 230400   # override uploader
 ```
 
-Skip reasons fall into two groups: it cannot fit the memory map (no play
-address, loads above `$5FFF`, or payload too large), or it fits but is silent in
-this environment. Of the bundled HVSC selection, the tunes that both fit and
-make sound build cleanly; the rest are listed with their reason.
+Skip reasons fall into two groups: it cannot fit the memory map (loads outside
+the supported windows, or payload too large), or it fits but is silent in this
+environment.
 
 `tools/sid_dump_full.exe tune.sid <seconds> out.raw` dumps all 25 SID registers
 per 50 Hz frame, which is handy for checking which features (filter, sync, ring,
