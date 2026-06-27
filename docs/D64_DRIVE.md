@@ -150,6 +150,60 @@ the load address.  The test-disk PRGs all load at `$2000`, so they all run with
 > not relinked into EhBASIC's program area; PRGs are machine-code-style payloads
 > started with `CALL`.
 
+## Multi-part games: chain-loading the next part
+
+A program loaded from the disk can itself load and run another PRG — so a game
+can ship as several parts (intro, main, levels…) on one `.d64`, each loading the
+next.  The mechanism is just `DISK_LOAD` followed by a jump to the loaded part's
+entry (every PRG's entry = its load address):
+
+```asm
+    lda #<NAME            ; NAME = uppercase, null-terminated (e.g. "PART2")
+    ldy #>NAME
+    sta DK_PTR            ; $F2
+    sty DK_PTR+1
+    jsr $F01E             ; DISK_MOUNT (idempotent)
+    jsr $F024             ; DISK_LOAD  -> DK_START ($0365) = load address
+    bcs load_failed
+    jmp (DK_START)        ; run the next part
+```
+
+**The self-overwrite trap.** If the next part loads to the *same* address as the
+loader (the usual case — every part is the "current" program at `$2000`), the
+load overwrites the loader's own code while the kernel is copying it.  When
+`DISK_LOAD` returns, the `jmp (DK_START)` instruction has been clobbered → crash.
+
+**`sw/chainload.inc`** solves this: it copies a tiny position-independent
+mount/load/jump stub to **`$5F00`** and runs it there.  The kernel disk code
+touches only zero page (`$F2/$F4/$F7`), page 3 (`$0340-$037D`) and the
+`$8824-$882F` ports — never `$5F00` — and parts live below the bitmap window
+(`$6000`), so the stub survives the load and jumps cleanly into the new part.
+
+```asm
+    lda #<part2name
+    ldy #>part2name
+    jsr chainload         ; loads + runs the named PRG; never returns on success
+    ; reached only if the load failed (the stub falls back to BASIC)
+
+.include "chainload.inc"
+```
+
+Parts must load and run **below `$5F00`** (16 KB above `$2000` is plenty; the
+bitmap window already caps RAM at `$6000`).  Each part may itself `chainload` the
+next, so any number of parts can chain.
+
+### Demo: `roms/test_d64/multipart.d64`
+
+`make multipart-d64` builds two RAM PRGs ([`sw/mp_part1.s`](../sw/mp_part1.s),
+[`sw/mp_part2.s`](../sw/mp_part2.s)) and packs them into `multipart.d64`.  PART1
+prints a banner and, on a key press, chain-loads PART2 (which loads at the same
+`$2000` and just runs):
+
+```basic
+LOAD "PART1"      : REM the "intro" part
+CALL 8192         : REM run it -> press a key -> PART2 auto-loads and runs
+```
+
 ## Standalone 6502 API (`sw/disk.s`)
 
 `sw/disk.inc` + `sw/disk.s` provide the same read-only routines as a reusable

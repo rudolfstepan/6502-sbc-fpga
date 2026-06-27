@@ -60,7 +60,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
-        sid-disks reist adventure-rom
+        sid-disks reist adventure-rom multipart-d64
 
 ## ============================================================================
 ## Simulation targets
@@ -132,6 +132,21 @@ adventure-rom:
 	$(LD65) -C sw/adventure.cfg -o roms/adventure.rom roms/adventure.o
 	@rm -f roms/adventure.o
 	@echo "Built roms/adventure.rom (16 KB). Upload with roms/upload/adventure.bat"
+
+## Multi-part loader demo: two RAM PRGs on a D64; PART1 chain-loads + runs PART2.
+## On hardware: LOAD "PART1" : CALL 8192  (press a key -> PART2 auto-loads).
+MP_DIR = roms/test_d64/mp
+multipart-d64:
+	@mkdir -p $(MP_DIR)
+	$(CA65) --cpu 6502 -I sw -o $(MP_DIR)/p1.o sw/mp_part1.s
+	$(LD65) -C sw/prg2000.cfg -o $(MP_DIR)/p1.bin $(MP_DIR)/p1.o
+	$(PYTHON) -c "b=open('$(MP_DIR)/p1.bin','rb').read(); open('$(MP_DIR)/PART1.prg','wb').write(bytes([0x00,0x20])+b)"
+	$(CA65) --cpu 6502 -I sw -o $(MP_DIR)/p2.o sw/mp_part2.s
+	$(LD65) -C sw/prg2000.cfg -o $(MP_DIR)/p2.bin $(MP_DIR)/p2.o
+	$(PYTHON) -c "b=open('$(MP_DIR)/p2.bin','rb').read(); open('$(MP_DIR)/PART2.prg','wb').write(bytes([0x00,0x20])+b)"
+	@rm -f $(MP_DIR)/*.o $(MP_DIR)/*.bin
+	$(PYTHON) tools/d64/pack_d64.py -o roms/test_d64/multipart.d64 $(MP_DIR)/PART1.prg $(MP_DIR)/PART2.prg
+	@echo "Built roms/test_d64/multipart.d64 (LOAD \"PART1\" : CALL 8192)"
 
 ## D64 GoDrive: convert EVERY convertible SID tune to a RAM PRG and pack them
 ## into numbered disk images (roms/test_d64/sid/tunesNN.d64).  Tunes that can't
