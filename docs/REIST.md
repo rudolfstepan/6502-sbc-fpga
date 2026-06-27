@@ -5,10 +5,14 @@ arithmetic idea: instead of the classical non-negative remainder `0 ≤ r < B`,
 keep a **centered** remainder `-floor(B/2) ≤ r < ceil(B/2)`. For a running
 modular value that turns the remainder into a signed correction term, so a
 modular accumulation becomes one conditional add/subtract per step instead of a
-division. The CPU side of this is measured in a separate project
-(`reist-crypto-bench`, ARMv8-A and x86-64). This page is about the **hardware**
-side: a standalone FPGA engine that pits REIST against a real vendor integer
-divider on a Tang Primer 20K, and what the silicon actually says.
+division.
+
+The main REIST project is the CPU benchmark suite,
+[**reist-crypto-bench**](https://github.com/rudolfstepan/reist-crypto-bench),
+which measures REIST against the compiler `%`/divide on ARMv8-A and x86-64. This
+page is the **hardware** counterpart: a standalone FPGA engine that pits REIST
+against a real vendor integer divider on a Tang Primer 20K, and what the silicon
+actually says.
 
 It lives entirely on its own — it shares no files with the 6502 SBC and only
 reuses the `uart_tx_ser` serializer plus the generated Gowin divider IP. The
@@ -159,3 +163,14 @@ throughput in both workloads.
 | `boards/tang_primer_20k/rtl/reist_reduce_top.vhd`, `ip_reduce_top.vhd` | area/Fmax probes |
 | `boards/tang_primer_20k/reist/` | Gowin projects (`reist_bench`, `area/`), constraints, README |
 | `sim/tb/tb_reist_core.vhd`, `tb_reist_bench.vhd` | testbenches (`make reist`) |
+
+## Resources
+
+- **reist-crypto-bench** (the main REIST project, CPU benchmarks on ARMv8-A and
+  x86-64): <https://github.com/rudolfstepan/reist-crypto-bench>
+- This FPGA work (RTL, projects, testbenches):
+  <https://github.com/rudolfstepan/6502-sbc-fpga>
+- Build quickstart for the engine and the area/Fmax probes:
+  [`boards/tang_primer_20k/reist/README.md`](../boards/tang_primer_20k/reist/README.md)
+- The REIST formalism is written up in the project paper (the IEEE short form
+  frames the centered-remainder definition this engine implements).

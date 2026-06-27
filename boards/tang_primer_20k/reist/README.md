@@ -5,6 +5,10 @@ against a real **vendor integer-divider IP** (Gowin Integer Division), in
 hardware. It shares no files with the 6502 SBC — it only instantiates the
 reusable `uart_tx_ser` serializer plus the generated divider IP.
 
+The main REIST project is the CPU benchmark suite
+[**reist-crypto-bench**](https://github.com/rudolfstepan/reist-crypto-bench);
+this is its hardware counterpart. Full write-up: [`docs/REIST.md`](../../../docs/REIST.md).
+
 ## What it does
 
 For each modulus in `MODULI` (`rtl/reist/reist_pkg.vhd`) the engine runs

@@ -228,6 +228,16 @@ See [docs/D64_DRIVE.md](docs/D64_DRIVE.md) for the register map, kernel API,
 tooling (`tools/d64/`, `tools/build_sid_prg.py`), and the runnable test disk
 (`make tunes-d64`).
 
+## REIST benchmark engine (research)
+
+A standalone FPGA project (no 6502 files touched) that measures REIST
+centered-remainder arithmetic against the Gowin Integer Division IP on the Tang
+Primer 20K. On hardware the REIST reduction uses ~12.6× less logic and runs at
+161.8 MHz vs the IP's 8.1 MHz, and is 4× fewer cycles per step in a dependency
+chain. It is the hardware counterpart to the CPU benchmark suite
+[**reist-crypto-bench**](https://github.com/rudolfstepan/reist-crypto-bench).
+See [docs/REIST.md](docs/REIST.md) and run the simulation with `make reist`.
+
 ## Memory Maps
 
 ### Current Tang Primer 20K

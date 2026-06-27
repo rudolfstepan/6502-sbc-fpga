@@ -14,6 +14,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[VIC Video Controller](./VIC.md)** - Text + bitmap modes (incl. 320×240 16-colour), `$9000` register map, MODE bits, `$6000` framebuffer window/banking, palette, bus-stealing
 - **[Sound Chip](./SOUND.md)** - Sound chips + PT8211 DAC: bring-up voice, 4-voice synth, and the native MOS 6581 SID (filter, ADSR, sync/ring) with `.sid` ROM wrapping
 - **[Math Coprocessor (FPU)](./FPU.md)** - Hardware fixed-point multiplier ($88B0): register map, 8.24 format, and the packed-RGB222 Mandelbrot demo
+- **[REIST Benchmark Engine](./REIST.md)** - Centered-remainder arithmetic on FPGA vs. the Gowin divider IP: engine, area/Fmax probes, hardware results; hardware counterpart to the [reist-crypto-bench](https://github.com/rudolfstepan/reist-crypto-bench) CPU suite
 - **[Simulation](./06_SIMULATION.md)** - Running and analyzing simulations
 - **[Development Guide](./07_DEVELOPMENT.md)** - Contributing and development workflow
 - **[UART Monitor](./UART_MONITOR.md)** - Hardware monitor commands and live ROM upload over UART
