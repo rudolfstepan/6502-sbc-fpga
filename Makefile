@@ -60,7 +60,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
-        sid-disks
+        sid-disks reist
 
 ## ============================================================================
 ## Simulation targets
@@ -68,6 +68,18 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 
 analyze:
 	$(GHDL) -a $(GHDL_FLAGS) $(T65_RTL) $(RTL)
+
+## REIST benchmark engine (standalone, no 6502): unit + end-to-end GHDL run.
+REIST_RTL = rtl/reist/reist_pkg.vhd rtl/reist/reist_core.vhd \
+            rtl/reist/seq_divider.vhd rtl/reist/ip_divider.vhd \
+            rtl/reist/reist_bench_engine.vhd \
+            rtl/core/peripherals/uart_tx_ser.vhd rtl/reist/bench_report.vhd
+reist:
+	$(GHDL) -a $(GHDL_FLAGS) $(REIST_RTL) sim/tb/tb_reist_core.vhd sim/tb/tb_reist_bench.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_reist_core
+	$(GHDL) -r $(GHDL_FLAGS) tb_reist_core $(GHDL_RUN_FLAGS) --stop-time=200ms
+	$(GHDL) -e $(GHDL_FLAGS) tb_reist_bench
+	$(GHDL) -r $(GHDL_FLAGS) tb_reist_bench $(GHDL_RUN_FLAGS) --stop-time=50ms
 
 roms:
 	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(CHESS_ROM_HEX) ../roms/chess.rom

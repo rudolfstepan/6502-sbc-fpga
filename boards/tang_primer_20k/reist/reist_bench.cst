@@ -1,0 +1,23 @@
+// ============================================================================
+// Physical constraints — REIST benchmark engine (standalone Tang Primer 20K).
+// Part: GW2A-LV18PG256C8/I7   Device: GW2A-18C
+// Pins reuse the same dock locations as the 6502 SBC build.
+// ============================================================================
+
+// 27 MHz on-board oscillator
+IO_LOC  "clk" H11;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// CH340 USB-UART TX (host receives the report at 115200 8N1)
+IO_LOC  "uart_tx" M11;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// LEDs (active-low): [0]=running [1]=done [2]=report sent [3]=heartbeat
+IO_LOC  "led[0]" L16;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[1]" L14;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[2]" N14;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[3]" N16;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;

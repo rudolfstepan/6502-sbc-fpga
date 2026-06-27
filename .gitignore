@@ -55,6 +55,18 @@ boards/tang_primer_20k/project/src/*/temp/
 # Local copy of Sipeed's standalone DDR test used only during board bring-up.
 boards/tang_primer_20k/diagnostics/ddr3_reference/
 
+# ── REIST benchmark project (standalone) ──────────────────────────────────────
+# Keep RTL, the Gowin projects (.gprj/.cst/.sdc/.tcl), and the IP .ipc/.v;
+# drop the generated impl/ trees, per-user IDE state, and IP scratch files.
+boards/tang_primer_20k/reist/impl/
+boards/tang_primer_20k/reist/area/impl/
+boards/tang_primer_20k/reist/*.gprj.user
+boards/tang_primer_20k/reist/area/*.gprj.user
+boards/tang_primer_20k/reist/src/*/*.mod
+boards/tang_primer_20k/reist/src/*/*.vo
+boards/tang_primer_20k/reist/src/*/*_tmp.v
+boards/tang_primer_20k/reist/src/*/temp/
+
 # ── Assembly build artifacts ───────────────────────────────────────────────────
 sw/*.bin
 sw/*.lst
