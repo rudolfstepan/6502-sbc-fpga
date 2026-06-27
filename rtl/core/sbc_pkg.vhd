@@ -84,7 +84,15 @@ package sbc_pkg is
   constant ADDR_VIC_BMP_LAST    : unsigned(15 downto 0) := x"7FFF";
 
   constant ADDR_SID_BASE        : unsigned(15 downto 0) := x"D400";
-  constant ADDR_SID_LAST        : unsigned(15 downto 0) := x"D418";
+  -- Extends to $D41C so the SID read registers POTX/POTY ($D419/$D41A) and the
+  -- C64-compatible OSC3/ENV3 ($D41B/$D41C) decode to the SID, not DEV_NONE.
+  constant ADDR_SID_LAST        : unsigned(15 downto 0) := x"D41C";
+
+  -- VIC-II colour registers ($D020-$D02F): C64-compatible border ($D020) and
+  -- background ($D021) plus the rest of the colour block, so classic POKEs to
+  -- 53280/53281 (and sprite-colour pokes) land in a real register file.
+  constant ADDR_VICII_BASE      : unsigned(15 downto 0) := x"D020";
+  constant ADDR_VICII_LAST      : unsigned(15 downto 0) := x"D02F";
 
   -- ROM (legacy single-window constants, still used by the older boot monitors).
   constant ADDR_ROM_BASE        : unsigned(15 downto 0) := x"C000";
@@ -118,6 +126,7 @@ package sbc_pkg is
     DEV_VIC_BMP,   -- Bitmap frame buffer
     DEV_MATH,      -- Fixed-point math coprocessor
     DEV_SID,       -- MOS 6581-compatible audio registers
+    DEV_VICII,     -- VIC-II colour registers ($D020-$D02F): border/background
     DEV_ROM        -- Read-only firmware
   );
 

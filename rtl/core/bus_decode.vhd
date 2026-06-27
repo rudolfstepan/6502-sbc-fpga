@@ -77,7 +77,10 @@ begin
     -- 0x9000-0x900F: VIC control and status registers (16 bytes)
     elsif in_range(addr, ADDR_VIC_REG_BASE, ADDR_VIC_REG_LAST) then
       sel <= DEV_VIC_REG;
-    -- 0xD400-0xD418: SID registers (cleanly in the I/O region, no ROM overlap).
+    -- 0xD020-0xD02F: VIC-II colour registers (border/background, C64-compatible).
+    elsif in_range(addr, ADDR_VICII_BASE, ADDR_VICII_LAST) then
+      sel <= DEV_VICII;
+    -- 0xD400-0xD41C: SID registers (cleanly in the I/O region, no ROM overlap).
     elsif in_range(addr, ADDR_SID_BASE, ADDR_SID_LAST) then
       sel <= DEV_SID;
     -- 0xA000-0xCFFF: EhBASIC ROM (12KB)

@@ -47,6 +47,9 @@ Only offsets 0–4 are decoded ([`sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc
 
 A long reset clears MODE to `$00` (text mode) so a returning BASIC text screen is
 never hidden behind a leftover bitmap — see [Reset architecture](./02_MODULES.md).
+Border and background colour live in the separate VIC-II register block at
+`$D020`/`$D021` (below), not here; `$9003`/`$9004` are legacy and not wired to the
+display.
 
 ### MODE bits (`$9000`)
 
@@ -62,13 +65,39 @@ never hidden behind a leftover bitmap — see [Reset architecture](./02_MODULES.
 Set BITMAP (bit 0) together with exactly one sub-mode bit. COLOR16 has priority in
 the renderer if multiple are set.
 
+## VIC-II Colour Registers (`$D020`–`$D02F`)
+
+For C64 compatibility there is a small VIC-II-style colour register file at the
+C64 addresses, decoded as `DEV_VICII`. All 16 bytes are read/write (so classic
+pokes — including sprite-colour pokes — land in real registers); two of them
+drive the display:
+
+| Address | C64 POKE | Register | Effect |
+| --- | --- | --- | --- |
+| `$D020` | `POKE 53280,c` | BORDER | Colour of the visible area outside the active text/bitmap content |
+| `$D021` | `POKE 53281,c` | BACKGROUND | Global text background (behind characters) |
+| `$D022`–`$D02F` | — | (stored) | Read/write only; not yet wired to the display |
+
+Only the low nibble (palette index 0–15) is used. Both default to 0 (black), so
+the original look is unchanged until poked. *Why this exists:* it lets standard
+C64 BASIC/assembly set border and background the familiar way. The border itself
+is rendered by `vic_vga`; the value is held in the top-level register file and
+fed in as `border_color`/`bg_color`.
+
 ## Text Mode (default)
 
 40×25 characters, each cell scaled 2× to 16×16 screen pixels (400 px tall, 40 px
 top/bottom border). For each scanline the VIC fetches:
 
 - **character codes** from `$8000`+ (`row*40 + col`)
-- **colour attributes** from `$8400`+ (low nibble = foreground index, high nibble = background index)
+- **colour attributes** from `$8400`+ — low nibble = per-cell **foreground** index
+
+The background is **global**, from the VIC-II `$D021` register (C64 text-mode
+model): every character cell shares the same background colour, while the
+foreground stays per-cell. (Previously the colour attribute's high nibble was a
+per-cell background; that was changed to the global `$D021` for C64
+compatibility, so `POKE 53281,c` sets the screen background.) Default `$D021`=0
+keeps the original black background.
 
 Glyphs come combinationally from the char ROM. `char_code(7)` selects the upper
 128 glyphs (German umlauts) via `glyph_hi` rather than reverse-video. A blinking
@@ -95,8 +124,14 @@ COLOR16 looks up the 16-colour palette.
 The flagship bitmap mode. The framebuffer is **38400 bytes** held in BSRAM
 (`fb_ram`, sized to exactly 38400 so Gowin packs ~19 of the 46 block-RAMs instead
 of rounding a 16-bit address up to a 64 KiB / 32-block array). Each line is
-160 bytes; the line is shown for two scanlines (240 logical lines over the 480
-active lines), and 320 logical pixels span the 640-wide content (2×).
+160 bytes.
+
+**Displayed 1:1 (no scaling), centred** in the active area, framed by the
+border. One framebuffer pixel = one screen pixel; the image occupies a
+320×240 window in the middle and the `$D020` border colour fills the rest.
+(Earlier revisions upscaled it 2× to 640×480 — that was dropped because the
+upscale looked stretched on the CEA-480p output. Use a 2× variant only if a
+larger image is wanted at the cost of sharpness.)
 
 **Pixel layout** — one byte holds two horizontally adjacent pixels:
 

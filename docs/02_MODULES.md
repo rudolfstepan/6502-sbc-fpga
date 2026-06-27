@@ -392,7 +392,9 @@ entity vic_vga is
     cursor_x     : in  std_logic_vector(5 downto 0);
     cursor_y     : in  std_logic_vector(4 downto 0);
     cursor_enable : in std_logic;
-    bitmap_mode, color256_mode, color64_mode : in std_logic;
+    bitmap_mode, color256_mode, color64_mode, color16_mode : in std_logic;
+    border_color : in std_logic_vector(3 downto 0);  -- VIC-II $D020
+    bg_color     : in std_logic_vector(3 downto 0);  -- VIC-II $D021 (global text bg)
     vic_fetch_bitmap : out std_logic;
     -- VGA output
     vga_hs, vga_vs : out std_logic;

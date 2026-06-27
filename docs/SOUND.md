@@ -255,7 +255,12 @@ written to the SD card (wrap it with `fpga/tools/make_sd_boot_image.py`).
 
 ## Native SID playback
 
-`sid6581.vhd` exposes the standard MOS 6581 register window at `$D400–$D418`.
+`sid6581.vhd` exposes the standard MOS 6581 register window at `$D400–$D41C`.
+The 25 write registers `$D400–$D418` read back the last written value; the read
+registers are `$D419/$D41A` POTX/POTY (no paddle hardware → `$FF`), `$D41B` **OSC3**
+(voice-3 oscillator MSB — the classic `LDA $D41B` random/sawtooth source) and
+`$D41C` **ENV3** (voice-3 envelope). These were added for C64 compatibility so
+tunes/effects that read OSC3/ENV3 work.
 On the Tang Primer build it replaces the legacy four-voice synthesizer: running
 both simultaneously exhausted the device's global clock networks and
 destabilized DDR3 PHY calibration. The legacy RTL remains available for other

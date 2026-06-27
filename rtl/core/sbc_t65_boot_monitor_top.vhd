@@ -208,6 +208,14 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vic_text_color : data_t := x"01";
   signal vic_bg_color   : data_t := x"00";
   signal vic_mode_reg     : data_t := x"00";
+  -- VIC-II colour registers ($D020-$D02F). [0] = border ($D020), [1] =
+  -- background ($D021); the rest are stored for read-back compatibility. Only
+  -- the border drives the display so far (POKE 53280); $D021 is not yet wired to
+  -- the per-cell text background model.
+  type vic2_regs_t is array (0 to 15) of data_t;
+  signal vic2_regs : vic2_regs_t := (others => (others => '0'));
+  signal vic2_we   : std_logic;
+  signal vic2_dout : data_t;
   signal vic_fetch_bitmap : std_logic;
   signal bitmap_dout      : data_t;
   -- 16-bit framebuffer address (fb_ram is 38400 bytes for 320x240 4bpp). Old
@@ -323,6 +331,7 @@ begin
   sram_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_SRAM and zp_cs = '0' else '0';
   vram_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_TEXT else '0';
   vic_reg_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_REG else '0';
+  vic2_we    <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VICII   else '0';
   via_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_VIA      else '0';
   uart_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_UART     else '0';
   disk_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_DISK     else '0';
@@ -477,7 +486,7 @@ begin
 
   process(dev_sel, zp_cs, zp_dout, sram_dout, rom_dout, vram_dout, vic_reg_dout, via_dout,
           uart_dout, mon_jump_vector_active, mon_jump_vector, cpu_addr, bitmap_dout,
-          sound_dout, math_dout, sid_dout, disk_dout)
+          sound_dout, math_dout, sid_dout, disk_dout, vic2_dout)
   begin
     case dev_sel is
       when DEV_SRAM =>
@@ -516,6 +525,8 @@ begin
         -- SID now lives in the free I/O region ($D400), no longer overlapping the
         -- ROM, so reads return the SID register file again.
         cpu_din <= sid_dout;
+      when DEV_VICII =>
+        cpu_din <= vic2_dout;
       when others =>
         cpu_din <= x"FF";
     end case;
@@ -573,6 +584,20 @@ begin
         vic_reg_dout <= x"00";
     end case;
   end process;
+
+  -- VIC-II colour register file ($D020-$D02F): write-through register array,
+  -- combinational read-back. vic2_regs(0) = border ($D020), (1) = bg ($D021).
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if cpu_reset_n = '0' then
+        vic2_regs <= (others => (others => '0'));
+      elsif vic2_we = '1' then
+        vic2_regs(to_integer(unsigned(cpu_addr(3 downto 0)))) <= cpu_dout;
+      end if;
+    end if;
+  end process;
+  vic2_dout <= vic2_regs(to_integer(unsigned(cpu_addr(3 downto 0))));
 
   process(clk)
   begin
@@ -1056,6 +1081,8 @@ begin
       color256_mode    => vic_mode_reg(1),
       color64_mode     => vic_mode_reg(3),
       color16_mode     => vic_mode_reg(4),
+      border_color     => vic2_regs(0)(3 downto 0),
+      bg_color         => vic2_regs(1)(3 downto 0),
       vic_fetch_bitmap => vic_fetch_bitmap,
       vga_hs       => vga_hs,
       vga_vs       => vga_vs,

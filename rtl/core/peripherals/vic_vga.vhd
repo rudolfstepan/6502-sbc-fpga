@@ -69,6 +69,13 @@ entity vic_vga is
     color16_mode  : in  std_logic := '0';
     vic_fetch_bitmap : out std_logic;
 
+    -- VIC-II $D020 border colour (palette index). Colours the visible area
+    -- outside the active text/bitmap content (default 0 = black, as before).
+    border_color  : in  std_logic_vector(3 downto 0) := "0000";
+    -- VIC-II $D021 background colour: global text background (behind characters),
+    -- C64-style (foreground stays per-cell). Default 0 = black, as before.
+    bg_color      : in  std_logic_vector(3 downto 0) := "0000";
+
     -- VGA-Ausgang 640x480
     vga_hs       : out std_logic;
     vga_vs       : out std_logic;
@@ -102,6 +109,16 @@ architecture rtl of vic_vga is
   constant V_TOT  : natural := 525;
   constant V_SS   : natural := ite(CEA_480P, 489, 490);  -- V-Sync-Start
   constant V_SE   : natural := ite(CEA_480P, 495, 492);  -- V-Sync-Ende
+
+  -- 320x240 16-colour bitmap: displayed 1:1 (no scaling/zoom), centred in the
+  -- active area; the (colourable) border fills the rest. Avoids the stretched
+  -- look of upscaling.
+  constant BMP16_W  : natural := 320;
+  constant BMP16_H  : natural := 240;
+  constant BMP16_X0 : natural := (H_VIS - BMP16_W) / 2;
+  constant BMP16_Y0 : natural := (V_VIS - BMP16_H) / 2;
+  constant BMP16_X1 : natural := BMP16_X0 + BMP16_W;
+  constant BMP16_Y1 : natural := BMP16_Y0 + BMP16_H;
 
   -- Textbereich: 40px Rand oben, 25 Zeilen * 16 Pixel = 400px, 40px Rand unten
   constant V_BORD : natural := 40;
@@ -198,6 +215,12 @@ architecture rtl of vic_vga is
   -- 320x240 4bpp (16-colour palette) mode: one byte holds two pixels.
   signal in_bmp16   : std_logic;
   signal pix16_idx  : natural range 0 to 15;
+  signal bmp16_x    : natural range 0 to BMP16_W;   -- pixel X within the image
+  signal bmp16_col  : natural range 0 to 159;       -- byte index within the line
+
+  -- VIC-II border: visible pixels outside the active text/bitmap content.
+  signal in_border  : std_logic;
+  signal border_idx : natural range 0 to 15;
 
 begin
   -- Pixel-clock enable: divide by CLK_DIV (2 for 50 MHz, 1 for 27 MHz)
@@ -283,10 +306,11 @@ begin
             end if;
             -- Zeichenzeile fuer naechste Scanzeile berechnen
             if bitmap_mode = '1' and color16_mode = '1' then
-              -- 320x240 4bpp: full active height (480 lines), each framebuffer
-              -- line shown twice (240 logical lines). 160 bytes per line.
+              -- 320x240 4bpp shown 1:1 and centred: one framebuffer line per
+              -- scanline inside [BMP16_Y0, BMP16_Y1). 160 bytes per line.
               nr := 0;
-              if nv < V_VIS then nb := nv / 2; else nb := 0; end if;
+              if nv >= BMP16_Y0 and nv < BMP16_Y1 then nb := nv - BMP16_Y0;
+              else nb := 0; end if;
             elsif bitmap_mode = '1' and color64_mode = '1' then
               -- RGB222: C64_SC scanlines per bitmap row (4x full-screen on Tang,
               -- 3x centred on 640 boards).
@@ -419,21 +443,36 @@ begin
   pack_base <= (pixel_col64 / 4) * 3;
   pack_sub  <= pixel_col64 mod 4;
 
-  -- 320x240 4bpp: 320 logical pixels across the 640-wide content (2x) over the
-  -- full 480 active lines (2x -> 240 lines). One byte = two pixels: even logical
-  -- pixel in the low nibble, odd in the high nibble. Byte index = hx/4
-  -- (= pixel_col), nibble selected by bit 1 of hx.
+  -- 320x240 4bpp shown 1:1 and centred (no scaling). One byte = two pixels:
+  -- even image-X in the low nibble, odd in the high nibble. Image X = hc-BMP16_X0,
+  -- byte index = that / 2, nibble selected by bit 0 of the image X.
   in_bmp16  <= '1' when bitmap_mode = '1' and color16_mode = '1' and
-                        hc >= H_PILL and hc < H_CEND and vc < V_VIS else '0';
-  pix16_idx <= to_integer(unsigned(linebuf(pixel_col)(7 downto 4)))
-                 when (hx / 2) mod 2 = 1
-               else to_integer(unsigned(linebuf(pixel_col)(3 downto 0)));
+                        hc >= BMP16_X0 and hc < BMP16_X1 and
+                        vc >= BMP16_Y0 and vc < BMP16_Y1 else '0';
+  bmp16_x   <= hc - BMP16_X0 when hc >= BMP16_X0 and hc < BMP16_X1 else 0;
+  bmp16_col <= bmp16_x / 2;
+  pix16_idx <= to_integer(unsigned(linebuf(bmp16_col)(7 downto 4)))
+                 when (bmp16_x mod 2) = 1
+               else to_integer(unsigned(linebuf(bmp16_col)(3 downto 0)));
+
+  -- Border: any visible pixel not inside the ACTIVE mode's content region.
+  -- in_color64 is a pure-geometry signal that on the CEA path spans the whole
+  -- screen, so it must only suppress the border when color64_mode is actually
+  -- selected (otherwise the border never appears in text/256/16 modes). in_bmp16
+  -- is already gated by color16_mode; in_text is the text/color256 content area.
+  border_idx <= to_integer(unsigned(border_color));
+  in_border  <= '1' when hc < H_VIS and vc < V_VIS and
+                         in_text = '0' and in_bmp16 = '0' and
+                         (in_color64 = '0' or color64_mode = '0')
+                else '0';
 
   -- Zeichencode und Farbattribut aus Zeilenpuffer
   char_code  <= linebuf(col)  when in_text = '1' else x"00";
   cell_color <= colorbuf(col) when in_text = '1' else x"00";
   fg_index   <= to_integer(unsigned(cell_color(3 downto 0)));
-  bg_index   <= to_integer(unsigned(cell_color(7 downto 4)));
+  -- Background is now the global VIC-II $D021 colour (C64 text-mode model),
+  -- not the per-cell high nibble. Foreground stays per-cell (color RAM).
+  bg_index   <= to_integer(unsigned(bg_color));
   chunky_color <= linebuf(pixel_col) when in_text = '1' else x"00";
   color64 <= linebuf(pack_base)(7 downto 2) when pack_sub = 0 else
              linebuf(pack_base)(1 downto 0) & linebuf(pack_base + 1)(7 downto 4)
@@ -469,7 +508,8 @@ begin
 
   -- RGB332 expands directly to RGB565 in 256-colour mode. Replicated high bits
   -- fill the DAC width without needing a 256-entry palette RAM.
-  vga_r <= PAL_R(pix16_idx) when in_bmp16 = '1' else
+  vga_r <= PAL_R(border_idx) when in_border = '1' else
+           PAL_R(pix16_idx) when in_bmp16 = '1' else
            "00000" when bitmap_mode = '1' and color16_mode = '1' else
            color64(5 downto 4) & color64(5 downto 4) & color64(5)
            when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
@@ -477,7 +517,8 @@ begin
            chunky_color(7 downto 5) & chunky_color(7 downto 6)
            when bitmap_mode = '1' and color256_mode = '1' and in_text = '1' else
            PAL_R(fg_index) when pbit = '1' else PAL_R(bg_index);
-  vga_g <= PAL_G(pix16_idx) when in_bmp16 = '1' else
+  vga_g <= PAL_G(border_idx) when in_border = '1' else
+           PAL_G(pix16_idx) when in_bmp16 = '1' else
            "000000" when bitmap_mode = '1' and color16_mode = '1' else
            color64(3 downto 2) & color64(3 downto 2) & color64(3 downto 2)
            when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else
@@ -485,7 +526,8 @@ begin
            chunky_color(4 downto 2) & chunky_color(4 downto 2)
            when bitmap_mode = '1' and color256_mode = '1' and in_text = '1' else
            PAL_G(fg_index) when pbit = '1' else PAL_G(bg_index);
-  vga_b <= PAL_B(pix16_idx) when in_bmp16 = '1' else
+  vga_b <= PAL_B(border_idx) when in_border = '1' else
+           PAL_B(pix16_idx) when in_bmp16 = '1' else
            "00000" when bitmap_mode = '1' and color16_mode = '1' else
            color64(1 downto 0) & color64(1 downto 0) & color64(1)
            when bitmap_mode = '1' and color64_mode = '1' and in_color64 = '1' else

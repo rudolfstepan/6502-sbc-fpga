@@ -60,27 +60,21 @@ begin
     assert max_addr = 159
       report "color16 fetch did not cover all 160 bytes/line" severity failure;
 
-    -- (b) prime one full frame, then sample a mid-screen visible line. Its
-    -- linebuf was filled with $21 during the previous H-blank.
-    wait until falling_edge(vs);
-    wait until rising_edge(vs);
-    for i in 1 to 60 loop
-      wait until falling_edge(hs);
-    end loop;
-    wait until rising_edge(de);
-    while de = '1' loop
+    -- (b) The image is shown 1:1 and centred, so it only occupies part of the
+    -- screen. Collect over visible pixels until BOTH palette colours appear
+    -- (white = low nibble, red = high nibble); geometry-independent. The image
+    -- region is reached within a couple of frames.
+    while not (white_seen and red_seen) loop
       wait until rising_edge(clk);
-      if r = "11111" and g = "111111" and b = "11111" then
-        white_seen := true;                       -- palette index 1 (low nibble)
-      end if;
-      if r = "10001" and g = "001110" and b = "00110" then
-        red_seen := true;                         -- palette index 2 (high nibble)
+      if de = '1' then
+        if r = "11111" and g = "111111" and b = "11111" then
+          white_seen := true;                     -- palette index 1 (low nibble)
+        end if;
+        if r = "10001" and g = "001110" and b = "00110" then
+          red_seen := true;                       -- palette index 2 (high nibble)
+        end if;
       end if;
     end loop;
-    assert white_seen
-      report "color16: low-nibble pixel (white, index 1) not displayed" severity failure;
-    assert red_seen
-      report "color16: high-nibble pixel (red, index 2) not displayed" severity failure;
 
     report "tb_vic_color16 passed" severity note;
     finish;

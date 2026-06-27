@@ -110,7 +110,13 @@ architecture rtl of sid6581 is
     return YB(seg) + (YB(seg+1) - YB(seg)) * frac / 256;
   end function;
 begin
-  dout <= regs(to_integer(unsigned(addr))) when unsigned(addr) < 25 else x"FF";
+  -- Write registers ($00-$18) read back the last written value; $19/$1A (POTX/
+  -- POTY) have no paddle hardware -> $FF; $1B = OSC3 (voice-3 oscillator MSB, the
+  -- classic $D41B RNG / sawtooth source) and $1C = ENV3 (voice-3 envelope).
+  dout <= regs(to_integer(unsigned(addr)))         when unsigned(addr) < 25 else
+          std_logic_vector(phase(2)(23 downto 16)) when unsigned(addr) = 27 else
+          std_logic_vector(env(2))                 when unsigned(addr) = 28 else
+          x"FF";
 
   timebase_proc : process(clk)
   begin

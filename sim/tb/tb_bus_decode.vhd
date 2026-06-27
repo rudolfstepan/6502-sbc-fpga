@@ -23,7 +23,8 @@ begin
     addr <= x"8000"; wait for 1 ns; assert sel = DEV_VIC_TEXT report "VIC text decode failed" severity failure;
     addr <= x"8800"; wait for 1 ns; assert sel = DEV_VIA report "VIA decode failed" severity failure;
     addr <= x"8810"; wait for 1 ns; assert sel = DEV_UART report "UART decode failed" severity failure;
-    addr <= x"8820"; wait for 1 ns; assert sel = DEV_DISK report "DISK decode failed" severity failure;
+    addr <= x"8820"; wait for 1 ns; assert sel = DEV_USB report "USB decode failed" severity failure;
+    addr <= x"8824"; wait for 1 ns; assert sel = DEV_DISK report "DISK decode failed" severity failure;
     addr <= x"8830"; wait for 1 ns; assert sel = DEV_SOUND0 report "SOUND0 decode failed" severity failure;
     addr <= x"8840"; wait for 1 ns; assert sel = DEV_VIC_BLIT report "VIC blitter decode failed" severity failure;
     addr <= x"8850"; wait for 1 ns; assert sel = DEV_VIC_SPR report "VIC sprite reg decode failed" severity failure;
@@ -39,6 +40,10 @@ begin
     addr <= x"C000"; wait for 1 ns; assert sel = DEV_ROM report "ROM decode failed" severity failure;
     addr <= x"B000"; wait for 1 ns; assert sel = DEV_ROM report "BASIC ROM decode failed" severity failure;
     addr <= x"D000"; wait for 1 ns; assert sel = DEV_NONE report "I/O hole decode failed" severity failure;
+    addr <= x"D020"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II border/bg decode failed" severity failure;
+    addr <= x"D02F"; wait for 1 ns; assert sel = DEV_VICII report "VIC-II colour end decode failed" severity failure;
+    addr <= x"D400"; wait for 1 ns; assert sel = DEV_SID report "SID decode failed" severity failure;
+    addr <= x"D41C"; wait for 1 ns; assert sel = DEV_SID report "SID OSC3/ENV3 decode failed" severity failure;
 
     report "tb_bus_decode passed";
     finish;

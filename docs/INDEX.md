@@ -6,6 +6,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 
 - **[README](../README.md)** - Project overview and current status
 - **[Architecture](./01_ARCHITECTURE.md)** - System design and memory map
+- **[Memory Map](./MEMORY_MAP.md)** - Full `$0000`–`$FFFF` address map, decode order, RAM/ROM split, I/O regions, bitmap-window banking
 - **[Modules Reference](./02_MODULES.md)** - Detailed component documentation
 - **[Building & Synthesis](./03_BUILDING.md)** - How to build and synthesize the project
 - **[Testing Guide](./04_TESTING.md)** - Test infrastructure and running tests

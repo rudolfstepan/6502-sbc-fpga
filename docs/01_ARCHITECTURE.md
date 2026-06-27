@@ -57,14 +57,14 @@ failure while the CPU remains held.
 | --- | --- | --- | --- |
 | $0000-$3FFF | 16 KB | Internal FPGA RAM | Zero page, stack, and EhBASIC workspace |
 | $4000-$5FFF | 8 KB | Main RAM | BSRAM by default; optional external DDR3 backend |
-| $6000-$7FFF | 8 KB window | Banked VIC framebuffer | 16 KB; legacy 1-bpp, 160x100 RGB332, or 180x120 RGB222 |
+| $6000-$7FFF | 8 KB window | Banked VIC framebuffer | 38400 B (`fb_ram`); 320x240 16-colour (banks 0–4 via MODE 7:5) + legacy 160x100 RGB332 / 180x120 RGB222 |
 | $8000-$87FF | 2 KB | VIC text/color VRAM | $8000–$83E7 chars, $8400–$87E7 colors; shared by CPU/monitor/VIC |
 | $8800-$880F | 16 B | VIA 6522 | Port B bit 0 -> board LED 1 after boot |
 | $8810-$8813 | 4 B | UART 6551 | CPU UART registers |
 | $883A | 1 B | Millisecond counter | Timing source retained for native SID playback |
 | $88B0-$88BF | 16 B | Math coprocessor (FPU) | Signed 32×32 fixed-point multiply (8.24); see [Math Coprocessor](./FPU.md) |
 | $A000-$CFFF | 12 KB | Shadow ROM application window | EhBASIC or standalone application |
-| $D000-$EFFF | 8 KB | I/O / reserved | SID at $D400-$D418; not shadow ROM |
+| $D000-$EFFF | 8 KB | I/O / reserved | VIC-II colour regs $D020-$D02F (border/background); SID at $D400-$D41C (incl. OSC3/ENV3 reads); not shadow ROM |
 | $F000-$FFFF | 4 KB | Shadow ROM kernel window | Kernel and hardware vectors |
 
 The two ROM windows share one physical 16 KB `boot_shadow_rom`. Image offsets
@@ -216,27 +216,35 @@ is unchanged (US only).
 
 ### Color Support
 
-The VIC supports per-cell foreground and background colors using the C64 16-color
-palette. Color attributes are stored in color RAM at `$8400–$87E7`, parallel to the
-character codes at `$8000–$83E7`. Each color byte is packed as `bg[7:4] | fg[3:0]`.
-Color attributes apply to text and legacy 1-bpp bitmap modes. Direct-colour
-RGB332/RGB222 pixels carry their own colour and do not use color RAM.
+The VIC uses the C64 16-color palette. The **foreground** is per-cell, stored in
+color RAM at `$8400–$87E7` (low nibble `fg[3:0]`), parallel to the character codes
+at `$8000–$83E7`. The **background** is **global**, from the VIC-II `$D021`
+register (`POKE 53281`), matching the C64 text-mode model. (The colour byte's high
+nibble `bg[7:4]` is no longer used for a per-cell background — this changed when
+`$D021` was added for C64 compatibility; default `$D021`=0 keeps the black
+background.) Direct-colour RGB332/RGB222 pixels carry their own colour and do not
+use color RAM; the 320×240 mode uses the palette and is shown 1:1, centred, framed
+by the `$D020` border colour.
 
 In text and legacy bitmap modes the VIC fetches both data and color attributes
 during H-blank. The 16-color palette is implemented as constant RGB565 lookup
 tables (Pepto-style C64 colors) in `vic_vga.vhd`; direct-colour modes expand
 RGB332 or RGB222 values to RGB565 instead.
 
-**VIC color registers** (active in all top-level modules):
+**Colour registers:**
 
 | Address | Register | Default | Description |
 | --- | --- | --- | --- |
-| `$9003` | TEXT_COLOR | 1 (white) | Foreground color index 0–15 |
-| `$9004` | BG_COLOR | 0 (black) | Background color index 0–15 |
+| `$9003` | TEXT_COLOR | 1 (white) | Kernel foreground index (composed into color RAM) |
+| `$9004` | BG_COLOR | 0 (black) | Kernel colour scratch — *legacy, not wired to the display* |
+| `$D020` | BORDER | 0 (black) | Border colour — `POKE 53280` (VIC-II compatible) |
+| `$D021` | BACKGROUND | 0 (black) | Global text background — `POKE 53281` |
 
-The kernel reads these registers and writes the composed color byte (`bg<<4 | fg`)
-to color RAM with every character output. `CLRSCR` fills color RAM with the current
-color, and `SCROLL` scrolls color RAM alongside character data.
+The kernel reads `$9003`/`$9004` and writes the composed color byte (`bg<<4 | fg`)
+to color RAM with every character output; only the foreground nibble now affects
+the display (the background comes from `$D021`). `CLRSCR` fills color RAM with the
+current colour, and `SCROLL` scrolls color RAM alongside character data. See
+[Memory Map](./MEMORY_MAP.md) and [VIC](./VIC.md) for the full register set.
 
 **BASIC usage:**
 
