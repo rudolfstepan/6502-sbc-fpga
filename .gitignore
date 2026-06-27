@@ -85,5 +85,5 @@ boards/tang_primer_20k/docs/
 # Paper: track only the 6502 paper source and its built PDF; keep LaTeX
 # build artefacts and any other local documents out of the repo.
 paper/*
-!paper/6502_fpga_paper.tex
-!paper/6502_fpga_paper.pdf
+!paper/A 6502 Home Computer Rebuilt in Logic.tex
+!paper/A 6502 Home Computer Rebuilt in Logic.pdf
