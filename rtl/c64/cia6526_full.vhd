@@ -40,7 +40,11 @@ entity cia6526_full is
     pb_ddr  : out std_logic_vector(7 downto 0);
 
     flag_n  : in  std_logic := '1';                 -- FLAG input (falling edge -> ICR bit 4)
-    irq_n   : out std_logic                          -- active-low IRQ/NMI
+    irq_n   : out std_logic;                         -- active-low IRQ/NMI
+
+    -- Diagnostic tap: [31:16] = irq_n, armed, mask, stat, CRA low nibble;
+    -- [15:0] = Timer A counter. Leave open in normal synthesis.
+    dbg_state : out std_logic_vector(31 downto 0)
   );
 end entity;
 
@@ -54,10 +58,11 @@ architecture rtl of cia6526_full is
 
   signal icr_mask : std_logic_vector(4 downto 0) := (others => '0');
   signal icr_stat : std_logic_vector(4 downto 0) := (others => '0');
-  -- ICR read-clear must happen when the (possibly multi-clock) read cycle ENDS,
-  -- not on its first clock -- otherwise a CPU clock-enabled at 1/N reads back 0
-  -- (status already cleared) and never sees the IRQ flag (bit 7).
-  signal icr_rd_pend : std_logic := '0';
+  -- Clear ICR once per bus read, on the PHI2/tick sample edge. The CPU samples
+  -- the pre-clear combinational value on that same edge, then the IRQ line drops
+  -- immediately afterwards; later clocks in the held access cannot repeatedly
+  -- clear new events.
+  signal icr_rd_armed : std_logic := '1';
 
   signal ta_uf, tb_uf : std_logic;                  -- underflow strobes
   signal flag_d       : std_logic := '1';
@@ -70,12 +75,8 @@ architecture rtl of cia6526_full is
 
   -- Pin levels: output bits show the register, input bits show the external pin.
   signal pa_pin, pb_pin : std_logic_vector(7 downto 0);
+  signal irq_n_i : std_logic;
 begin
-  pa_ddr <= ddra;
-  pb_ddr <= ddrb;
-  pa_out <= pra;
-  pb_out <= prb;
-
   -- Open-drain / wired-AND pin model (6526 + matrix): a bit reads low if it is
   -- driven low (DDR=1, PR=0) OR pulled low externally; an input bit (DDR=0) just
   -- follows the external level. Equivalent to the simple mux for our keyboard
@@ -86,7 +87,17 @@ begin
     pb_pin(i) <= (prb(i) or not ddrb(i)) and pb_in(i);
   end generate;
 
-  irq_n <= '0' when (icr_stat and icr_mask) /= "00000" else '1';
+  pa_ddr <= ddra;
+  pb_ddr <= ddrb;
+  -- Export the observable pin level, matching the reference CIA wrappers
+  -- (input bits appear high unless an external source pulls them low).
+  pa_out <= pa_pin;
+  pb_out <= pb_pin;
+
+  irq_n_i <= '0' when (icr_stat and icr_mask) /= "00000" else '1';
+  irq_n <= irq_n_i;
+  dbg_state <= irq_n_i & icr_rd_armed & icr_mask & icr_stat & cra(3 downto 0) &
+               std_logic_vector(ta_cnt);
 
   process(clk)
     variable ai : integer range 0 to 15;
@@ -100,7 +111,7 @@ begin
         tb_latch <= (others => '1'); tb_cnt <= (others => '1');
         cra <= (others => '0'); crb <= (others => '0');
         icr_mask <= (others => '0'); icr_stat <= (others => '0');
-        icr_rd_pend <= '0';
+        icr_rd_armed <= '1';
         flag_d <= '1';
         tod_t <= (others => '0'); tod_s <= (others => '0');
         tod_m <= (others => '0'); tod_h <= (others => '0');
@@ -110,12 +121,14 @@ begin
         tb_uf <= '0';
         ta_uf_now := '0';
 
-        -- Deferred ICR read-clear: once the ICR read cycle ends (cs low again),
-        -- clear the latched status. Placed before the timer/FLAG sets below so a
-        -- source that fires on this same clock survives the clear.
-        if cs = '0' and icr_rd_pend = '1' then
+        -- ICR read-clear. Placed before timer/FLAG sets below so a source that
+        -- fires on this same clock survives the clear.
+        if cs = '0' then
+          icr_rd_armed <= '1';
+        elsif tick = '1' and cs = '1' and we = '0' and addr = x"D"
+              and icr_rd_armed = '1' then
           icr_stat    <= (others => '0');
-          icr_rd_pend <= '0';
+          icr_rd_armed <= '0';
         end if;
 
         -- FLAG falling edge -> ICR bit4
@@ -195,36 +208,36 @@ begin
         if cs = '1' then
           ai := to_integer(unsigned(addr));
           if we = '1' then
-            case ai is
-              when 0  => pra <= din;
-              when 1  => prb <= din;
-              when 2  => ddra <= din;
-              when 3  => ddrb <= din;
-              when 4  => ta_latch(7 downto 0)  <= unsigned(din);
-              when 5  => ta_latch(15 downto 8) <= unsigned(din);
-                         if cra(0) = '0' then ta_cnt <= unsigned(din) & ta_latch(7 downto 0); end if;
-              when 6  => tb_latch(7 downto 0)  <= unsigned(din);
-              when 7  => tb_latch(15 downto 8) <= unsigned(din);
-                         if crb(0) = '0' then tb_cnt <= unsigned(din) & tb_latch(7 downto 0); end if;
-              when 13 =>                          -- ICR mask
-                if din(7) = '1' then
-                  icr_mask <= icr_mask or din(4 downto 0);
-                else
-                  icr_mask <= icr_mask and not din(4 downto 0);
-                end if;
-              when 14 =>                           -- CRA (bit4 = force-load STROBE)
-                cra <= din(7 downto 5) & '0' & din(3 downto 0);
-                if din(4) = '1' then ta_cnt <= ta_latch; end if;
-              when 15 =>                           -- CRB (bit4 = force-load STROBE)
-                crb <= din(7 downto 5) & '0' & din(3 downto 0);
-                if din(4) = '1' then tb_cnt <= tb_latch; end if;
-              when others => null;
-            end case;
+            if tick = '1' then
+              case ai is
+                when 0  => pra <= din;
+                when 1  => prb <= din;
+                when 2  => ddra <= din;
+                when 3  => ddrb <= din;
+                when 4  => ta_latch(7 downto 0)  <= unsigned(din);
+                when 5  => ta_latch(15 downto 8) <= unsigned(din);
+                           if cra(0) = '0' then ta_cnt <= unsigned(din) & ta_latch(7 downto 0); end if;
+                when 6  => tb_latch(7 downto 0)  <= unsigned(din);
+                when 7  => tb_latch(15 downto 8) <= unsigned(din);
+                           if crb(0) = '0' then tb_cnt <= unsigned(din) & tb_latch(7 downto 0); end if;
+                when 13 =>                          -- ICR mask
+                  if din(7) = '1' then
+                    icr_mask <= icr_mask or din(4 downto 0);
+                  else
+                    icr_mask <= icr_mask and not din(4 downto 0);
+                  end if;
+                when 14 =>                           -- CRA (bit4 = force-load STROBE)
+                  cra <= din(7 downto 5) & '0' & din(3 downto 0);
+                  if din(4) = '1' then ta_cnt <= ta_latch; end if;
+                when 15 =>                           -- CRB (bit4 = force-load STROBE)
+                  crb <= din(7 downto 5) & '0' & din(3 downto 0);
+                  if din(4) = '1' then tb_cnt <= tb_latch; end if;
+                when others => null;
+              end case;
+            end if;
           else
             -- Reads with side effects
-            if ai = 13 then
-              icr_rd_pend <= '1';                   -- clear ICR when the read ends
-            elsif ai = 8 then
+            if ai = 8 then
               tod_latched <= '0';                   -- reading 10ths unlatches
             elsif ai = 11 then
               tod_latched <= '1';                   -- reading hours latches

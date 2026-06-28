@@ -37,8 +37,13 @@ entity c64_keyboard_matrix is
     ps2_clk  : in  std_logic;
     ps2_data : in  std_logic;
 
-    -- CIA-1 interface: column drive in (active low), row read out (active low).
+    -- CIA-1 interface: the keyboard is a passive bidirectional matrix between
+    -- port A columns and port B rows. Inputs are the CIA pin levels driven by
+    -- the output latches/DDR; outputs are the resulting pin levels after pressed
+    -- keys short a driven-low line to the opposite side.
     col_drive : in  std_logic_vector(7 downto 0);
+    row_drive : in  std_logic_vector(7 downto 0) := x"FF";
+    col_read  : out std_logic_vector(7 downto 0);
     row_read  : out std_logic_vector(7 downto 0);
 
     -- RESTORE key -> CPU NMI (active-low pulse handled in the core).
@@ -238,19 +243,28 @@ begin
 
   restore_n <= '0' when restore_down = '1' else '1';
 
-  -- Row read: a row bit is pulled low when any key in that row whose column is
-  -- driven low is pressed. Unselected -> '1' (pull-up).
-  process(down, col_drive)
+  -- Matrix read: a pin bit is pulled low when a pressed key connects it to a low
+  -- pin on the opposite port. With no pressed key, the CIA reads back its own pin
+  -- level (outputs included), matching the MiST/MiSTer CIA top-level feedback.
+  process(down, col_drive, row_drive)
+    variable cv : std_logic_vector(7 downto 0);
     variable rv : std_logic_vector(7 downto 0);
   begin
+    cv := col_drive;
+    rv := row_drive;
     for rr in 0 to 7 loop
-      rv(rr) := '1';
       for cc in 0 to 7 loop
-        if down(rr)(cc) = '1' and col_drive(cc) = '0' then
-          rv(rr) := '0';
+        if down(rr)(cc) = '1' then
+          if col_drive(cc) = '0' then
+            rv(rr) := '0';
+          end if;
+          if row_drive(rr) = '0' then
+            cv(cc) := '0';
+          end if;
         end if;
       end loop;
     end loop;
+    col_read <= cv;
     row_read <= rv;
   end process;
 end architecture;

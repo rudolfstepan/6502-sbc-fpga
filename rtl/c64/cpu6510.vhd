@@ -36,6 +36,7 @@ entity cpu6510 is
     data_out : out std_logic_vector(7 downto 0);
     we       : out std_logic;                       -- 1 = CPU writing
     sync     : out std_logic;
+    regs     : out std_logic_vector(63 downto 0);
 
     -- Processor port pins (external levels for the input bits).
     pa_in    : in  std_logic_vector(7 downto 0) := x"FF";
@@ -83,11 +84,14 @@ begin
   data_out <= t65_dout;
   cpu_we   <= (not t65_r_w_n) and t65_vda;
   we       <= cpu_we;
+  regs     <= u_regs;
 
   sel_port <= '1' when t65_addr(15 downto 1) = (14 downto 0 => '0') else '0';
 
-  -- Feed the CPU the port register for $0000/$0001 reads, RAM/IO otherwise.
-  t65_din <= port_ddr  when (sel_port = '1' and t65_addr(0) = '0') else
+  -- The T65 core expects its write data fed back on DI during write cycles
+  -- (matches the upstream 6510 wrapper and keeps RMW/undocumented paths sane).
+  t65_din <= t65_dout when cpu_we = '1' else
+             port_ddr  when (sel_port = '1' and t65_addr(0) = '0') else
              port_pin  when (sel_port = '1' and t65_addr(0) = '1') else
              data_in;
 

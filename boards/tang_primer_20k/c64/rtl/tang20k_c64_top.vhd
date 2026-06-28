@@ -10,7 +10,7 @@
 -- HDMI TMDS on the on-board connector. Audio on the dock PT8211.
 library ieee;
 use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
+-- use ieee.numeric_std.all;   -- (only needed by the disabled DIAG heartbeat)
 
 entity tang20k_c64_top is
   port (
@@ -30,8 +30,14 @@ entity tang20k_c64_top is
     tmds_d_p   : out std_logic_vector(2 downto 0);
     tmds_d_n   : out std_logic_vector(2 downto 0);
 
-    -- DIAG heartbeat LEDs (active-low): led[0] = CIA1 IRQ alive, led[1] = CPU alive.
-    led        : out std_logic_vector(1 downto 0)
+    -- DIAG heartbeat LEDs -- disabled (placement experiment); re-enable with the
+    -- block below, the led pins in the .cst, and dbg_cia1_irq in c64_core.
+    -- led     : out std_logic_vector(1 downto 0);
+
+    -- CH340 USB-UART. In this diagnostic build it streams c64_dbg_uart output;
+    -- the host-disk UART inside c64_core is temporarily disconnected.
+    uart_tx    : out std_logic;
+    uart_rx    : in  std_logic
   );
 end entity;
 
@@ -49,41 +55,45 @@ architecture rtl of tang20k_c64_top is
   signal vga_g        : std_logic_vector(5 downto 0);
   signal audio        : std_logic_vector(15 downto 0);
 
-  -- DIAG heartbeat taps from the core.
-  signal dbg_sync     : std_logic;
-  signal dbg_cia1_irq : std_logic;
-  signal sync_d       : std_logic := '0';
-  signal cpu_cnt      : unsigned(19 downto 0) := (others => '0');  -- CPU alive
-  signal irq_low_cnt  : unsigned(21 downto 0) := (others => '0');  -- IRQ-asserted time
-  signal irq_stuck    : std_logic := '0';                         -- latched stuck-low
+  signal dbg_addr   : std_logic_vector(15 downto 0);
+  signal dbg_we     : std_logic;
+  signal dbg_do     : std_logic_vector(7 downto 0);
+  signal dbg_di     : std_logic_vector(7 downto 0);
+  signal dbg_sync   : std_logic;
+  signal dbg_phi    : std_logic;
+  signal dbg_status : std_logic_vector(15 downto 0);
+  signal dbg_cia1   : std_logic_vector(31 downto 0);
+  signal dbg_regs   : std_logic_vector(63 downto 0);
+
+  -- DIAG heartbeat taps -- DISABLED (placement experiment). Re-enable the led port,
+  -- the .cst led pins, dbg_cia1_irq in c64_core, and this whole block together.
+  -- signal dbg_sync     : std_logic;
+  -- signal dbg_cia1_irq : std_logic;
+  -- signal sync_d       : std_logic := '0';
+  -- signal cpu_cnt      : unsigned(19 downto 0) := (others => '0');
+  -- signal irq_low_cnt  : unsigned(21 downto 0) := (others => '0');
+  -- signal irq_stuck    : std_logic := '0';
 begin
   pa_en <= '1';   -- enable dock audio power amplifier
 
-  -- led[0] = CIA1 IRQ STUCK-LOW detector: if irq_n stays asserted longer than any
-  -- legit service (~78 ms @27 MHz) it latches -> an unacknowledged IRQ storm (the
-  -- smoking gun for an ICR-ack failure). led[1] = CPU-alive heartbeat (opcode-fetch
-  -- counter bit). Active-low LEDs:
-  --   led0 dark + led1 blink  = healthy
-  --   led0 LIT  + led1 blink  = IRQ stuck low (storm), CPU still spinning
-  --   led0 dark + led1 frozen = CPU dead, IRQ NOT stuck (wild jump / vector loss)
-  process(clk_pix)
-  begin
-    if rising_edge(clk_pix) then
-      sync_d <= dbg_sync;
-      if dbg_sync = '1' and sync_d = '0' then         -- opcode fetch edge
-        cpu_cnt <= cpu_cnt + 1;
-      end if;
-      if dbg_cia1_irq = '1' then                       -- IRQ deasserted -> reset
-        irq_low_cnt <= (others => '0');
-      elsif irq_low_cnt(21) = '1' then                 -- asserted ~78 ms -> stuck
-        irq_stuck <= '1';
-      else
-        irq_low_cnt <= irq_low_cnt + 1;
-      end if;
-    end if;
-  end process;
-  led(0) <= not irq_stuck;   -- '0' (lit) when the IRQ line is stuck low
-  led(1) <= cpu_cnt(19);
+  -- process(clk_pix)
+  -- begin
+  --   if rising_edge(clk_pix) then
+  --     sync_d <= dbg_sync;
+  --     if dbg_sync = '1' and sync_d = '0' then
+  --       cpu_cnt <= cpu_cnt + 1;
+  --     end if;
+  --     if dbg_cia1_irq = '1' then
+  --       irq_low_cnt <= (others => '0');
+  --     elsif irq_low_cnt(21) = '1' then
+  --       irq_stuck <= '1';
+  --     else
+  --       irq_low_cnt <= irq_low_cnt + 1;
+  --     end if;
+  --   end if;
+  -- end process;
+  -- led(0) <= not irq_stuck;
+  -- led(1) <= cpu_cnt(19);
 
   -- Reset: hold until the PLL locks and the button is released, in the pixel domain.
   process(clk_pix)
@@ -122,13 +132,16 @@ begin
     port map (
       clk      => clk_pix,
       reset_n  => reset_n,
-      dbg_addr => open,
-      dbg_we   => open,
-      dbg_do   => open,
-      dbg_di   => open,
+      dbg_addr => dbg_addr,
+      dbg_we   => dbg_we,
+      dbg_do   => dbg_do,
+      dbg_di   => dbg_di,
       dbg_sync => dbg_sync,
-      dbg_phi  => open,
-      dbg_cia1_irq => dbg_cia1_irq,
+      dbg_phi  => dbg_phi,
+      dbg_status => dbg_status,
+      dbg_cia1 => dbg_cia1,
+      dbg_regs => dbg_regs,
+      -- dbg_cia1_irq => open,   -- (DIAG heartbeat tap -- disabled)
       vga_hs   => vga_hs,
       vga_vs   => vga_vs,
       vga_de   => vga_de,
@@ -137,7 +150,26 @@ begin
       vga_b    => vga_b,
       ps2_clk  => ps2_clk,
       ps2_data => ps2_data,
-      audio    => audio
+      audio    => audio,
+      uart_tx  => open,
+      uart_rx  => '1'
+    );
+
+  dbg_uart_i : entity work.c64_dbg_uart
+    generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+    port map (
+      clk        => clk_pix,
+      reset_n    => reset_n,
+      snp_addr   => dbg_addr,
+      snp_we     => dbg_we,
+      snp_do     => dbg_do,
+      snp_di     => dbg_di,
+      snp_sync   => dbg_sync,
+      snp_phi    => dbg_phi,
+      snp_status => dbg_status,
+      snp_cia1   => dbg_cia1,
+      snp_regs   => dbg_regs,
+      uart_tx    => uart_tx
     );
 
   -- Audio DAC (PT8211), pixel-clock domain (BCK_HALF=4 -> ~27/8 MHz BCK).

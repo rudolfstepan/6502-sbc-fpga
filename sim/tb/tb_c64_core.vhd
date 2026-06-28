@@ -75,7 +75,8 @@ begin
     port map (
       clk => clk, reset_n => reset_n,
       dbg_addr => dbg_addr, dbg_we => dbg_we, dbg_do => dbg_do, dbg_di => dbg_di,
-      dbg_sync => dbg_sync, dbg_phi => dbg_phi,
+      dbg_sync => dbg_sync, dbg_phi => dbg_phi, dbg_status => open, dbg_cia1 => open,
+      dbg_regs => open,
       vga_hs => vga_hs, vga_vs => vga_vs, vga_de => vga_de,
       vga_r => vga_r, vga_g => vga_g, vga_b => vga_b,
       ps2_clk => '1', ps2_data => '1',

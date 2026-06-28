@@ -39,7 +39,10 @@ entity c64_core is
     dbg_di   : out std_logic_vector(7 downto 0);
     dbg_sync : out std_logic;
     dbg_phi  : out std_logic;
-    dbg_cia1_irq : out std_logic;                   -- CIA1 IRQ line (heartbeat tap)
+    dbg_status : out std_logic_vector(15 downto 0);
+    dbg_cia1 : out std_logic_vector(31 downto 0);
+    dbg_regs : out std_logic_vector(63 downto 0);
+    -- dbg_cia1_irq : out std_logic;                -- (DIAG heartbeat tap -- disabled)
 
     -- Video (RGB565 split, to the HDMI encoder).
     vga_hs   : out std_logic;
@@ -54,25 +57,63 @@ entity c64_core is
     ps2_data : in  std_logic;
 
     -- SID audio sample (signed 16-bit), to the board DAC.
-    audio    : out std_logic_vector(15 downto 0)
+    audio    : out std_logic_vector(15 downto 0);
+
+    -- Host disk link: UART to a PC running a 1541 server (LOAD over serial).
+    uart_tx : out std_logic;
+    uart_rx : in  std_logic := '1'   -- idle high; default so the TB can leave it open
   );
 end entity;
 
 architecture rtl of c64_core is
+  component mos6526 is
+    port (
+      mode    : in  std_logic;
+      clk     : in  std_logic;
+      phi2_p  : in  std_logic;
+      phi2_n  : in  std_logic;
+      res_n   : in  std_logic;
+      cs_n    : in  std_logic;
+      rw      : in  std_logic;
+      rs      : in  std_logic_vector(3 downto 0);
+      db_in   : in  std_logic_vector(7 downto 0);
+      db_out  : out std_logic_vector(7 downto 0);
+      pa_in   : in  std_logic_vector(7 downto 0);
+      pa_out  : out std_logic_vector(7 downto 0);
+      pa_oe   : out std_logic_vector(7 downto 0);
+      pb_in   : in  std_logic_vector(7 downto 0);
+      pb_out  : out std_logic_vector(7 downto 0);
+      pb_oe   : out std_logic_vector(7 downto 0);
+      flag_n  : in  std_logic;
+      pc_n    : out std_logic;
+      tod     : in  std_logic;
+      sp_in   : in  std_logic;
+      sp_out  : out std_logic;
+      cnt_in  : in  std_logic;
+      cnt_out : out std_logic;
+      irq_n   : out std_logic;
+      dbg_state : out std_logic_vector(31 downto 0)
+    );
+  end component;
+
   -- ---- clocking ----
   signal phi2_cnt   : integer range 0 to PHI2_DIV - 1 := 0;
   signal phi2_en    : std_logic := '0';
+  signal cia_bus_en : std_logic := '0';
   signal tod_tick   : std_logic := '0';
 
   -- ---- CPU ----
   signal cpu_addr  : std_logic_vector(15 downto 0);
   signal cpu_dout  : std_logic_vector(7 downto 0);
   signal cpu_din   : std_logic_vector(7 downto 0);   -- combinational read mux
+  signal other_din : std_logic_vector(7 downto 0);   -- everything except stolen RAM
   signal cpu_we    : std_logic;
   signal cpu_sync  : std_logic;
   signal cpu_rdy   : std_logic;
   signal cpu_irq_n : std_logic;
   signal cpu_nmi_n : std_logic;
+  signal cpu_regs  : std_logic_vector(63 downto 0);
+  signal io_we     : std_logic;
   signal loram, hiram, charen : std_logic;
   signal ctrl      : std_logic_vector(2 downto 0);
 
@@ -85,6 +126,7 @@ architecture rtl of c64_core is
   signal dram_dout : std_logic_vector(7 downto 0);
   signal dram_we   : std_logic;
   signal cpu_en    : std_logic;
+  signal ram_settle : integer range 0 to 7 := 7;
   signal vic_ba_d  : std_logic := '1';
   signal vic_ba_d2 : std_logic := '1';
   signal vic_ba_d3 : std_logic := '1';
@@ -137,8 +179,15 @@ architecture rtl of c64_core is
   signal cia1_dout, cia2_dout : std_logic_vector(7 downto 0);
   signal cia1_irq_n, cia2_irq_n : std_logic;
   signal cia1_pa_out, cia1_pb_out : std_logic_vector(7 downto 0);
-  signal cia2_pa_out : std_logic_vector(7 downto 0);
-  signal kb_row : std_logic_vector(7 downto 0);
+  signal cia2_pa_out, cia2_pb_out : std_logic_vector(7 downto 0);
+  signal cia1_pa_oe, cia1_pb_oe : std_logic_vector(7 downto 0);
+  signal cia2_pa_oe, cia2_pb_oe : std_logic_vector(7 downto 0);
+  signal cia1_cs_n, cia2_cs_n, cia_rw : std_logic;
+  signal cia1_pc_n, cia2_pc_n : std_logic;
+  signal cia1_sp_out, cia2_sp_out : std_logic;
+  signal cia1_cnt_out, cia2_cnt_out : std_logic;
+  signal cia1_dbg_state, cia2_dbg_state : std_logic_vector(31 downto 0);
+  signal kb_col, kb_row : std_logic_vector(7 downto 0);
   signal restore_n : std_logic;
 
   -- ---- SID ----
@@ -152,6 +201,26 @@ architecture rtl of c64_core is
   -- chip selects
   signal cs_vic, cs_sid, cs_cia1, cs_cia2, cs_col : std_logic;
   signal col_we : std_logic;
+
+  -- ---- Host disk UART ($DE00) ----
+  signal cs_uart   : std_logic;
+  signal uart_dout : std_logic_vector(7 downto 0);
+  signal urx_data  : std_logic_vector(7 downto 0);
+  signal urx_valid : std_logic;
+  signal rx_data   : std_logic_vector(7 downto 0) := (others => '0');
+  signal rx_avail  : std_logic := '0';
+  signal utx_busy  : std_logic;
+  signal utx_send  : std_logic;
+
+  -- Packed for the board debug UART:
+  -- 15 phi2_en, 14 VIC cs, 13 CIA1 cs, 12 cwq full, 11 wq full,
+  -- 10 cwq non-empty, 9 wq non-empty, 8 CPU we, 7 CPU sync,
+  -- 6 RESTORE_n, 5 CIA2 IRQ_n, 4 VIC IRQ_n, 3 CIA1 IRQ_n,
+  -- 2 CPU IRQ_n, 1 VIC BA, 0 CPU RDY.
+  signal dbg_wq_nonempty  : std_logic;
+  signal dbg_cwq_nonempty : std_logic;
+  signal dbg_wq_full      : std_logic;
+  signal dbg_cwq_full     : std_logic;
 begin
   vga_hs <= s_hs; vga_vs <= s_vs; vga_de <= s_de;
   vga_r <= s_r; vga_g <= s_g; vga_b <= s_b;
@@ -163,7 +232,17 @@ begin
   dbg_di   <= cpu_din;
   dbg_sync <= cpu_sync;
   dbg_phi  <= phi2_en;
-  dbg_cia1_irq <= cia1_irq_n;
+  dbg_wq_nonempty  <= '1' when wq_cnt > 0 else '0';
+  dbg_cwq_nonempty <= '1' when cwq_cnt > 0 else '0';
+  dbg_wq_full      <= '1' when wq_cnt = WQ_DEPTH else '0';
+  dbg_cwq_full     <= '1' when cwq_cnt = WQ_DEPTH else '0';
+  dbg_status <= phi2_en & cs_vic & cs_cia1 & dbg_cwq_full &
+                dbg_wq_full & dbg_cwq_nonempty & dbg_wq_nonempty &
+                cpu_we & cpu_sync & restore_n & cia2_irq_n & vic_irq_n &
+                cia1_irq_n & cpu_irq_n & vic_ba & cpu_rdy;
+  dbg_cia1 <= cia1_dbg_state;
+  dbg_regs <= cpu_regs;
+  -- dbg_cia1_irq <= cia1_irq_n;                    -- (DIAG heartbeat tap -- disabled)
   ctrl <= charen & hiram & loram;
   sel  <= pla_decode(cpu_addr, ctrl, '1', '1');     -- unexpanded: GAME=EXROM=1
   io   <= io_decode(cpu_addr) when sel = SEL_IO else IO_NONE;
@@ -181,6 +260,13 @@ begin
       end if;
     end if;
   end process;
+
+  -- The MiST/MiSTer CIA registers CPU bus reads/writes on phi2_n and advances
+  -- timers/IRQ state on phi2_p. Because the CIA data bus is registered, the bus
+  -- strobe must happen just BEFORE the T65 samples data/advances on phi2_en. A
+  -- delayed strobe misses ICR reads after the CPU has already moved to the next
+  -- address, leaving CIA1 IRQ stuck low.
+  cia_bus_en <= '1' when phi2_cnt = PHI2_DIV - 1 else '0';
   -- 60 Hz TOD pulse from the VIC vsync edge.
   process(clk)
     variable vs_d : std_logic := '1';
@@ -197,22 +283,29 @@ begin
   -- off during a VIC steal (BA low) so the two never touch RAM at the same cycle
   -- (no dual-port collision -> no .002 display corruption, no lost writes).
   --
-  -- After a steal ends, ram_addr switches vic_addr -> cpu_addr and the single-port
-  -- BSRAM dout -> read-mux -> T65 DI path needs several clocks before it presents
-  -- mem(cpu_addr) instead of the VIC's just-read mem(vic_addr). A 1-clock guard
-  -- left it placement-marginal (the "38911 vs 80909" banner lottery, CIA ICR read
-  -- $00 -> dead cursor/keyboard); the fix is simply enough SETTLE clocks: hold the
-  -- CPU enable off for FOUR clocks after the steal (vic_ba_d/_d2/_d3/_d4). NOTE:
-  -- an earlier attempt registered the read (cpu_din_reg) instead -- it fixed the
-  -- banner/CIA but DEADLOCKED the CPU under IRQ load (the extra read-latency stage
-  -- corrupted the T65's IRQ vector/stack fetch -> wild jump into BASIC ROM). The
-  -- combinational read + 4-clock guard fixes RAM AND survives interrupts.
+  -- After the VIC or deferred-write FIFO owns the single BSRAM port, ram_addr
+  -- switches back to cpu_addr and dout needs a few clocks before it reflects the
+  -- CPU read address again. A guard only after BA was not enough: the FIFO can
+  -- drain a CPU screen write after the steal, and the KERNAL may immediately read
+  -- the screen line back on RETURN. So hold RDY low until the RAM port has been
+  -- CPU-owned and idle for several clocks after BOTH steal and write-queue drain.
+  -- NOTE: an earlier attempt registered the read (cpu_din_reg) instead -- it
+  -- fixed banner/CIA symptoms but DEADLOCKED the CPU under IRQ load (extra read
+  -- latency corrupted the T65 IRQ vector/stack fetch). The combinational read
+  -- plus explicit RAM-port settle guard keeps the CPU timing intact.
   process(clk) begin
     if rising_edge(clk) then
       vic_ba_d  <= vic_ba;
       vic_ba_d2 <= vic_ba_d;
       vic_ba_d3 <= vic_ba_d2;
       vic_ba_d4 <= vic_ba_d3;
+      if reset_n = '0' then
+        ram_settle <= 7;
+      elsif vic_ba = '0' or wq_cnt > 0 or cwq_cnt > 0 then
+        ram_settle <= 7;
+      elsif ram_settle > 0 then
+        ram_settle <= ram_settle - 1;
+      end if;
     end if;
   end process;
   -- The CPU advances every PHI2 tick; the VIC steal is signalled via the 6502's
@@ -221,11 +314,11 @@ begin
   -- keeps ticking) -> a marginal IRQ-vs-steal beat that wandered with code timing
   -- and rarely corrupted control flow. With RDY the CPU timeline keeps advancing
   -- during the steal (halted but counted), in lockstep with the CIA -- as on real
-  -- hardware. RDY stays low through 4 settle clocks after the steal and while a
-  -- deferred write is draining.
+  -- hardware. RDY stays low while the RAM port is stolen/draining/settling.
   cpu_en  <= phi2_en;
   cpu_rdy <= '1' when (vic_ba = '1' and vic_ba_d = '1' and vic_ba_d2 = '1'
-                       and vic_ba_d3 = '1' and wq_cnt = 0 and cwq_cnt = 0) else '0';
+                       and vic_ba_d3 = '1' and vic_ba_d4 = '1'
+                       and wq_cnt = 0 and cwq_cnt = 0 and ram_settle = 0) else '0';
 
   -- Main-RAM write FIFO: enqueue every write the CPU completes while the steal
   -- holds the bus, then drain one entry per clk once BA returns (CPU stays parked
@@ -271,13 +364,17 @@ begin
   end process;
   cpu_irq_n <= cia1_irq_n and vic_irq_n;
   cpu_nmi_n <= cia2_irq_n and restore_n;
+  -- Peripheral register writes must be one PHI2 bus strobe, just like RAM.
+  -- Keep chip-selects level-based so CIA read side effects can wait until the
+  -- CPU leaves the address, even if RDY stretches a read cycle.
+  io_we     <= cpu_we and phi2_en;
 
   cpu_i : entity work.cpu6510
     port map (
       clk => clk, reset_n => reset_n, enable => cpu_en, rdy => cpu_rdy,
       irq_n => cpu_irq_n, nmi_n => cpu_nmi_n,
       addr => cpu_addr, data_in => cpu_din, data_out => cpu_dout, we => cpu_we,
-      sync => cpu_sync,
+      sync => cpu_sync, regs => cpu_regs,
       pa_in => x"FF", pa_out => open,
       loram => loram, hiram => hiram, charen => charen
     );
@@ -287,7 +384,8 @@ begin
               wq_addr(0) when wq_cnt > 0  else
               cpu_addr;
   dram_we  <= '1' when (vic_ba = '1' and wq_cnt > 0) else
-              '1' when (vic_ba = '1' and wq_cnt = 0 and cpu_we = '1' and sel /= SEL_IO) else
+              '1' when (vic_ba = '1' and wq_cnt = 0 and phi2_en = '1'
+                        and cpu_we = '1' and sel /= SEL_IO) else
               '0';
   dram_din <= wq_data(0) when wq_cnt > 0 else cpu_dout;
 
@@ -312,7 +410,8 @@ begin
   -- otherwise) so there is no dual-port collision.
   cs_col   <= '1' when io = IO_COLOR else '0';
   col_we   <= '1' when (vic_ba = '1' and cwq_cnt > 0) else
-              '1' when (vic_ba = '1' and cwq_cnt = 0 and cs_col = '1' and cpu_we = '1') else
+              '1' when (vic_ba = '1' and cwq_cnt = 0 and phi2_en = '1'
+                        and cs_col = '1' and cpu_we = '1') else
               '0';
   col_addr <= vic_col_addr when vic_ba = '0' else
               cwq_addr(0)  when cwq_cnt > 0  else
@@ -329,7 +428,7 @@ begin
   vic_i : entity work.vic_ii
     port map (
       clk => clk, reset_n => reset_n,
-      cs => cs_vic, we => cpu_we, addr => cpu_addr(5 downto 0),
+      cs => cs_vic, we => io_we, addr => cpu_addr(5 downto 0),
       din => cpu_dout, dout => vic_dout, irq_n => vic_irq_n,
       vic_addr => vic_addr, vic_data => vic_data, ba => vic_ba,
       vic_bank => vic_bank,
@@ -342,26 +441,67 @@ begin
 
   -- ---- CIA-1 (keyboard + Timer A jiffy IRQ) ----
   cs_cia1 <= '1' when io = IO_CIA1 else '0';
-  cia1_i : entity work.cia6526_full
+  cia1_cs_n <= not cs_cia1;
+  cia2_cs_n <= not cs_cia2;
+  cia_rw <= not cpu_we;
+  cia1_i : mos6526
     port map (
-      clk => clk, reset_n => reset_n, tick => phi2_en, tod_tick => tod_tick,
-      cs => cs_cia1, we => cpu_we, addr => cpu_addr(3 downto 0),
-      din => cpu_dout, dout => cia1_dout,
-      pa_in => x"FF", pa_out => cia1_pa_out, pa_ddr => open,
-      pb_in => kb_row, pb_out => cia1_pb_out, pb_ddr => open,
-      flag_n => '1', irq_n => cia1_irq_n
+      mode    => '0',
+      clk     => clk,
+      phi2_p  => phi2_en,
+      phi2_n  => cia_bus_en,
+      res_n   => reset_n,
+      cs_n    => cia1_cs_n,
+      rw      => cia_rw,
+      rs      => cpu_addr(3 downto 0),
+      db_in   => cpu_dout,
+      db_out  => cia1_dout,
+      pa_in   => kb_col,
+      pa_out  => cia1_pa_out,
+      pa_oe   => cia1_pa_oe,
+      pb_in   => kb_row,
+      pb_out  => cia1_pb_out,
+      pb_oe   => cia1_pb_oe,
+      flag_n  => '1',
+      pc_n    => cia1_pc_n,
+      tod     => tod_tick,
+      sp_in   => '1',
+      sp_out  => cia1_sp_out,
+      cnt_in  => '1',
+      cnt_out => cia1_cnt_out,
+      irq_n   => cia1_irq_n,
+      dbg_state => cia1_dbg_state
     );
 
   -- ---- CIA-2 (VIC bank + NMI + IEC; serial bus is a stub for now) ----
   cs_cia2 <= '1' when io = IO_CIA2 else '0';
-  cia2_i : entity work.cia6526_full
+  cia2_i : mos6526
     port map (
-      clk => clk, reset_n => reset_n, tick => phi2_en, tod_tick => tod_tick,
-      cs => cs_cia2, we => cpu_we, addr => cpu_addr(3 downto 0),
-      din => cpu_dout, dout => cia2_dout,
-      pa_in => x"FF", pa_out => cia2_pa_out, pa_ddr => open,
-      pb_in => x"FF", pb_out => open, pb_ddr => open,
-      flag_n => '1', irq_n => cia2_irq_n
+      mode    => '0',
+      clk     => clk,
+      phi2_p  => phi2_en,
+      phi2_n  => cia_bus_en,
+      res_n   => reset_n,
+      cs_n    => cia2_cs_n,
+      rw      => cia_rw,
+      rs      => cpu_addr(3 downto 0),
+      db_in   => cpu_dout,
+      db_out  => cia2_dout,
+      pa_in   => cia2_pa_out,
+      pa_out  => cia2_pa_out,
+      pa_oe   => cia2_pa_oe,
+      pb_in   => cia2_pb_out,
+      pb_out  => cia2_pb_out,
+      pb_oe   => cia2_pb_oe,
+      flag_n  => '1',
+      pc_n    => cia2_pc_n,
+      tod     => tod_tick,
+      sp_in   => '1',
+      sp_out  => cia2_sp_out,
+      cnt_in  => '1',
+      cnt_out => cia2_cnt_out,
+      irq_n   => cia2_irq_n,
+      dbg_state => cia2_dbg_state
     );
 
   -- ---- keyboard matrix ----
@@ -371,7 +511,11 @@ begin
     port map (
       clk => clk, reset_n => reset_n,
       ps2_clk => ps2_clk, ps2_data => ps2_data,
-      col_drive => cia1_pa_out, row_read => kb_row, restore_n => restore_n
+      col_drive => cia1_pa_out,
+      row_drive => cia1_pb_out,
+      col_read => kb_col,
+      row_read => kb_row,
+      restore_n => restore_n
     );
 
   -- ---- SID ----
@@ -380,29 +524,81 @@ begin
     generic map (CLK_HZ => 27_000_000, SID_HZ => 985_248)
     port map (
       clk => clk, reset_n => reset_n,
-      cs => cs_sid, we => cpu_we, addr => cpu_addr(4 downto 0),
+      cs => cs_sid, we => io_we, addr => cpu_addr(4 downto 0),
       din => cpu_dout, dout => sid_dout, sample_out => audio
     );
 
+  -- ---- Host disk UART (I/O area 1, $DE00-$DE01) ----
+  -- A PC runs a "1541 server" on this serial link and LOAD is done over UART.
+  --   $DE00 DATA   : write -> transmit a byte; read -> the received byte (clears
+  --                  the rx-available flag)
+  --   $DE01 STATUS : bit0 = RX byte available, bit1 = TX busy
+  -- 115200 8N1 on the CH340 USB-UART; the held-cs C64 bus is handled by pulsing
+  -- TX/clear once per CPU access (phi2_en) -- no 27x repeat.
+  cs_uart <= '1' when io = IO_EXP1 else '0';
+
+  utx_i : entity work.uart_tx_ser
+    generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+    port map (clk => clk, reset_n => reset_n,
+              data => cpu_dout, valid => utx_send, tx => uart_tx, busy => utx_busy);
+
+  urx_i : entity work.uart_rx_ser
+    generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+    port map (clk => clk, reset_n => reset_n,
+              rx => uart_rx, data => urx_data, valid => urx_valid);
+
+  -- One TX start pulse per CPU write to $DE00.
+  utx_send <= '1' when (cs_uart = '1' and cpu_we = '1' and cpu_addr(0) = '0'
+                        and phi2_en = '1') else '0';
+
+  -- Latch each received byte; a CPU read of $DE00 consumes it.
+  process(clk) begin
+    if rising_edge(clk) then
+      if reset_n = '0' then
+        rx_avail <= '0';
+      else
+        if urx_valid = '1' then
+          rx_data  <= urx_data;
+          rx_avail <= '1';
+        end if;
+        if cs_uart = '1' and cpu_we = '0' and cpu_addr(0) = '0' and phi2_en = '1' then
+          rx_avail <= '0';
+        end if;
+      end if;
+    end if;
+  end process;
+
+  uart_dout <= rx_data when cpu_addr(0) = '0'           -- $DE00 received byte
+               else "000000" & utx_busy & rx_avail;     -- $DE01 status
+
   -- ---- CPU read data mux ----
-  process(sel, io, dram_dout, basic_dout, kernal_dout, cg_cpu_dout,
-          vic_dout, sid_dout, col_a_dout, cia1_dout, cia2_dout)
+  -- The CPU read mux is split so the steal-coupled main-RAM read (dram_dout, from
+  -- the single-port BSRAM time-shared with the VIC) stays a SHALLOW final 2:1 mux,
+  -- independent of how deep the ROM/I/O mux below gets. That path is single-cycle
+  -- constrained (the SDC can't multicycle it -- dram_dout changes every clock at
+  -- the steal boundary) and is the placement-critical net; keeping it a 2:1 mux
+  -- stops new I/O sources (e.g. the $DE00 UART) from lengthening it via a merged
+  -- mux tree. Everything else (ROM/CIA/VIC/SID/UART) has the full CPU cycle and is
+  -- multicycled, so its extra depth is harmless.
+  process(sel, io, basic_dout, kernal_dout, cg_cpu_dout,
+          vic_dout, sid_dout, col_a_dout, cia1_dout, cia2_dout, uart_dout)
   begin
     case sel is
-      when SEL_RAM     => cpu_din <= dram_dout;
-      when SEL_BASIC   => cpu_din <= basic_dout;
-      when SEL_KERNAL  => cpu_din <= kernal_dout;
-      when SEL_CHARGEN => cpu_din <= cg_cpu_dout;
+      when SEL_BASIC   => other_din <= basic_dout;
+      when SEL_KERNAL  => other_din <= kernal_dout;
+      when SEL_CHARGEN => other_din <= cg_cpu_dout;
       when SEL_IO =>
         case io is
-          when IO_VIC   => cpu_din <= vic_dout;
-          when IO_SID   => cpu_din <= sid_dout;
-          when IO_COLOR => cpu_din <= "0000" & col_a_dout;
-          when IO_CIA1  => cpu_din <= cia1_dout;
-          when IO_CIA2  => cpu_din <= cia2_dout;
-          when others   => cpu_din <= x"FF";
+          when IO_VIC   => other_din <= vic_dout;
+          when IO_SID   => other_din <= sid_dout;
+          when IO_COLOR => other_din <= "0000" & col_a_dout;
+          when IO_CIA1  => other_din <= cia1_dout;
+          when IO_CIA2  => other_din <= cia2_dout;
+          when IO_EXP1  => other_din <= uart_dout;   -- $DE00 host disk UART
+          when others   => other_din <= x"FF";
         end case;
-      when others => cpu_din <= dram_dout;
+      when others => other_din <= x"FF";
     end case;
   end process;
+  cpu_din <= dram_dout when sel = SEL_RAM else other_din;
 end architecture;

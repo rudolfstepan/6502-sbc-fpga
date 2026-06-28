@@ -29,5 +29,8 @@ set_multicycle_path 7 -hold  -from [get_pins {c64_i/cpu_i/core_i/*/Q}] -to [get_
 set_multicycle_path 4 -setup -from [get_pins {c64_i/basic_i/*/Q c64_i/kernal_i/*/Q c64_i/chargen_i/*/Q c64_i/cia1_i/*/Q c64_i/cia2_i/*/Q c64_i/vic_i/*/Q c64_i/sid_i/*/Q}] -to [get_pins {c64_i/cpu_i/core_i/*/D}]
 set_multicycle_path 3 -hold  -from [get_pins {c64_i/basic_i/*/Q c64_i/kernal_i/*/Q c64_i/chargen_i/*/Q c64_i/cia1_i/*/Q c64_i/cia2_i/*/Q c64_i/vic_i/*/Q c64_i/sid_i/*/Q}] -to [get_pins {c64_i/cpu_i/core_i/*/D}]
 
+# (The $DE00 host-disk UART read into the CPU is a short register->mux path, not
+# steal-coupled, so it needs no special constraint.)
+
 # PS/2 keyboard clock is an asynchronous ~10-16.7 kHz input, sampled through a
 # 3-FF synchroniser; no setup/hold constraints needed.

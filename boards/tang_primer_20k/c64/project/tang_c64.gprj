@@ -25,13 +25,19 @@
         <!-- C64 chips -->
         <File path="../../../../rtl/c64/cpu6510.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/cia6526_full.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/mos6526_mist.v" type="file.verilog" enable="1"/>
         <File path="../../../../rtl/c64/c64_keyboard_matrix.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/vic_ii.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/audio/sid/sid6581.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
 
+        <!-- Host disk UART (PC runs a 1541 server over the CH340 link) -->
+        <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
+
         <!-- C64 core (board independent) -->
         <File path="../../../../rtl/c64/c64_core.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/c64_dbg_uart.vhd" type="file.vhdl" enable="1"/>
 
         <!-- HDMI TMDS encoder + data island/AVI InfoFrame (reused from SBC) -->
         <File path="../../../../rtl/core/hdmi/tmds_encoder.vhd" type="file.vhdl" enable="1"/>

@@ -33,7 +33,7 @@ begin
       cs => cs, we => we, addr => addr, din => din, dout => dout,
       pa_in => x"FF", pa_out => open, pa_ddr => open,
       pb_in => x"FF", pb_out => open, pb_ddr => open,
-      flag_n => '1', irq_n => irq_n
+      flag_n => '1', irq_n => irq_n, dbg_state => open
     );
 
   clk_p : process
