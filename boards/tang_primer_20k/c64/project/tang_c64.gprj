@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE gowin-fpga-project>
+<Project>
+    <Template>FPGA</Template>
+    <Version>5</Version>
+    <Device name="GW2A-18C" pn="GW2A-LV18PG256C8/I7">gw2a18c-011</Device>
+    <FileList>
+        <!-- SBC package (only for sid6581 / pt8211_dac, which use sbc_pkg) -->
+        <File path="../../../../rtl/core/sbc_pkg.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- T65 6502 core (Pack -> MCode -> ALU -> T65) -->
+        <File path="../../../../third_party/t65/rtl/T65_Pack.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/t65/rtl/T65_MCode.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/t65/rtl/T65_ALU.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/t65/rtl/T65.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- C64 core package + generated ROMs -->
+        <File path="../../../../rtl/c64/c64_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/c64_roms.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- C64 memories -->
+        <File path="../../../../rtl/c64/c64_ram.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/colour_ram.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- C64 chips -->
+        <File path="../../../../rtl/c64/cpu6510.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/cia6526_full.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/c64_keyboard_matrix.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/vic_ii.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/audio/sid/sid6581.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- C64 core (board independent) -->
+        <File path="../../../../rtl/c64/c64_core.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- HDMI TMDS encoder + data island/AVI InfoFrame (reused from SBC) -->
+        <File path="../../../../rtl/core/hdmi/tmds_encoder.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/hdmi/hdmi_encoder.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- Board top (this project) + HDMI TX (reused from the SBC board) -->
+        <File path="../../rtl/tang20k_hdmi_tx.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/tang20k_c64_top.vhd" type="file.vhdl" enable="1"/>
+
+        <!-- Physical + timing constraints -->
+        <File path="../constraints/tang20k_c64.cst" type="file.cst" enable="1"/>
+        <File path="../constraints/tang20k_c64.sdc" type="file.sdc" enable="1"/>
+    </FileList>
+</Project>
