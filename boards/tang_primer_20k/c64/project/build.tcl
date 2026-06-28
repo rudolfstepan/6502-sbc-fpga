@@ -29,6 +29,7 @@ add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
 # Host disk UART (PC runs a 1541 server over the CH340 link)
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_tx_ser.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_rx_ser.vhd}
+add_file -type vhdl {../../../../rtl/core/boot/uart_debug_monitor.vhd}
 
 # C64 core
 add_file -type vhdl {../../../../rtl/c64/c64_core.vhd}

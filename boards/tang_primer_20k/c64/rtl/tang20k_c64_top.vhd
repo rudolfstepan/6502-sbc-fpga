@@ -34,8 +34,8 @@ entity tang20k_c64_top is
     -- block below, the led pins in the .cst, and dbg_cia1_irq in c64_core.
     -- led     : out std_logic_vector(1 downto 0);
 
-    -- CH340 USB-UART. In this diagnostic build it streams c64_dbg_uart output;
-    -- the host-disk UART inside c64_core is temporarily disconnected.
+    -- CH340 USB-UART. It streams c64_dbg_uart while idle; sending any byte from
+    -- the PC enters the UART monitor/loader, which owns the link until "G".
     uart_tx    : out std_logic;
     uart_rx    : in  std_logic
   );
@@ -64,6 +64,25 @@ architecture rtl of tang20k_c64_top is
   signal dbg_status : std_logic_vector(15 downto 0);
   signal dbg_cia1   : std_logic_vector(31 downto 0);
   signal dbg_regs   : std_logic_vector(63 downto 0);
+
+  signal dbg_uart_tx : std_logic;
+
+  signal mon_rx_data    : std_logic_vector(7 downto 0);
+  signal mon_rx_valid   : std_logic;
+  signal mon_tx_data    : std_logic_vector(7 downto 0);
+  signal mon_tx_valid   : std_logic;
+  signal mon_tx_busy    : std_logic;
+  signal mon_uart_tx    : std_logic;
+  signal mon_active     : std_logic;
+  signal mon_enter      : std_logic;
+  signal mon_mem_req    : std_logic;
+  signal mon_mem_we     : std_logic;
+  signal mon_mem_addr   : std_logic_vector(15 downto 0);
+  signal mon_mem_wdata  : std_logic_vector(7 downto 0);
+  signal mon_mem_rdata  : std_logic_vector(7 downto 0);
+  signal mon_mem_ready  : std_logic;
+  signal mon_jump_req   : std_logic;
+  signal mon_jump_addr  : std_logic_vector(15 downto 0);
 
   -- DIAG heartbeat taps -- DISABLED (placement experiment). Re-enable the led port,
   -- the .cst led pins, dbg_cia1_irq in c64_core, and this whole block together.
@@ -94,6 +113,8 @@ begin
   -- end process;
   -- led(0) <= not irq_stuck;
   -- led(1) <= cpu_cnt(19);
+
+  uart_tx <= mon_uart_tx when mon_active = '1' else dbg_uart_tx;
 
   -- Reset: hold until the PLL locks and the button is released, in the pixel domain.
   process(clk_pix)
@@ -152,7 +173,14 @@ begin
       ps2_data => ps2_data,
       audio    => audio,
       uart_tx  => open,
-      uart_rx  => '1'
+      uart_rx  => '1',
+      monitor_hold      => mon_active,
+      monitor_mem_req   => mon_mem_req,
+      monitor_mem_we    => mon_mem_we,
+      monitor_mem_addr  => mon_mem_addr,
+      monitor_mem_wdata => mon_mem_wdata,
+      monitor_mem_rdata => mon_mem_rdata,
+      monitor_mem_ready => mon_mem_ready
     );
 
   dbg_uart_i : entity work.c64_dbg_uart
@@ -169,7 +197,54 @@ begin
       snp_status => dbg_status,
       snp_cia1   => dbg_cia1,
       snp_regs   => dbg_regs,
-      uart_tx    => uart_tx
+      uart_tx    => dbg_uart_tx
+    );
+
+  mon_rx_i : entity work.uart_rx_ser
+    generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+    port map (
+      clk     => clk_pix,
+      reset_n => reset_n,
+      rx      => uart_rx,
+      data    => mon_rx_data,
+      valid   => mon_rx_valid
+    );
+
+  mon_tx_i : entity work.uart_tx_ser
+    generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+    port map (
+      clk     => clk_pix,
+      reset_n => reset_n,
+      data    => mon_tx_data,
+      valid   => mon_tx_valid,
+      tx      => mon_uart_tx,
+      busy    => mon_tx_busy
+    );
+
+  -- A received byte acts as a soft monitor button. The first byte is consumed as
+  -- wake-up; upload tools send an initial CR, then wait for the monitor prompt.
+  mon_enter <= '1' when mon_active = '0' and mon_rx_valid = '1' else '0';
+
+  monitor_i : entity work.uart_debug_monitor
+    generic map (FLAT_64K => true)
+    port map (
+      clk       => clk_pix,
+      reset_n   => reset_n,
+      enter_btn => mon_enter,
+      rx_data   => mon_rx_data,
+      rx_valid  => mon_rx_valid,
+      tx_busy   => mon_tx_busy,
+      tx_data   => mon_tx_data,
+      tx_valid  => mon_tx_valid,
+      active    => mon_active,
+      mem_req   => mon_mem_req,
+      mem_we    => mon_mem_we,
+      mem_addr  => mon_mem_addr,
+      mem_wdata => mon_mem_wdata,
+      mem_rdata => mon_mem_rdata,
+      mem_ready => mon_mem_ready,
+      jump_req  => mon_jump_req,
+      jump_addr => mon_jump_addr
     );
 
   -- Audio DAC (PT8211), pixel-clock domain (BCK_HALF=4 -> ~27/8 MHz BCK).

@@ -34,6 +34,7 @@
         <!-- Host disk UART (PC runs a 1541 server over the CH340 link) -->
         <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/boot/uart_debug_monitor.vhd" type="file.vhdl" enable="1"/>
 
         <!-- C64 core (board independent) -->
         <File path="../../../../rtl/c64/c64_core.vhd" type="file.vhdl" enable="1"/>

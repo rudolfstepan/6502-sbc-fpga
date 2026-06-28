@@ -6,6 +6,9 @@ use ieee.numeric_std.all;
 use work.sbc_pkg.all;
 
 entity uart_debug_monitor is
+  generic (
+    FLAT_64K : boolean := false
+  );
   port (
     clk       : in  std_logic;
     reset_n   : in  std_logic;
@@ -178,6 +181,9 @@ architecture rtl of uart_debug_monitor is
   function is_monitor_addr(a : addr_t) return boolean is
     variable u : unsigned(15 downto 0);
   begin
+    if FLAT_64K then
+      return true;
+    end if;
     -- Keep this whitelist in sync with the memory master in
     -- sbc_t65_sdram_boot_top. Stubbed video/sound ranges are deliberately not
     -- exposed until real storage/registers exist behind them.
@@ -201,6 +207,9 @@ architecture rtl of uart_debug_monitor is
     if bu < au then
       return false;
     end if;
+    if FLAT_64K then
+      return true;
+    end if;
     return bu <= ADDR_UART_LAST or
            (au >= ADDR_BASROM_BASE and bu <= ADDR_BASROM_LAST) or
            (au >= ADDR_KERNROM_BASE and bu <= ADDR_KERNROM_LAST);
@@ -212,7 +221,9 @@ architecture rtl of uart_debug_monitor is
     variable sum : unsigned(15 downto 0);
   begin
     au := unsigned(a);
-    if au >= ADDR_KERNROM_BASE then
+    if FLAT_64K then
+      lim := x"FFFF";
+    elsif au >= ADDR_KERNROM_BASE then
       lim := ADDR_KERNROM_LAST;
     elsif au >= ADDR_BASROM_BASE and au <= ADDR_BASROM_LAST then
       lim := ADDR_BASROM_LAST;

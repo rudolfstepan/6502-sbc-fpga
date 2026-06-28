@@ -61,7 +61,17 @@ entity c64_core is
 
     -- Host disk link: UART to a PC running a 1541 server (LOAD over serial).
     uart_tx : out std_logic;
-    uart_rx : in  std_logic := '1'   -- idle high; default so the TB can leave it open
+    uart_rx : in  std_logic := '1';  -- idle high; default so the TB can leave it open
+
+    -- External UART monitor/loader. While active, the CPU is parked via RDY and
+    -- the monitor gets safe byte-wise access to the 64K RAM under ROM/I/O.
+    monitor_hold      : in  std_logic := '0';
+    monitor_mem_req   : in  std_logic := '0';
+    monitor_mem_we    : in  std_logic := '0';
+    monitor_mem_addr  : in  std_logic_vector(15 downto 0) := (others => '0');
+    monitor_mem_wdata : in  std_logic_vector(7 downto 0) := (others => '0');
+    monitor_mem_rdata : out std_logic_vector(7 downto 0);
+    monitor_mem_ready : out std_logic
   );
 end entity;
 
@@ -153,6 +163,18 @@ architecture rtl of c64_core is
   signal cwq_cnt  : integer range 0 to WQ_DEPTH := 0;
   signal col_din  : std_logic_vector(3 downto 0);
 
+  -- UART monitor RAM master. It waits until the VIC and both deferred write
+  -- queues have released the single-port RAM, then performs one byte transfer.
+  type mon_mem_state_t is (MON_IDLE, MON_WAIT_SAFE, MON_ACCESS, MON_READY);
+  signal mon_mem_state : mon_mem_state_t := MON_IDLE;
+  signal mon_addr_lat  : std_logic_vector(15 downto 0) := (others => '0');
+  signal mon_wdata_lat : std_logic_vector(7 downto 0) := (others => '0');
+  signal mon_we_lat    : std_logic := '0';
+  signal mon_owner     : std_logic := '0';
+  signal mon_ready_reg : std_logic := '0';
+  signal mon_rdata_reg : std_logic_vector(7 downto 0) := (others => '0');
+  signal monitor_safe  : std_logic;
+
   -- ---- ROMs ----
   signal basic_dout   : std_logic_vector(7 downto 0);
   signal kernal_dout  : std_logic_vector(7 downto 0);
@@ -242,6 +264,8 @@ begin
                 cia1_irq_n & cpu_irq_n & vic_ba & cpu_rdy;
   dbg_cia1 <= cia1_dbg_state;
   dbg_regs <= cpu_regs;
+  monitor_mem_rdata <= mon_rdata_reg;
+  monitor_mem_ready <= mon_ready_reg;
   -- dbg_cia1_irq <= cia1_irq_n;                    -- (DIAG heartbeat tap -- disabled)
   ctrl <= charen & hiram & loram;
   sel  <= pla_decode(cpu_addr, ctrl, '1', '1');     -- unexpanded: GAME=EXROM=1
@@ -301,7 +325,7 @@ begin
       vic_ba_d4 <= vic_ba_d3;
       if reset_n = '0' then
         ram_settle <= 7;
-      elsif vic_ba = '0' or wq_cnt > 0 or cwq_cnt > 0 then
+      elsif vic_ba = '0' or wq_cnt > 0 or cwq_cnt > 0 or mon_owner = '1' then
         ram_settle <= 7;
       elsif ram_settle > 0 then
         ram_settle <= ram_settle - 1;
@@ -315,10 +339,18 @@ begin
   -- and rarely corrupted control flow. With RDY the CPU timeline keeps advancing
   -- during the steal (halted but counted), in lockstep with the CIA -- as on real
   -- hardware. RDY stays low while the RAM port is stolen/draining/settling.
+  monitor_safe <= '1' when monitor_hold = '1' and vic_ba = '1' and
+                           vic_ba_d = '1' and vic_ba_d2 = '1' and
+                           vic_ba_d3 = '1' and vic_ba_d4 = '1' and
+                           wq_cnt = 0 and cwq_cnt = 0 and ram_settle = 0 and
+                           cpu_we = '0'
+                  else '0';
+
   cpu_en  <= phi2_en;
   cpu_rdy <= '1' when (vic_ba = '1' and vic_ba_d = '1' and vic_ba_d2 = '1'
                        and vic_ba_d3 = '1' and vic_ba_d4 = '1'
-                       and wq_cnt = 0 and cwq_cnt = 0 and ram_settle = 0) else '0';
+                       and wq_cnt = 0 and cwq_cnt = 0 and ram_settle = 0
+                       and monitor_hold = '0') else '0';
 
   -- Main-RAM write FIFO: enqueue every write the CPU completes while the steal
   -- holds the bus, then drain one entry per clk once BA returns (CPU stays parked
@@ -379,15 +411,62 @@ begin
       loram => loram, hiram => hiram, charen => charen
     );
 
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if reset_n = '0' or monitor_hold = '0' then
+        mon_mem_state <= MON_IDLE;
+        mon_addr_lat  <= (others => '0');
+        mon_wdata_lat <= (others => '0');
+        mon_we_lat    <= '0';
+        mon_rdata_reg <= (others => '0');
+        mon_ready_reg <= '0';
+      else
+        mon_ready_reg <= '0';
+        case mon_mem_state is
+          when MON_IDLE =>
+            if monitor_mem_req = '1' then
+              mon_addr_lat  <= monitor_mem_addr;
+              mon_wdata_lat <= monitor_mem_wdata;
+              mon_we_lat    <= monitor_mem_we;
+              mon_mem_state <= MON_WAIT_SAFE;
+            end if;
+
+          when MON_WAIT_SAFE =>
+            if monitor_safe = '1' then
+              mon_mem_state <= MON_ACCESS;
+            end if;
+
+          when MON_ACCESS =>
+            if mon_we_lat = '1' then
+              mon_ready_reg <= '1';
+              mon_mem_state <= MON_IDLE;
+            else
+              mon_mem_state <= MON_READY;
+            end if;
+
+          when MON_READY =>
+            mon_rdata_reg <= dram_dout;
+            mon_ready_reg <= '1';
+            mon_mem_state <= MON_IDLE;
+        end case;
+      end if;
+    end if;
+  end process;
+  mon_owner <= '1' when monitor_hold = '1' and mon_mem_state = MON_ACCESS else '0';
+
   -- ---- 64K main RAM: single-port, time-shared CPU <-> VIC (steal) ----
-  ram_addr <= vic_addr   when vic_ba = '0' else
+  ram_addr <= mon_addr_lat when mon_owner = '1' else
+              vic_addr   when vic_ba = '0' else
               wq_addr(0) when wq_cnt > 0  else
               cpu_addr;
-  dram_we  <= '1' when (vic_ba = '1' and wq_cnt > 0) else
+  dram_we  <= '1' when (mon_owner = '1' and mon_we_lat = '1') else
+              '1' when (vic_ba = '1' and wq_cnt > 0) else
               '1' when (vic_ba = '1' and wq_cnt = 0 and phi2_en = '1'
                         and cpu_we = '1' and sel /= SEL_IO) else
               '0';
-  dram_din <= wq_data(0) when wq_cnt > 0 else cpu_dout;
+  dram_din <= mon_wdata_lat when mon_owner = '1' else
+              wq_data(0) when wq_cnt > 0 else cpu_dout;
 
   ram_i : entity work.c64_ram
     generic map (INIT_FILE => RAM_INIT)

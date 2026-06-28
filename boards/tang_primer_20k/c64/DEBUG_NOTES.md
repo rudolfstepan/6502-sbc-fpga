@@ -120,3 +120,27 @@ Interpretation:
 - `IC` und `IK` zaehlen, also CPU und IRQ-Service leben.
 - `SW`/`SR` zeigen keinen offensichtlichen Stack-Fehler.
 
+## UART-PRG-Loader
+
+Stand 2026-06-28:
+
+- Der CH340-UART streamt im Idle weiter den C64-Debug-UART.
+- Sobald der PC ein Byte sendet, wird der vorhandene `uart_debug_monitor`
+  aktiviert und uebernimmt den UART bis zum Monitor-Befehl `G`.
+- `uart_debug_monitor` hat dafuer einen generischen `FLAT_64K`-Modus bekommen.
+  Im C64 sieht der Monitor die kompletten 64K als RAM unter ROM/I/O.
+- `c64_core` parkt die CPU bei aktivem Monitor ueber RDY und laesst
+  Monitor-RAM-Zugriffe nur zu, wenn VIC-BA, RAM-Settle und beide Write-FIFOs
+  ruhig sind.
+- PC-Helfer:
+
+```text
+python tools/c64_uart_prg_loader.py demo.prg --port COM15
+```
+
+Fuer BASIC-PRGs mit Ladeadresse `$0801` setzt das Tool automatisch die BASIC-
+Pointer `$2B-$32` auf den Programmstart und das Programmende. Danach sendet es
+`G` ohne Adresse; am C64 dann `RUN` tippen.
+
+Das ist noch kein echter KERNAL-`LOAD"*",8,1`-Hook und keine 1541-Emulation,
+sondern ein pragmatischer RAM-Loader fuer den aktuellen stabilen Core.

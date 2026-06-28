@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wrap a PSID tune as a RAM-loadable PRG for the D64 GoDrive.
+"""Wrap a PSID tune as a RAM-loadable PRG.
 
 The PRG's **load address is also its entry point** (uniform with the other test
 PRGs), so it is always run with `CALL <load address>`:
@@ -29,13 +29,52 @@ RAM_FLOOR = 0x2000      # lowest safe PRG load addr (BASIC/loader live below thi
 PLAYER_RESERVE = 0x80   # bytes reserved below the payload for the in-place player
 
 
+def target_symbols(target: str) -> list[str]:
+    if target == "c64":
+        return ["RASTER = $D012", "CIA_TALO = $DC04", "CIA_TAHI = $DC05",
+                "CIA_CRA = $DC0E", "SRC = $F0", "DST = $F2", ""]
+    return ["TIME_MS = $883A", "LAST_MS = $0FFF",
+            "CIA_TALO = $DC04", "CIA_TAHI = $DC05", "CIA_CRA = $DC0E",
+            "SRC = $F0", "DST = $F2", ""]
+
+
+def target_timer_init(target: str) -> list[str]:
+    if target != "c64":
+        return []
+    return [
+        # Some SID players read CIA Timer A directly. Once the tune owns the
+        # machine, run it as a free-running down-counter.
+        "    lda #0", "    sta CIA_CRA",
+        "    lda #$FF", "    sta CIA_TALO", "    lda #$FF", "    sta CIA_TAHI",
+        "    lda #$01", "    sta CIA_CRA",
+    ]
+
+
+def target_wait_loop(target: str, play: int) -> list[str]:
+    if target == "c64":
+        return [
+            "play_loop:",
+            "@wait_not_zero:", "    lda RASTER", "    beq @wait_not_zero",
+            "@wait_zero:", "    lda RASTER", "    bne @wait_zero",
+            f"    jsr ${play:04X}",
+            "    jmp play_loop",
+        ]
+    return [
+        "    lda TIME_MS", "    sta LAST_MS",
+        "play_loop:",
+        "@wait:", "    lda TIME_MS", "    sec", "    sbc LAST_MS", "    cmp #20",
+        "    bcc @wait", "    lda TIME_MS", "    sta LAST_MS", f"    jsr ${play:04X}",
+        "    jmp play_loop",
+    ]
+
+
 def render_asm(name: str, base: int, load: int, init: int, play: int,
-               pages: int) -> str:
+               pages: int, target: str) -> str:
     """Player linked at `base`: copy `pages` pages to `load`, init, play."""
-    return "\n".join([
-        f"; D64 PRG player for PSID: {name}",
-        f"; linked at ${base:04X}; entry = load address; CALL {base} to run.",
-        "TIME_MS = $883A", "SRC = $F0", "DST = $F2", "LAST_MS = $0FFF", "",
+    lines = [
+        f"; {target.upper()} PRG player for PSID: {name}",
+        f"; linked at ${base:04X}; entry = load address; CALL/SYS {base} to run.",
+    ] + target_symbols(target) + [
         '.segment "CODE"',
         "start:",
         "    sei", "    cld",
@@ -46,13 +85,10 @@ def render_asm(name: str, base: int, load: int, init: int, play: int,
         "    dex", "    bne @page",
         "    lda #0", "    tax", "    tay",
         f"    jsr ${init:04X}",
-        "    lda TIME_MS", "    sta LAST_MS",
-        "play_loop:",
-        "@wait:", "    lda TIME_MS", "    sec", "    sbc LAST_MS", "    cmp #20",
-        "    bcc @wait", "    lda TIME_MS", "    sta LAST_MS", f"    jsr ${play:04X}",
-        "    jmp play_loop",
+    ] + target_timer_init(target) + target_wait_loop(target, play) + [
         "", '.segment "RODATA"', "sid_data:",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def render_data(body: bytes) -> str:
@@ -63,7 +99,7 @@ def render_data(body: bytes) -> str:
 
 
 def render_inplace_asm(name: str, entry: int, load: int, init: int,
-                       play: int, song: int) -> str:
+                       play: int, song: int, target: str) -> str:
     """Player linked at `entry`, payload sitting in place at its native `load`.
 
     No startup copy: the D64 loader drops the payload straight at `load` (which
@@ -72,28 +108,21 @@ def render_inplace_asm(name: str, entry: int, load: int, init: int,
     that load too high for the copy-up wrapper to keep two payload copies under
     the bitmap window, but whose single in-place image still fits.
     """
-    return "\n".join([
-        f"; In-place D64 PRG player for PSID: {name}",
+    lines = [
+        f"; In-place {target.upper()} PRG player for PSID: {name}",
         f"; payload @ ${load:04X} (native); player @ ${entry:04X} = entry; "
-        f"CALL {entry} to run.",
-        "TIME_MS = $883A", "LAST_MS = $0FFF",
-        "CIA_TALO = $DC04", "CIA_TAHI = $DC05", "CIA_CRA = $DC0E", "",
+        f"CALL/SYS {entry} to run.",
+    ] + target_symbols(target) + [
         '.segment "CODE"',
         "start:",
         "    sei", "    cld",
-        # free-running CIA Timer A so tunes that read $DC04 see it tick
-        "    lda #0", "    sta CIA_CRA",
-        "    lda #$FF", "    sta CIA_TALO", "    lda #$FF", "    sta CIA_TAHI",
-        "    lda #$01", "    sta CIA_CRA",
+    ] + target_timer_init("c64") + [
         f"    lda #{song}", "    tax", "    tay", f"    jsr ${init:04X}",
         "    sei",        # re-mask: some inits CLI (no $0314 bridge in a RAM PRG)
-        "    lda TIME_MS", "    sta LAST_MS",
-        "play_loop:",
-        "@wait:", "    lda TIME_MS", "    sec", "    sbc LAST_MS", "    cmp #20",
-        "    bcc @wait", "    lda TIME_MS", "    sta LAST_MS", f"    jsr ${play:04X}",
-        "    jmp play_loop",
+    ] + target_wait_loop(target, play) + [
         "", '.segment "PAYLOAD"', "sid_data:",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def make_inplace_cfg(entry: int, load: int, top: int) -> str:
@@ -132,7 +161,7 @@ def build_inplace(a, info: dict, load: int, body: bytes, top: int,
                   entry: int) -> int:
     """Assemble + link the in-place PRG and write it out."""
     asm = render_inplace_asm(a.sid.name, entry, load, info["init"],
-                             info["play"], info["song"]) + "\n" + render_data(body)
+                             info["play"], info["song"], a.target) + "\n" + render_data(body)
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
         (t / "p.s").write_text(asm, newline="\n")
@@ -146,9 +175,9 @@ def build_inplace(a, info: dict, load: int, body: bytes, top: int,
     prg = bytes([entry & 0xFF, (entry >> 8) & 0xFF]) + payload
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(prg)
-    print(f"{a.sid.name}: in-place native ${load:04X}-${top:04X}; player @ "
-          f"${entry:04X} ({len(prg)} bytes); CALL {entry} (${entry:04X}) to play "
-          f" -> {a.output}")
+    print(f"{a.sid.name}: {a.target} in-place native ${load:04X}-${top:04X}; "
+          f"player @ ${entry:04X} ({len(prg)} bytes); SYS {entry} (${entry:04X}) "
+          f"to play -> {a.output}")
     return 0
 
 
@@ -161,6 +190,8 @@ def main() -> int:
                          "native region, else a hex/decimal address; default auto)")
     ap.add_argument("--ca65", default="C:/tools/cc65/bin/ca65")
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65")
+    ap.add_argument("--target", choices=("sbc", "c64"), default="sbc",
+                    help="player timing target: sbc uses $883A, c64 uses VIC raster $D012")
     a = ap.parse_args()
 
     try:
@@ -209,7 +240,7 @@ def main() -> int:
     a.base = base
 
     asm = render_asm(a.sid.name, a.base, load, info["init"], info["play"],
-                     info["pages"]) + "\n" + render_data(body)
+                     info["pages"], a.target) + "\n" + render_data(body)
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
         (t / "p.s").write_text(asm, newline="\n")
@@ -227,8 +258,9 @@ def main() -> int:
     prg = bytes([a.base & 0xFF, (a.base >> 8) & 0xFF]) + payload
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(prg)
-    print(f"{a.sid.name}: native ${load:04X}-${pad_end:04X}; PRG @ ${a.base:04X} "
-          f"({len(prg)} bytes); CALL {a.base} (${a.base:04X}) to play  -> {a.output}")
+    print(f"{a.sid.name}: {a.target} native ${load:04X}-${pad_end:04X}; "
+          f"PRG @ ${a.base:04X} ({len(prg)} bytes); SYS {a.base} "
+          f"(${a.base:04X}) to play -> {a.output}")
     return 0
 
 
