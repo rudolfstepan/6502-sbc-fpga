@@ -38,19 +38,19 @@ boards/pix16/project/*.xrpt
 # the GUI (GOWIN FPGA Designer) gets the dual-purpose-pin settings (SSPI/MSPI as
 # regular IO) without manual setup. A parent dir can't be re-included once
 # ignored, so descend explicitly to the one tracked file.
-boards/tang_primer_20k/project/impl/*
-!boards/tang_primer_20k/project/impl/pnr/
-boards/tang_primer_20k/project/impl/pnr/*
-!boards/tang_primer_20k/project/impl/pnr/device.cfg
-boards/tang_primer_20k/project/tmp/
-boards/tang_primer_20k/project/*.gprj.user
+boards/tang_primer_20k/sbc/project/impl/*
+!boards/tang_primer_20k/sbc/project/impl/pnr/
+boards/tang_primer_20k/sbc/project/impl/pnr/*
+!boards/tang_primer_20k/sbc/project/impl/pnr/device.cfg
+boards/tang_primer_20k/sbc/project/tmp/
+boards/tang_primer_20k/sbc/project/*.gprj.user
 
 # Generated Gowin IP elaboration/netlist files. Keep the editable .ipc and the
 # synthesizable .v wrappers committed; these files are recreated by the IDE.
-boards/tang_primer_20k/project/src/*/*.mod
-boards/tang_primer_20k/project/src/*/*.vo
-boards/tang_primer_20k/project/src/*/*_tmp.v
-boards/tang_primer_20k/project/src/*/temp/
+boards/tang_primer_20k/sbc/project/src/*/*.mod
+boards/tang_primer_20k/sbc/project/src/*/*.vo
+boards/tang_primer_20k/sbc/project/src/*/*_tmp.v
+boards/tang_primer_20k/sbc/project/src/*/temp/
 
 # Local copy of Sipeed's standalone DDR test used only during board bring-up.
 boards/tang_primer_20k/diagnostics/ddr3_reference/
@@ -66,6 +66,14 @@ boards/tang_primer_20k/reist/src/*/*.mod
 boards/tang_primer_20k/reist/src/*/*.vo
 boards/tang_primer_20k/reist/src/*/*_tmp.v
 boards/tang_primer_20k/reist/src/*/temp/
+
+
+
+
+
+boards/tang_primer_20k/c64/project/impl/
+
+roms/c64/*
 
 # ── Assembly build artifacts ───────────────────────────────────────────────────
 sw/*.bin

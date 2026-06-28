@@ -83,7 +83,7 @@ fpga/boards/tang_primer_20k/project/tang_sbc.gprj
 ```
 
 It targets the Sipeed Tang Primer 20K / Gowin GW2A-18. The current board top is
-`boards/tang_primer_20k/rtl/tang20k_sbc_top.vhd`. It brings up HDMI (DVI-style
+`boards/tang_primer_20k/sbc/rtl/tang20k_sbc_top.vhd`. It brings up HDMI (DVI-style
 TMDS, 27 MHz pixel clock, CEA-861 480p timing for standard 640×480 @ 59.94 Hz),
 displays the boot/status diagnostic screen first, initializes the on-board
 microSD/SDIO slot in SPI mode, loads a 16 KB physical shadow-ROM image, and

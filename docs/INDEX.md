@@ -168,7 +168,7 @@ ROM, HDMI scanout, and CPU-to-VRAM write path.
 | `rtl/core/sbc_t65_top.vhd` | System with T65 CPU |
 | `boards/pix16/rtl/pix16_sbc_sd_boot_top.vhd` | Active PIX16 SD-card/SDRAM/monitor board top |
 | `rtl/core/sbc_t65_sdram_boot_top.vhd` | T65 SBC core with SDRAM, shadow ROM, VGA, and monitor bus access |
-| `boards/tang_primer_20k/rtl/tang20k_sbc_top.vhd` | Active Tang Primer 20K HDMI/CH340/on-board-SD board top |
+| `boards/tang_primer_20k/sbc/rtl/tang20k_sbc_top.vhd` | Active Tang Primer 20K HDMI/CH340/on-board-SD board top |
 | `rtl/core/sbc_t65_boot_monitor_top.vhd` | T65 SBC core with internal BSRAM, SD-loaded shadow ROM, VGA, and monitor bus access |
 | `rtl/core/boot/uart_debug_monitor.vhd` | UART machine-language monitor |
 | `boards/pix16/rtl/pix16_sbc_minimal_top.vhd` | Minimal PIX16 VGA smoke-test board top |

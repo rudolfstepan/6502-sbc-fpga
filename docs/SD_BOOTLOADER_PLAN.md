@@ -104,7 +104,7 @@ reset_n low/high
 | `rtl/sbc_t65_sdram_boot_top.vhd` | Current SBC core with SDRAM main RAM, shadow ROM, VGA, and monitor bus master |
 | `rtl/sbc_t65_boot_monitor_top.vhd` | Tang bring-up core with internal BSRAM main RAM, shadow ROM, VGA, and monitor bus master |
 | `rtl/boards/pix16_sbc_sd_boot_top.vhd` | PIX16 board top with SD pins, boot VGA, UART monitor, and CPU gated by boot/RAM-test status |
-| `boards/tang_primer_20k/rtl/tang20k_sbc_top.vhd` | Tang board top with HDMI, CH340 UART, on-board SD pins, boot VGA, and KEY1 monitor |
+| `boards/tang_primer_20k/sbc/rtl/tang20k_sbc_top.vhd` | Tang board top with HDMI, CH340 UART, on-board SD pins, boot VGA, and KEY1 monitor |
 | `rtl/boot/boot_vga_debug.vhd` | VGA boot/status screen for SD, loader, and RAM-test state |
 | `rtl/boot/boot_sdram_test.vhd` | SDRAM self-test before CPU release |
 | `rtl/boot/uart_debug_monitor.vhd` | Hardware monitor that can patch the loaded shadow ROM after boot |

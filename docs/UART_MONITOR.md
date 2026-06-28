@@ -12,7 +12,7 @@ window.
 The monitor is instantiated in both active board tops:
 
 - PIX16: `boards/pix16/rtl/pix16_sbc_sd_boot_top.vhd`
-- Tang Primer 20K: `boards/tang_primer_20k/rtl/tang20k_sbc_top.vhd`
+- Tang Primer 20K: `boards/tang_primer_20k/sbc/rtl/tang20k_sbc_top.vhd`
 
 PIX16:
 

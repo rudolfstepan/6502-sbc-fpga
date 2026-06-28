@@ -202,7 +202,7 @@ reliably and was adopted as the primary keyboard interface.
 
 The on-board SDIO slot uses pins M8 (sd_miso / DAT0) and M10 (unused) which are
 dual-purpose SSPI pins on the GW2A-18C. The `make build` flow uses a Tcl script
-(`project/build.tcl`) instead of the `.gprj` project file so that
+(`sbc/project/build.tcl`) instead of the `.gprj` project file so that
 `set_option -use_sspi_as_gpio 1` is passed to P&R before placement runs.
 For the GUI flow, `impl/pnr/device.cfg` is checked into the repo with SSPI/MSPI
 set to `regular_io = true`. Both paths avoid the `PR2017`/`PR2028` errors that
@@ -227,7 +227,7 @@ Pinout matches Sipeed's `TangPrimer-20K-example/PT8211`. These pins are in Bank 
 (VCCIO locked to 3.3 V by other ports), so they are constrained `LVCMOS33`.
 
 > The sound sources (`sound_voice.vhd`, `pt8211_dac.vhd`) must be listed in
-> `project/build.tcl` — the PowerShell build drives `gw_sh build.tcl`, not the
+> `sbc/project/build.tcl` — the PowerShell build drives `gw_sh build.tcl`, not the
 > `.gprj`. If they are missing, GowinEDA synthesizes them as black boxes and the
 > DAC outputs float (hiss / silence).
 
@@ -272,14 +272,14 @@ The original Gowin DDR3 Memory Interface IP, 400-MHz PLL and
 
 1. Set the `USE_DDR3` generic in `tang20k_sbc_top.vhd` to `true` (or override it
    in the Gowin project elaboration settings).
-2. In `constraints/tang20k_sbc.cst`, add `VREF=INTERNAL` to every `ddr_dq[*]`
+2. In `sbc/constraints/tang20k_sbc.cst`, add `VREF=INTERNAL` to every `ddr_dq[*]`
    `IO_PORT` line and restore this placement constraint before the HDMI PLL line:
 
    ```text
    INS_LOC "ddr_backend_g.ddr_mem_pll_i/rpll_inst" PLL_L[0] exclusive;
    ```
 
-3. Append the DDR clock profile to `constraints/tang20k_sbc.sdc`:
+3. Append the DDR clock profile to `sbc/constraints/tang20k_sbc.sdc`:
 
    ```tcl
    create_clock -name ddr_clk_x1 -period 10  [get_nets {ddr_clk_x1}]
@@ -339,7 +339,7 @@ All steps run from this directory (`fpga/boards/tang_primer_20k/`).
 make build
 ```
 
-This executes `gw_sh project/build.tcl` from inside `project/` and runs the full
+This executes `gw_sh sbc/project/build.tcl` from inside `sbc/project/` and runs the full
 flow — synthesis, place & route, and bitstream generation — in one shot.
 
 The output bitstream is:
@@ -355,7 +355,7 @@ the GW2A-18C. GowinEDA regenerates `impl/pnr/device.cfg` from the `.gprj`
 defaults at the start of every P&R run and defaults SSPI to `false`, which causes
 errors `PR2017` / `PR2028`.
 
-`project/build.tcl` calls `set_option -use_sspi_as_gpio 1` before `run all` so
+`sbc/project/build.tcl` calls `set_option -use_sspi_as_gpio 1` before `run all` so
 gw_sh writes `set SSPI regular_io = true` into `device.cfg` on the first pass.
 No post-build patching is needed.
 
@@ -367,7 +367,7 @@ lines have no effect there — it relies on `impl/pnr/device.cfg` instead. To sa
 the next person the trouble, that file is checked into the repo with the correct
 settings, so a fresh checkout works out of the box:
 
-1. Open `project/tang_sbc.gprj` in GOWIN FPGA Designer.
+1. Open `sbc/project/tang_sbc.gprj` in GOWIN FPGA Designer.
 2. Run **Place & Route**.
 
 The committed `impl/pnr/device.cfg` already contains:

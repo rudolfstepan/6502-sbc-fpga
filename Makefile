@@ -18,7 +18,7 @@ T65_RTL = third_party/t65/rtl/T65_Pack.vhd third_party/t65/rtl/T65_ALU.vhd \
 
 RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/mem/sync_ram.vhd rtl/core/mem/fb_ram.vhd rtl/core/mem/rom.vhd \
-      boards/tang_primer_20k/rtl/bram_byte_bridge.vhd \
+      boards/tang_primer_20k/sbc/rtl/bram_byte_bridge.vhd \
       rtl/core/mem/boot_shadow_rom.vhd \
       rtl/core/mem/sdram_if.vhd rtl/core/mem/sdram_ctrl.vhd \
       rtl/core/mem/char_rom.vhd \
