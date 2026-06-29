@@ -3,9 +3,10 @@
 -- a cycle-accurate ADSR (reSID rate-counter periods with the exponential
 -- decay/release divider), a 2-pole state-variable filter (LP/BP/HP with
 -- cutoff/resonance/routing and a non-linear "dark 6581" cutoff curve), hard
--- oscillator sync, ring modulation, AND-combined waveforms and a $D418 volume
--- DAC high-pass path for sample digis. The 6581's analog DAC non-linearity and
--- sample-ROM-exact combined waveforms are not modelled yet.
+-- oscillator sync, ring modulation, TEST-bit oscillator/noise reset,
+-- AND-combined waveforms and a $D418 volume DAC high-pass path for sample
+-- digis. The 6581's analog DAC non-linearity and sample-ROM-exact combined
+-- waveforms are not modelled yet.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -182,13 +183,21 @@ begin
             end if;
           end loop;
           for v in 0 to 2 loop                 -- commit phase, MSB history, noise
-            phase(v) <= np(v);
-            osc_msb_d(v) <= mnow(v);
-            if np(v)(19) = '1' and noise_clk_d(v) = '0' then
-              feedback := lfsr(v)(22) xor lfsr(v)(17);
-              lfsr(v) <= lfsr(v)(21 downto 0) & feedback;
+            ctrl := regs(v*7+4);
+            if ctrl(3) = '1' then
+              phase(v) <= (others => '0');
+              osc_msb_d(v) <= '0';
+              noise_clk_d(v) <= '0';
+              lfsr(v) <= (others => '1');
+            else
+              phase(v) <= np(v);
+              osc_msb_d(v) <= mnow(v);
+              if np(v)(19) = '1' and noise_clk_d(v) = '0' then
+                feedback := lfsr(v)(22) xor lfsr(v)(17);
+                lfsr(v) <= lfsr(v)(21 downto 0) & feedback;
+              end if;
+              noise_clk_d(v) <= np(v)(19);
             end if;
-            noise_clk_d(v) <= np(v)(19);
           end loop;
         end if;
 

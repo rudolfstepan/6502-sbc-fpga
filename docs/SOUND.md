@@ -282,6 +282,7 @@ model. What it now reproduces:
 | Resonance | mapped to a deliberately **weak** Q (~0.7 … 2), matching the 6581 and avoiding output-limiter clipping |
 | Hard sync | voice *v* oscillator resets when the previous voice's MSB rises (`CONTROL` bit 1) |
 | Ring modulation | triangle fold bit XORed with the previous voice's MSB (`CONTROL` bit 2) |
+| TEST bit | `CONTROL` bit 3 holds the oscillator at zero and resets the noise LFSR/edge state, giving deterministic noise restarts |
 | Master volume / digis | `$D418` low nibble scales voices and feeds a high-pass volume-DAC path for 4-bit sample digis; voice-3 disconnect (`$D418` bit 7) honoured |
 
 The filter runs once per SID tick over a 5-step internal pipeline (one multiply
@@ -374,7 +375,9 @@ contiguous PRG upload for debugging.
 The default C64 wrapper tick is 50 Hz. If a SID needs a different CIA-driven
 rate, rebuild that tune with `tools/build_sid_prg.py --target c64 --play-hz N`
 (for example `--play-hz 100`). The generated segment map records the selected
-rate and the original PSID speed flags.
+rate and the original PSID speed flags. The bulk builder prints a short warning
+list for built PRGs whose PSID header requests CIA-speed playback so they can be
+checked separately.
 
 The C64 PRG wrapper is **sound-only**. It runs the tune's native `init`, masks
 CIA IRQ sources, disables VIC raster IRQs, clears `$D011.DEN`, and then polls CIA

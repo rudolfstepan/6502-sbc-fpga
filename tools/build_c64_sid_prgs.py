@@ -8,6 +8,7 @@ adds a BASIC ``10 SYS ...`` line at $0801, so each file can be uploaded with
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,7 @@ def main() -> int:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     built: list[Path] = []
+    cia_speed: list[Path] = []
     failed: list[tuple[str, str]] = []
     builder = ROOT / "tools" / "build_sid_prg.py"
 
@@ -62,6 +64,13 @@ def main() -> int:
         text = (result.stdout + result.stderr).strip()
         if result.returncode == 0:
             built.append(out)
+            meta_path = out.with_suffix(out.suffix + ".segments.json")
+            if meta_path.exists():
+                try:
+                    if json.loads(meta_path.read_text()).get("sid_cia_speed"):
+                        cia_speed.append(out)
+                except (OSError, json.JSONDecodeError):
+                    pass
             if not args.quiet and text:
                 print(text)
         else:
@@ -71,6 +80,10 @@ def main() -> int:
                 print(f"SKIP {sid.name}: {why}")
 
     print(f"\nBuilt {len(built)} C64 SID PRG(s), skipped {len(failed)} of {len(sids)} SID(s).")
+    if cia_speed and args.play_hz is None:
+        print("\nPSID CIA-speed flag set; verify play rate, rebuild with --play-hz if needed:")
+        for path in cia_speed:
+            print(f"  {path.name}")
     if failed:
         print("\nSkipped:")
         for name, why in failed:
