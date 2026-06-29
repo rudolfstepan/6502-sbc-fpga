@@ -16,6 +16,8 @@ from tkinter import ttk, filedialog
 ROOT  = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 ROMS  = ROOT / "roms"
+D64_GAMES = Path(r"E:\Emulatoren\C64\Games")
+DEFAULT_D64_FOLDER = D64_GAMES if D64_GAMES.exists() else ROMS / "test_d64"
 
 # ── Catppuccin Mocha palette ───────────────────────────────────────────────
 BG      = "#1e1e2e"
@@ -514,6 +516,62 @@ class App(tk.Tk):
         page = tk.Frame(self.nb, bg=BG)
         self.nb.add(page, text="  Utilities  ")
 
+        d64 = Section(page, "C64 D64 Game Upload")
+        d64.pack(fill=tk.X, padx=8)
+        d64.add_note(
+            "Scans a D64 folder recursively, extracts one PRG, and uploads it through the native C64 UART monitor.\n"
+            "Best for single-load/cracked games; multi-load disks still need a real IEC/1541 path."
+        )
+
+        frow = tk.Frame(d64.body, bg=SURFACE)
+        frow.pack(fill=tk.X, pady=(6, 2))
+        _lbl(frow, "D64 folder:", bg=SURFACE, fg=FG2).pack(side=tk.LEFT, padx=(0, 4))
+        self._c64_d64_folder = tk.StringVar(value=str(DEFAULT_D64_FOLDER))
+        ttk.Entry(frow, textvariable=self._c64_d64_folder).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        tk.Button(frow, text="…", bg=BG3, fg=FG, relief=tk.FLAT,
+                  padx=6, cursor="hand2", command=self._browse_c64_d64_folder).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(frow, text="↻ Scan", bg=BG3, fg=FG, relief=tk.FLAT,
+                  padx=8, cursor="hand2",
+                  command=lambda: self._c64_d64_refresh(force=True)).pack(side=tk.LEFT)
+
+        filter_row = tk.Frame(d64.body, bg=SURFACE)
+        filter_row.pack(fill=tk.X, pady=(4, 4))
+        _lbl(filter_row, "Filter:", bg=SURFACE, fg=FG2).pack(side=tk.LEFT, padx=(0, 4))
+        self._c64_d64_filter = tk.StringVar()
+        ttk.Entry(filter_row, textvariable=self._c64_d64_filter).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self._c64_d64_filter.trace_add("write", lambda *a: self._c64_d64_refresh())
+
+        d64wrap = tk.Frame(d64.body, bg=SURFACE)
+        d64wrap.pack(fill=tk.X, pady=(2, 6))
+        self._c64_d64_list = tk.Listbox(
+            d64wrap, bg="#11111b", fg=FG, selectbackground=ACCENT,
+            selectforeground="#1e1e2e", font=("Consolas", 9), height=12,
+            relief=tk.FLAT, activestyle="none", highlightthickness=0,
+        )
+        d64sb = ttk.Scrollbar(d64wrap, orient=tk.VERTICAL, command=self._c64_d64_list.yview)
+        self._c64_d64_list.configure(yscrollcommand=d64sb.set)
+        d64sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._c64_d64_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._c64_d64_list.bind("<Double-Button-1>", lambda e: self._do_upload_c64_d64())
+
+        (self._c64_d64_program,) = d64.add_field_row(("PRG name (optional)", "", 24))
+        (self._c64_d64_port,
+         self._c64_d64_baud,
+         self._c64_d64_line_delay) = d64.add_field_row(
+            ("Port", "COM15", 10), ("Baud", "115200", 10), ("Line delay", "0.001", 10)
+        )
+        (self._c64_d64_wake_byte,
+         self._c64_d64_bytes_per_line) = d64.add_field_row(
+            ("Wake byte", "0xA5", 10), ("Bytes/line", "1", 10)
+        )
+        self._c64_d64_verbose = d64.add_check("Verbose — print monitor responses")
+        self._c64_d64_stay = d64.add_check("Stay in FPGA monitor after upload")
+        d64.add_button("▶  Upload Selected D64 PRG", self._do_upload_c64_d64, MAUVE)
+
+        self._c64_d64_paths: list[Path] = []
+        self._c64_d64_all_paths: list[Path] = []
+        self._c64_d64_scanned_folder: Path | None = None
+
         s1 = Section(page, "News to UART")
         s1.pack(fill=tk.X, padx=8)
         s1.add_note(
@@ -668,6 +726,67 @@ class App(tk.Tk):
         if self._c64_sid_stay.get():
             cmd.append("--stay")
         self._run(cmd, f"Upload C64 SID PRG — {title}")
+
+    def _browse_c64_d64_folder(self):
+        folder = filedialog.askdirectory(initialdir=self._c64_d64_folder.get() or str(ROOT))
+        if folder:
+            self._c64_d64_folder.set(folder)
+            self._c64_d64_refresh(force=True)
+
+    def _c64_d64_refresh(self, force: bool = False):
+        folder = Path(self._c64_d64_folder.get().strip() or DEFAULT_D64_FOLDER)
+        flt = self._c64_d64_filter.get().strip().lower()
+        self._c64_d64_paths = []
+        self._c64_d64_list.delete(0, tk.END)
+        if not folder.exists():
+            if hasattr(self, "_status"):
+                self._status.set(f"D64 folder not found: {folder}")
+            return
+        if force or self._c64_d64_scanned_folder != folder or not self._c64_d64_all_paths:
+            try:
+                self._c64_d64_all_paths = sorted(
+                    (p for p in folder.rglob("*.d64") if p.is_file()),
+                    key=lambda p: str(p.relative_to(folder)).lower(),
+                )
+                self._c64_d64_scanned_folder = folder
+            except OSError as exc:
+                self.console.writeln(f"ERROR scanning D64 folder: {exc}", "err")
+                return
+        for p in self._c64_d64_all_paths:
+            rel = str(p.relative_to(folder))
+            if flt and flt not in rel.lower() and flt not in p.stem.lower():
+                continue
+            self._c64_d64_paths.append(p)
+            self._c64_d64_list.insert(tk.END, "  " + rel)
+        if self._c64_d64_paths:
+            self._c64_d64_list.selection_set(0)
+        if hasattr(self, "_status"):
+            self._status.set(f"{len(self._c64_d64_paths)} D64 image(s) listed")
+
+    def _do_upload_c64_d64(self):
+        sel = self._c64_d64_list.curselection()
+        if not sel:
+            self.console.writeln("ERROR: select a D64 image from the list first.", "err")
+            return
+        disk = self._c64_d64_paths[sel[0]]
+        cmd = [
+            sys.executable,
+            TOOLS / "c64_d64_prg_loader.py",
+            "--disk", str(disk),
+            "--port", self._c64_d64_port.get(),
+            "--baud", self._c64_d64_baud.get(),
+            "--wake-byte", self._c64_d64_wake_byte.get(),
+            "--bytes-per-line", self._c64_d64_bytes_per_line.get(),
+            "--line-delay", self._c64_d64_line_delay.get(),
+        ]
+        program = self._c64_d64_program.get().strip()
+        if program:
+            cmd += ["--program", program]
+        if self._c64_d64_verbose.get():
+            cmd.append("--verbose")
+        if self._c64_d64_stay.get():
+            cmd.append("--stay")
+        self._run(cmd, f"Upload C64 D64 PRG — {disk.name}")
 
     def _do_make_sd(self):
         rom = self._sd_rom.get().strip()

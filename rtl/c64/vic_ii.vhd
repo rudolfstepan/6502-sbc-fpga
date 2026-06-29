@@ -1,4 +1,4 @@
--- MOS 6569 VIC-II -- native C64 video, Milestone 1 scope (standard text mode).
+-- MOS 6569 VIC-II -- native C64 video, Milestone 1 scope.
 --
 -- Reuses the proven Tang Primer 20K display pipeline from rtl/core/peripherals/
 -- vic_vga: exact CEA-861 720x480p timing (27 MHz pixel, 858x525 total, the
@@ -11,7 +11,8 @@
 --   * screen codes  -> main DRAM at (VIC bank << 14) + video-matrix base, fetched
 --                      over the steal bus (vic_addr / vic_data).
 --   * colour        -> colour RAM, read in parallel over a dedicated 4-bit port.
---   * glyph pattern -> character generator ROM (chargen) over char_addr/char_data.
+--   * glyph pattern -> character generator ROM in VIC banks 0/2 at $1000-$1FFF,
+--                      otherwise RAM charset bytes fetched over the steal bus.
 --
 -- Implemented registers ($D000-$D03F, mirrored every $40):
 --   $D011 control1 : [7]=raster bit8 [6]=ECM [5]=BMM [4]=DEN
@@ -90,15 +91,17 @@ architecture rtl of vic_ii is
   signal hc : natural range 0 to H_TOT - 1 := 0;
   signal vc : natural range 0 to V_TOT - 1 := 0;
 
-  -- Line buffer: 40 screen codes/attrs + 40 bitmap bytes + 40 colour nibbles.
+  -- Line buffer: 40 screen codes/attrs + 40 bitmap/glyph bytes + 40 colour nibbles.
   type linebuf_t is array (0 to 39) of std_logic_vector(7 downto 0);
   type colbuf_t  is array (0 to 39) of std_logic_vector(3 downto 0);
   signal linebuf : linebuf_t := (others => (others => '0'));
   signal bmpbuf  : linebuf_t := (others => (others => '0'));
+  signal glyphbuf: linebuf_t := (others => (others => '0'));
   signal colbuf  : colbuf_t  := (others => (others => '0'));
   attribute ram_style : string;
   attribute ram_style of linebuf : signal is "distributed";
   attribute ram_style of bmpbuf : signal is "distributed";
+  attribute ram_style of glyphbuf : signal is "distributed";
   attribute ram_style of colbuf  : signal is "distributed";
 
   -- Fetch FSM (runs during the start of H-blank for the next scanline).
@@ -109,7 +112,9 @@ architecture rtl of vic_ii is
   signal fetch_y    : natural range 0 to 199 := 0;
   signal fetch_phase: natural range 0 to 1 := 0;
   signal fetch_bmm  : std_logic := '0';
+  signal fetch_chargen : std_logic := '0';
   signal fetch_valid: std_logic := '0';
+  signal fetch_addr_col : natural range 0 to 39 := 0;
 
   -- Register file.
   signal reg_d011 : std_logic_vector(7 downto 0) := x"1B";  -- DEN=1, RSEL=1, YSCROLL=3
@@ -156,9 +161,9 @@ architecture rtl of vic_ii is
   signal hs_d, vs_d, de_d : std_logic := '1';   -- registered sync (stage 1)
   signal cpix_d   : natural range 0 to 7  := 0;
   signal fg_d, bg_d, bg1_d, bg2_d, bg3_d, bord_d : natural range 0 to 15 := 0;
-  signal scr_d, bmp_d : std_logic_vector(7 downto 0) := (others => '0');
+  signal scr_d, bmp_d, glyph_d : std_logic_vector(7 downto 0) := (others => '0');
   signal col_d : std_logic_vector(3 downto 0) := (others => '0');
-  signal bmm_d, mcm_d, ecm_d : std_logic := '0';
+  signal bmm_d, mcm_d, ecm_d, chargen_d : std_logic := '0';
   signal inb_d, intext_d : std_logic := '0';
 
   -- Stage 2: combinational palette outputs, then registered so the VIC->HDMI
@@ -169,10 +174,15 @@ architecture rtl of vic_ii is
 
   -- Video matrix base within the VIC bank, from $D018[7:4] (VM*1024).
   signal screen_base : unsigned(15 downto 0);
+  signal char_base   : unsigned(15 downto 0);
   signal bitmap_base : unsigned(15 downto 0);
   signal fetch_offset : unsigned(15 downto 0);
+  signal char_fetch_code : std_logic_vector(7 downto 0);
+  signal char_fetch_offset : unsigned(15 downto 0);
+  signal char_rom_visible : std_logic;
   signal raster_v    : unsigned(8 downto 0);
   signal display_en  : std_logic;
+  signal glyph_byte  : std_logic_vector(7 downto 0);
 
   -- Pepto palette in RGB565 split (same constants as vic_vga).
   type pal5_t is array (0 to 15) of std_logic_vector(4 downto 0);
@@ -205,9 +215,15 @@ begin
   -- Video-matrix base = VM13-10 ($D018[7:4]) -> address bits 13:10, zero-extended
   -- to a full 16-bit within-bank offset (bits 15:14 = 0; the bank is added later).
   screen_base <= "00" & unsigned(reg_d018(7 downto 4)) & "0000000000";
+  char_base   <= "00" & unsigned(reg_d018(3 downto 1)) & "00000000000";
   bitmap_base <= "00" & unsigned(reg_d018(3 downto 3)) & "0000000000000";
+  -- On a real C64 the VIC sees character ROM at $1000-$1FFF in VIC banks 0 and
+  -- 2 only. Other char bases/banks are RAM charsets.
+  char_rom_visible <= '1' when (vic_bank = "00" or vic_bank = "10") and
+                               reg_d018(3 downto 2) = "01" else '0';
   raster_v    <= to_unsigned(vc mod 512, 9);
   display_en  <= reg_d011(4);
+  fetch_addr_col <= fetch_col when fetch_col < 40 else 39;
 
   -- ----- per-line character/colour fetch -----
   process(clk)
@@ -219,6 +235,7 @@ begin
       if reset_n = '0' then
         fetching <= '0'; fetch_col <= 0; fetch_store <= 0;
         fetch_row <= 0; fetch_y <= 0; fetch_phase <= 0; fetch_bmm <= '0';
+        fetch_chargen <= '0';
         fetch_valid <= '0';
       else
         if fetching = '0' then
@@ -237,6 +254,7 @@ begin
             fetch_store <= 0;
             fetch_phase <= 0;
             fetch_bmm   <= reg_d011(5);
+            fetch_chargen <= char_rom_visible;
             fetch_valid <= '0';
             if display_en = '1' and nv >= V_BORD and nv < TV_END then
               fetching <= '1';
@@ -250,12 +268,14 @@ begin
               colbuf(fetch_store) <= color_data;
             elsif fetch_bmm = '1' then
               linebuf(fetch_store) <= vic_data;
-            else
+            elsif fetch_phase = 0 then
               linebuf(fetch_store) <= vic_data;
               colbuf(fetch_store)  <= color_data;
+            else
+              glyphbuf(fetch_store) <= vic_data;
             end if;
             if fetch_store = 39 then
-              if fetch_bmm = '1' and fetch_phase = 0 then
+              if fetch_phase = 0 and (fetch_bmm = '1' or fetch_chargen = '0') then
                 fetch_phase <= 1;
                 fetch_col <= 0;
                 fetch_store <= 0;
@@ -278,8 +298,14 @@ begin
   ba <= '0' when fetching = '1' else '1';
 
   -- Steal-bus address: screen/bitmap bytes from DRAM (bank + within-bank offset).
+  char_fetch_code <= ("00" & linebuf(fetch_addr_col)(5 downto 0))
+                     when reg_d011(6) = '1' and fetch_bmm = '0'
+                     else linebuf(fetch_addr_col);
+  char_fetch_offset <= char_base + resize(unsigned(char_fetch_code) & to_unsigned(fetch_y mod 8, 3), 16);
   fetch_offset <= bitmap_base + to_unsigned(fetch_y * 40 + fetch_col, 16)
                   when fetch_bmm = '1' and fetch_phase = 0 else
+                  char_fetch_offset
+                  when fetch_bmm = '0' and fetch_phase = 1 else
                   screen_base + to_unsigned(fetch_row * 40 + fetch_col, 16);
   vic_addr <= std_logic_vector(
                 (unsigned(vic_bank) & "00000000000000") + fetch_offset);
@@ -307,8 +333,9 @@ begin
   bg3_index <= to_integer(unsigned(reg_d024));
   border_idx <= to_integer(unsigned(reg_d020));
 
-  -- Glyph pattern from chargen ROM: code*8 + line (lower/upper set TODO via CB).
-  char_addr <= "0" & glyph_code & std_logic_vector(to_unsigned(cline, 3));
+  -- Glyph pattern from CHARGEN when the VIC's character-ROM window is active.
+  -- reg_d018(1) selects the upper/lower 2K half inside the 4K character ROM.
+  char_addr <= reg_d018(1) & glyph_code & std_logic_vector(to_unsigned(cline, 3));
 
   in_border <= '1' when hc < H_VIS and vc < V_VIS and in_text = '0' else '0';
 
@@ -332,10 +359,12 @@ begin
       bord_d   <= border_idx;
       scr_d    <= linebuf(col);
       bmp_d    <= bmpbuf(col);
+      glyph_d  <= glyphbuf(col);
       col_d    <= colbuf(col);
       bmm_d    <= reg_d011(5);
       ecm_d    <= reg_d011(6);
       mcm_d    <= reg_d016(4);
+      chargen_d <= char_rom_visible;
       inb_d    <= in_border;
       intext_d <= in_text;
       hs_d <= hs_c; vs_d <= vs_c; de_d <= de_c;
@@ -406,11 +435,12 @@ begin
   -- ----- stage 1->2: combinational palette from stage-1 registers -----
   -- Pixel decisions are combinational but only from stage-1 registers
   -- (plus char_data, which is aligned with them by the CHARGEN read latency).
-  char_pbit <= char_data(7 - cpix_d) when intext_d = '1' else '0';
+  glyph_byte <= char_data when chargen_d = '1' else glyph_d;
+  char_pbit <= glyph_byte(7 - cpix_d) when intext_d = '1' else '0';
   bmp_pbit  <= bmp_d(7 - cpix_d) when intext_d = '1' else '0';
   mc_pair   <= bmp_d(7 - 2 * (cpix_d / 2) downto 6 - 2 * (cpix_d / 2))
                when bmm_d = '1' else
-               char_data(7 - 2 * (cpix_d / 2) downto 6 - 2 * (cpix_d / 2));
+               glyph_byte(7 - 2 * (cpix_d / 2) downto 6 - 2 * (cpix_d / 2));
 
   process(inb_d, intext_d, bmm_d, mcm_d, ecm_d, char_pbit, bmp_pbit, mc_pair,
           fg_d, bg_d, bg1_d, bg2_d, bg3_d, bord_d, scr_d, col_d)

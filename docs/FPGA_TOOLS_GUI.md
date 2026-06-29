@@ -179,6 +179,31 @@ Windows:        Win32DiskImager  oder  tools\write_sd.bat <image>
 
 ## Tab: Utilities
 
+### C64 D64 Game Upload
+
+Scannt rekursiv einen D64-Ordner, standardmäßig `E:\Emulatoren\C64\Games` wenn
+dieser Pfad existiert, sonst `roms/test_d64/`. Die markierte `.d64` wird auf dem
+PC gelesen; die GUI ruft intern `c64_d64_prg_loader.py` auf, extrahiert das erste
+PRG oder ein benanntes PRG und lädt es danach über den nativen
+C64-UART-Monitor. Nach dem Upload am C64-Prompt `RUN` eingeben.
+
+Dieser Weg ist absichtlich pragmatisch: er funktioniert für viele Single-load-
+oder gecrackte Onefile-D64s. Multi-load-Spiele, Fastloader und echte
+IEC/1541-Kompatibilität brauchen später den KERNAL/IEC/1541-Ladepfad.
+
+| Feld / Option | Beschreibung |
+|---|---|
+| D64 folder | Root-Ordner mit `.d64`-Images; Unterordner werden mitgescannt |
+| Filter | Filtert nach relativem Pfad oder Dateiname |
+| D64-Liste | Alle gefundenen Images; **Doppelklick lädt direkt hoch** |
+| PRG name (optional) | Exakter oder eindeutiger Teilname eines PRG-Eintrags; leer = erstes PRG |
+| Port / Baud | Serieller Port und Baudrate für den C64-UART-Monitor |
+| Wake byte | Monitor-Magic-Byte, Standard `0xA5` |
+| Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload |
+| Verbose | Monitor-Antworten anzeigen (`--verbose`) |
+| Stay in FPGA monitor | Nach Upload nicht mit `G` zurück zur C64-Umgebung springen |
+| ▶ Upload Selected D64 PRG | Extrahiert und lädt das ausgewählte D64-PRG |
+
 ### News to UART
 
 Ruft `news_to_uart.py` auf.  Holt RSS/Atom-Schlagzeilen und sendet sie fortlaufend an die UART-Konsole des Boards.  EhBASIC oder ein UART-fähiges ROM muss laufen.
@@ -231,6 +256,7 @@ Es läuft immer nur **ein Prozess** gleichzeitig.  Wird ein zweiter gestartet, b
 | `build_sid_prg.py` | Eine `.sid`-Tune als C64-PRG mit BASIC-Header und Segment-Sidecar erzeugen |
 | `build_c64_sid_prgs.py` | Alle passenden `.sid`-Tunes als C64-UART-SID-PRGs bauen |
 | `c64_uart_prg_loader.py` | C64-PRGs über den nativen C64-UART-Monitor laden; nutzt Segment-Sidecars automatisch |
+| `c64_d64_prg_loader.py` | PRG aus einer D64 extrahieren und über den nativen C64-UART-Monitor laden |
 | `news_to_uart.py` | RSS-Feed an UART senden |
 
 Alle Skripte lassen sich weiterhin direkt auf der Kommandozeile aufrufen; das GUI ist nur ein bequemer Wrapper.

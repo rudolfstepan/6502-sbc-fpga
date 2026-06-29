@@ -31,6 +31,7 @@ entity c64_core is
   port (
     clk      : in  std_logic;                       -- 27 MHz pixel + system clock
     reset_n  : in  std_logic;
+    cold_reset : in std_logic := '0';               -- held high to scrub RAM
 
     -- Debug taps (leave open in synthesis; used by the testbench).
     dbg_addr : out std_logic_vector(15 downto 0);
@@ -107,6 +108,7 @@ architecture rtl of c64_core is
   end component;
 
   -- ---- clocking ----
+  signal core_reset_n : std_logic;
   signal phi2_cnt   : integer range 0 to PHI2_DIV - 1 := 0;
   signal phi2_en    : std_logic := '0';
   signal cia_bus_en : std_logic := '0';
@@ -155,6 +157,8 @@ architecture rtl of c64_core is
   signal wq_data  : wq_data_t;
   signal wq_cnt   : integer range 0 to WQ_DEPTH := 0;
   signal dram_din : std_logic_vector(7 downto 0);
+  signal cold_ram_addr : unsigned(15 downto 0) := (others => '0');
+  signal cold_ram_done : std_logic := '0';
 
   type cwq_addr_t is array (0 to WQ_DEPTH-1) of std_logic_vector(9 downto 0);
   type cwq_data_t is array (0 to WQ_DEPTH-1) of std_logic_vector(3 downto 0);
@@ -162,6 +166,8 @@ architecture rtl of c64_core is
   signal cwq_data : cwq_data_t;
   signal cwq_cnt  : integer range 0 to WQ_DEPTH := 0;
   signal col_din  : std_logic_vector(3 downto 0);
+  signal cold_col_addr : unsigned(9 downto 0) := (others => '0');
+  signal cold_col_done : std_logic := '0';
 
   -- UART monitor RAM master. It waits until the VIC and both deferred write
   -- queues have released the single-port RAM, then performs one byte transfer.
@@ -244,6 +250,7 @@ architecture rtl of c64_core is
   signal dbg_wq_full      : std_logic;
   signal dbg_cwq_full     : std_logic;
 begin
+  core_reset_n <= reset_n and not cold_reset;
   vga_hs <= s_hs; vga_vs <= s_vs; vga_de <= s_de;
   vga_r <= s_r; vga_g <= s_g; vga_b <= s_b;
 
@@ -275,7 +282,7 @@ begin
   process(clk)
   begin
     if rising_edge(clk) then
-      if reset_n = '0' then
+      if core_reset_n = '0' then
         phi2_cnt <= 0; phi2_en <= '0';
       elsif phi2_cnt = PHI2_DIV - 1 then
         phi2_cnt <= 0; phi2_en <= '1';
@@ -323,7 +330,7 @@ begin
       vic_ba_d2 <= vic_ba_d;
       vic_ba_d3 <= vic_ba_d2;
       vic_ba_d4 <= vic_ba_d3;
-      if reset_n = '0' then
+      if core_reset_n = '0' then
         ram_settle <= 7;
       elsif vic_ba = '0' or wq_cnt > 0 or cwq_cnt > 0 or mon_owner = '1' then
         ram_settle <= 7;
@@ -358,7 +365,7 @@ begin
   -- burst (3, an interrupt push) with margin -- no stack push is ever lost.
   process(clk) begin
     if rising_edge(clk) then
-      if reset_n = '0' then
+      if core_reset_n = '0' then
         wq_cnt <= 0;
       elsif vic_ba = '1' and wq_cnt > 0 then
         for i in 0 to WQ_DEPTH-2 loop
@@ -378,7 +385,7 @@ begin
   -- Colour-RAM write FIFO (same scheme; colour RAM lives in the I/O page).
   process(clk) begin
     if rising_edge(clk) then
-      if reset_n = '0' then
+      if core_reset_n = '0' then
         cwq_cnt <= 0;
       elsif vic_ba = '1' and cwq_cnt > 0 then
         for i in 0 to WQ_DEPTH-2 loop
@@ -403,7 +410,7 @@ begin
 
   cpu_i : entity work.cpu6510
     port map (
-      clk => clk, reset_n => reset_n, enable => cpu_en, rdy => cpu_rdy,
+      clk => clk, reset_n => core_reset_n, enable => cpu_en, rdy => cpu_rdy,
       irq_n => cpu_irq_n, nmi_n => cpu_nmi_n,
       addr => cpu_addr, data_in => cpu_din, data_out => cpu_dout, we => cpu_we,
       sync => cpu_sync, regs => cpu_regs,
@@ -414,7 +421,7 @@ begin
   process(clk)
   begin
     if rising_edge(clk) then
-      if reset_n = '0' or monitor_hold = '0' then
+      if core_reset_n = '0' or monitor_hold = '0' then
         mon_mem_state <= MON_IDLE;
         mon_addr_lat  <= (others => '0');
         mon_wdata_lat <= (others => '0');
@@ -455,17 +462,51 @@ begin
   end process;
   mon_owner <= '1' when monitor_hold = '1' and mon_mem_state = MON_ACCESS else '0';
 
+  -- Cold reset RAM scrub. The board top asserts cold_reset after a long reset
+  -- button press while holding core_reset_n low; the single RAM ports are then
+  -- free for deterministic clearing before BASIC/KERNAL starts again.
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if cold_reset = '0' then
+        cold_ram_addr <= (others => '0');
+        cold_ram_done <= '0';
+        cold_col_addr <= (others => '0');
+        cold_col_done <= '0';
+      else
+        if cold_ram_done = '0' then
+          if cold_ram_addr = to_unsigned(16#FFFF#, cold_ram_addr'length) then
+            cold_ram_done <= '1';
+          else
+            cold_ram_addr <= cold_ram_addr + 1;
+          end if;
+        end if;
+
+        if cold_col_done = '0' then
+          if cold_col_addr = to_unsigned(1023, cold_col_addr'length) then
+            cold_col_done <= '1';
+          else
+            cold_col_addr <= cold_col_addr + 1;
+          end if;
+        end if;
+      end if;
+    end if;
+  end process;
+
   -- ---- 64K main RAM: single-port, time-shared CPU <-> VIC (steal) ----
-  ram_addr <= mon_addr_lat when mon_owner = '1' else
+  ram_addr <= std_logic_vector(cold_ram_addr) when cold_reset = '1' and cold_ram_done = '0' else
+              mon_addr_lat when mon_owner = '1' else
               vic_addr   when vic_ba = '0' else
               wq_addr(0) when wq_cnt > 0  else
               cpu_addr;
-  dram_we  <= '1' when (mon_owner = '1' and mon_we_lat = '1') else
+  dram_we  <= '1' when cold_reset = '1' and cold_ram_done = '0' else
+              '1' when (mon_owner = '1' and mon_we_lat = '1') else
               '1' when (vic_ba = '1' and wq_cnt > 0) else
               '1' when (vic_ba = '1' and wq_cnt = 0 and phi2_en = '1'
                         and cpu_we = '1' and sel /= SEL_IO) else
               '0';
-  dram_din <= mon_wdata_lat when mon_owner = '1' else
+  dram_din <= (others => '0') when cold_reset = '1' and cold_ram_done = '0' else
+              mon_wdata_lat when mon_owner = '1' else
               wq_data(0) when wq_cnt > 0 else cpu_dout;
 
   ram_i : entity work.c64_ram
@@ -488,14 +529,17 @@ begin
   -- Colour RAM: single-port, time-shared like main RAM (VIC during the steal, CPU
   -- otherwise) so there is no dual-port collision.
   cs_col   <= '1' when io = IO_COLOR else '0';
-  col_we   <= '1' when (vic_ba = '1' and cwq_cnt > 0) else
+  col_we   <= '1' when cold_reset = '1' and cold_col_done = '0' else
+              '1' when (vic_ba = '1' and cwq_cnt > 0) else
               '1' when (vic_ba = '1' and cwq_cnt = 0 and phi2_en = '1'
                         and cs_col = '1' and cpu_we = '1') else
               '0';
-  col_addr <= vic_col_addr when vic_ba = '0' else
+  col_addr <= std_logic_vector(cold_col_addr) when cold_reset = '1' and cold_col_done = '0' else
+              vic_col_addr when vic_ba = '0' else
               cwq_addr(0)  when cwq_cnt > 0  else
               cpu_addr(9 downto 0);
-  col_din  <= cwq_data(0) when cwq_cnt > 0 else cpu_dout(3 downto 0);
+  col_din  <= (others => '0') when cold_reset = '1' and cold_col_done = '0' else
+              cwq_data(0) when cwq_cnt > 0 else cpu_dout(3 downto 0);
   colram_i : entity work.colour_ram
     port map (clk => clk, addr => col_addr, we => col_we,
               din => col_din, dout => col_dout);
@@ -506,7 +550,7 @@ begin
   cs_vic <= '1' when io = IO_VIC else '0';
   vic_i : entity work.vic_ii
     port map (
-      clk => clk, reset_n => reset_n,
+      clk => clk, reset_n => core_reset_n,
       cs => cs_vic, we => io_we, addr => cpu_addr(5 downto 0),
       din => cpu_dout, dout => vic_dout, irq_n => vic_irq_n,
       vic_addr => vic_addr, vic_data => vic_data, ba => vic_ba,
@@ -529,7 +573,7 @@ begin
       clk     => clk,
       phi2_p  => phi2_en,
       phi2_n  => cia_bus_en,
-      res_n   => reset_n,
+      res_n   => core_reset_n,
       cs_n    => cia1_cs_n,
       rw      => cia_rw,
       rs      => cpu_addr(3 downto 0),
@@ -560,7 +604,7 @@ begin
       clk     => clk,
       phi2_p  => phi2_en,
       phi2_n  => cia_bus_en,
-      res_n   => reset_n,
+      res_n   => core_reset_n,
       cs_n    => cia2_cs_n,
       rw      => cia_rw,
       rs      => cpu_addr(3 downto 0),
@@ -588,7 +632,7 @@ begin
   -- it removed -- so it stays wired in.)
   kbd_i : entity work.c64_keyboard_matrix
     port map (
-      clk => clk, reset_n => reset_n,
+      clk => clk, reset_n => core_reset_n,
       ps2_clk => ps2_clk, ps2_data => ps2_data,
       col_drive => cia1_pa_out,
       row_drive => cia1_pb_out,
@@ -602,7 +646,7 @@ begin
   sid_i : entity work.sid6581
     generic map (CLK_HZ => 27_000_000, SID_HZ => 985_248)
     port map (
-      clk => clk, reset_n => reset_n,
+      clk => clk, reset_n => core_reset_n,
       cs => cs_sid, we => io_we, addr => cpu_addr(4 downto 0),
       din => cpu_dout, dout => sid_dout, sample_out => audio
     );
@@ -618,12 +662,12 @@ begin
 
   utx_i : entity work.uart_tx_ser
     generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
-    port map (clk => clk, reset_n => reset_n,
+    port map (clk => clk, reset_n => core_reset_n,
               data => cpu_dout, valid => utx_send, tx => uart_tx, busy => utx_busy);
 
   urx_i : entity work.uart_rx_ser
     generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
-    port map (clk => clk, reset_n => reset_n,
+    port map (clk => clk, reset_n => core_reset_n,
               rx => uart_rx, data => urx_data, valid => urx_valid);
 
   -- One TX start pulse per CPU write to $DE00.
@@ -633,7 +677,7 @@ begin
   -- Latch each received byte; a CPU read of $DE00 consumes it.
   process(clk) begin
     if rising_edge(clk) then
-      if reset_n = '0' then
+      if core_reset_n = '0' then
         rx_avail <= '0';
       else
         if urx_valid = '1' then

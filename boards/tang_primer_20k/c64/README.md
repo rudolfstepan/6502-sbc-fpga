@@ -42,7 +42,11 @@ boards/tang_primer_20k/c64/
 2. Open `project/tang_c64.gprj` in Gowin IDE, or run `gw_sh project/build.tcl`.
 3. Flash `impl/pnr/tang_c64.fs`.
 
-Reset = KEY[0] (T10). Keyboard = PS/2 on PMOD0 (T7 clk / T8 data). Video = HDMI.
+Reset = KEY[0] (T10). A short press is a normal C64 reset and leaves RAM
+contents intact, matching the real machine. Hold KEY[0] for about one second to
+request a cold FPGA reset: the core keeps reset asserted, clears all 64K C64 RAM
+plus colour RAM, and then lets the original BASIC/KERNAL boot from a clean RAM
+state. Keyboard = PS/2 on PMOD0 (T7 clk / T8 data). Video = HDMI.
 
 ### UART-uploadable graphics test PRG
 
@@ -102,6 +106,29 @@ RAM-fetch window, which removes BA/RDY stalls from the single-port RAM path and
 keeps playback stable for heavy SID players. The HDMI output is blank while the
 tune plays by design.
 
+### D64 game PRG upload
+
+For ready-made `.d64` game collections, the current practical path is to extract
+a PRG on the PC and upload it through the native C64 UART monitor:
+
+```powershell
+python tools/c64_d64_prg_loader.py --folder E:\Emulatoren\C64\Games --find 1942 --first-match --port COM15
+```
+
+The tool scans folders recursively, prints the selected disk directory, extracts
+the first PRG by default, and then calls `c64_uart_prg_loader.py`. After upload,
+type:
+
+```text
+RUN
+```
+
+Pass `--program "NAME"` when a disk has several PRGs and the first entry is not
+the desired starter. This is for single-load/cracked games; multi-load games,
+fastloaders, and copy-protected disks still need the later KERNAL/IEC/1541 load
+path. After testing large games, use a long KEY[0] reset if BASIC/KERNAL should
+restart with clean RAM instead of preserving the uploaded program bytes.
+
 ## Architecture
 
 ### Reused vs. new
@@ -157,9 +184,9 @@ Implemented display modes:
 
 | Mode | VIC bits | Data source | Colour source |
 | --- | --- | --- | --- |
-| Standard text | `$D011.BMM=0`, `$D016.MCM=0` | `$D018` video matrix + CHARGEN | `$D800` foreground, `$D021` background |
-| ECM text | `$D011.ECM=1` | character code low 6 bits + CHARGEN | `$D800` foreground, `$D021-$D024` backgrounds |
-| Multicolour text | `$D016.MCM=1`, colour bit 3 set | CHARGEN bit pairs | `$D021-$D023` + colour RAM low 3 bits |
+| Standard text | `$D011.BMM=0`, `$D016.MCM=0` | `$D018` video matrix + CHARGEN/RAM charset | `$D800` foreground, `$D021` background |
+| ECM text | `$D011.ECM=1` | character code low 6 bits + CHARGEN/RAM charset | `$D800` foreground, `$D021-$D024` backgrounds |
+| Multicolour text | `$D016.MCM=1`, colour bit 3 set | CHARGEN/RAM charset bit pairs | `$D021-$D023` + colour RAM low 3 bits |
 | Hires bitmap | `$D011.BMM=1`, `$D016.MCM=0` | bitmap base from `$D018[3]` | video-matrix high/low nibbles |
 | Multicolour bitmap | `$D011.BMM=1`, `$D016.MCM=1` | bitmap bit pairs | `$D021`, video-matrix nibbles, colour RAM |
 
@@ -170,10 +197,16 @@ Relevant registers:
 | `$D011` | raster bit 8 on read, `ECM`, `BMM`, `DEN`, `RSEL`, `YSCROLL` |
 | `$D012` | live raster low byte on read, raster IRQ compare on write |
 | `$D016` | `MCM`, `CSEL`, `XSCROLL` |
-| `$D018` | video matrix base in bits 7:4, bitmap base in bit 3 |
+| `$D018` | video matrix base in bits 7:4, bitmap base in bit 3, charset base in bits 3:1 |
 | `$D019/$D01A` | raster IRQ latch/enable |
 | `$D020` | border colour |
 | `$D021-$D024` | background colours 0-3 |
+
+Text modes fetch 40 screen bytes and colour nibbles per visible scanline. When
+`$D018` points at the VIC character-ROM window (`$1000-$1FFF` in banks 0 and 2),
+the renderer uses CHARGEN; otherwise it performs a second fetch phase for the 40
+RAM charset bytes of the current glyph row. This is needed for game tile graphics
+such as Boulder Dash-style custom character sets.
 
 Bitmap modes fetch 40 bitmap bytes per visible scanline from `(VIC bank +
 bitmap base + y*40 + column)`, then fetch the 40 video-matrix attribute bytes for
@@ -199,18 +232,20 @@ multicolour bitmap.
   prints the full banner + `38911 BASIC BYTES FREE` + `READY.`. On hardware
   expect the blue screen, border, banner, blinking cursor, PS/2 typing, and the
   UART-upload graphics PRG above.
-- **M1b — `LOAD` from D64** ⏳ next
-  Integrate the existing `d64_subsystem` + SD path behind a KERNAL LOAD/IEC
-  hook (stubbed in `c64_core` for now). Target `LOAD"*",8,1` + `RUN`.
+- **M1b — D64 game loading** ⏳ in progress
+  Current practical path: PC extracts a PRG from a D64 and uploads it through
+  the C64 UART monitor. Next: a KERNAL/IEC/1541 path for `LOAD"*",8,1`, `RUN`,
+  multi-load games, and fastloader-aware compatibility work.
 - **M2 — full VIC-II**
-  Hires/multicolour bitmap, ECM, and multicolour text are in place. Remaining:
+  Hires/multicolour bitmap, ECM, multicolour text, and RAM charsets are in place. Remaining:
   8 sprites + collisions, sprite/gfx priority, per-cycle accuracy, badlines,
-  CHARGEN upper/lower set via `$D018` CB bits.
+  and more exact badline/fetch timing.
 
 ## Known limitations (M1)
 - VIC-II has text, ECM, multicolour text, hires bitmap, and multicolour bitmap.
   Sprites, collisions, badlines, and cycle-exact display effects are still M2.
-- CHARGEN: always the upper-case set; `$D018` charset-base bit not yet decoded.
+- CHARGEN/RAM charset selection follows `$D018` for the common text-mode cases;
+  the character-ROM window is modelled for VIC banks 0 and 2.
 - CHARGEN read has 1-cycle latency (sync BSRAM) -> at most a 1-pixel horizontal
   shift; cosmetic for M1.
 - CIA TOD is a simple BCD counter (no alarm); enough for the KERNAL fallback.

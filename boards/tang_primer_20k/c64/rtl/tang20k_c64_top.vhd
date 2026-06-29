@@ -10,7 +10,7 @@
 -- HDMI TMDS on the on-board connector. Audio on the dock PT8211.
 library ieee;
 use ieee.std_logic_1164.all;
--- use ieee.numeric_std.all;   -- (only needed by the disabled DIAG heartbeat)
+use ieee.numeric_std.all;
 
 entity tang20k_c64_top is
   port (
@@ -44,6 +44,10 @@ end entity;
 
 architecture rtl of tang20k_c64_top is
   constant MONITOR_MAGIC : std_logic_vector(7 downto 0) := x"A5";
+  -- Short press = normal C64 reset. Hold KEY[0] for ~1 s to request a cold
+  -- FPGA reset that clears C64 RAM before BASIC/KERNAL restarts.
+  constant LONG_RESET_CYCLES      : integer := 27_000_000;
+  constant COLD_RESET_HOLD_CYCLES : integer := 70_000;
 
   signal clk_pix  : std_logic;
   signal clk_sys  : std_logic;
@@ -52,6 +56,9 @@ architecture rtl of tang20k_c64_top is
   signal reset_n   : std_logic;
   signal rst_sync  : std_logic_vector(2 downto 0) := (others => '0');
   signal key0_sync : std_logic_vector(2 downto 0) := (others => '1');
+  signal reset_press_cnt : integer range 0 to LONG_RESET_CYCLES := 0;
+  signal cold_hold_cnt   : integer range 0 to COLD_RESET_HOLD_CYCLES := 0;
+  signal cold_reset      : std_logic := '0';
 
   signal vga_hs, vga_vs, vga_de : std_logic;
   signal vga_r, vga_b : std_logic_vector(4 downto 0);
@@ -120,11 +127,38 @@ begin
   uart_tx <= mon_uart_tx when mon_active = '1' else dbg_uart_tx;
 
   -- Reset: hold until the PLL locks and the button is released, in the pixel domain.
+  -- A long button press requests a cold reset and keeps the core reset long
+  -- enough for c64_core to scrub 64K RAM + colour RAM.
   process(clk_pix)
   begin
     if rising_edge(clk_pix) then
       key0_sync <= key0_sync(1 downto 0) & key(0);
-      rst_sync  <= rst_sync(1 downto 0) & (pll_lock and key0_sync(2));
+      rst_sync  <= rst_sync(1 downto 0) & (pll_lock and key0_sync(2) and not cold_reset);
+
+      if pll_lock = '0' then
+        reset_press_cnt <= 0;
+        cold_hold_cnt   <= 0;
+        cold_reset      <= '0';
+      elsif key0_sync(2) = '0' then
+        if reset_press_cnt < LONG_RESET_CYCLES then
+          reset_press_cnt <= reset_press_cnt + 1;
+        end if;
+
+        if reset_press_cnt = LONG_RESET_CYCLES - 1 then
+          cold_reset    <= '1';
+          cold_hold_cnt <= COLD_RESET_HOLD_CYCLES;
+        elsif cold_reset = '1' then
+          cold_hold_cnt <= COLD_RESET_HOLD_CYCLES;
+        end if;
+      else
+        reset_press_cnt <= 0;
+        if cold_hold_cnt > 0 then
+          cold_reset    <= '1';
+          cold_hold_cnt <= cold_hold_cnt - 1;
+        else
+          cold_reset <= '0';
+        end if;
+      end if;
     end if;
   end process;
   reset_n <= rst_sync(2);
@@ -156,6 +190,7 @@ begin
     port map (
       clk      => clk_pix,
       reset_n  => reset_n,
+      cold_reset => cold_reset,
       dbg_addr => dbg_addr,
       dbg_we   => dbg_we,
       dbg_do   => dbg_do,

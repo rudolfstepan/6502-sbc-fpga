@@ -3,6 +3,7 @@
 -- Exercises the new bitmap renderer through the real VIC register interface:
 --   * BMM=1, MCM=0: hires bitmap uses screen-RAM nibbles as fg/bg.
 --   * BMM=1, MCM=1: multicolour bitmap maps bit-pairs to bg/screen/colour RAM.
+--   * BMM=0, custom RAM charset selected through $D018.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -33,8 +34,8 @@ architecture sim of tb_c64_vic_graphics_modes is
   signal vga_r, vga_b : std_logic_vector(4 downto 0);
   signal vga_g        : std_logic_vector(5 downto 0);
 
-  signal test_mode : natural range 0 to 1 := 0;
-  signal hi_red, hi_white, mc_green, mc_black : boolean := false;
+  signal test_mode : natural range 0 to 2 := 0;
+  signal hi_red, hi_white, mc_green, mc_black, ram_white, ram_black : boolean := false;
 
   constant TARGET_VC : integer := 44;  -- visible row 0, glyph/bitmap line 2
   constant H_PILL    : integer := 40;
@@ -72,6 +73,10 @@ begin
         else
           vic_data <= x"C0";  -- first multicolour pair = 11, then 00
         end if;
+      elsif test_mode = 2 and a = 16#0400# then
+        vic_data <= x"01";  -- screen code 1, glyph comes from RAM charset $2000
+      elsif test_mode = 2 and a >= 16#2008# and a < 16#2010# then
+        vic_data <= x"80";  -- RAM charset: first hires text pixel set
       elsif a = 16#0400# then
         if test_mode = 0 then
           vic_data <= x"21";  -- hires fg=red, bg=white
@@ -138,6 +143,18 @@ begin
     assert mc_green report "multicolour bitmap did not render colour RAM colour" severity failure;
     assert mc_black report "multicolour bitmap did not render background colour" severity failure;
 
+    -- Text mode with custom charset in RAM at $2000. This is the path used by
+    -- many games for tile graphics (for example Boulder Dash-style screens).
+    test_mode <= 2;
+    write_reg("100000", x"00");  -- $D020 border black
+    write_reg("100001", x"00");  -- $D021 background black
+    write_reg("011000", x"18");  -- $D018 screen=$0400, char=$2000
+    write_reg("010110", x"08");  -- $D016 MCM=0
+    write_reg("010001", x"1B");  -- $D011 text mode, DEN=1
+    wait for 25 ms;
+    assert ram_white report "RAM charset text did not render foreground pixel" severity failure;
+    assert ram_black report "RAM charset text did not render background pixel" severity failure;
+
     report "tb_c64_vic_graphics_modes passed" severity note;
     running <= false;
     wait;
@@ -173,6 +190,14 @@ begin
             end if;
             if vga_r = "00000" and vga_g = "000000" and vga_b = "00000" then
               mc_black <= true;
+            end if;
+            if test_mode = 2 then
+              if vga_r = "11111" and vga_g = "111111" and vga_b = "11111" then
+                ram_white <= true;
+              end if;
+              if vga_r = "00000" and vga_g = "000000" and vga_b = "00000" then
+                ram_black <= true;
+              end if;
             end if;
           end if;
         end if;
