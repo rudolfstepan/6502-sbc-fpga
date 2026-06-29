@@ -57,6 +57,19 @@ This analyzes `rtl/c64/vic_ii.vhd`, runs the existing text-render smoke test
 test checks actual RGB output for hires bitmap, multicolour bitmap, RAM charset
 text, and hires/multicolour sprites, not just register writes or fetch addresses.
 
+### Native C64 Input Tests
+
+Run the focused PS/2 keyboard matrix and joystick-emulation tests:
+
+```bash
+make test-c64-input
+```
+
+This analyzes `rtl/c64/c64_keyboard_matrix.vhd` and checks that numeric keypad
+cursor keys drive C64 joystick port 2 (`$DC00`) active-low: KP8/KP2/KP4/KP6 for
+directions and KP0/KP5 for fire. See [`input-devices.md`](./input-devices.md)
+for the current input-device mapping and limitations.
+
 ### Run Tests with Output
 
 Capture waveforms for analysis:
@@ -217,6 +230,12 @@ The project includes comprehensive test coverage:
 - Models C64 bitmap memory, screen attributes at `$0400`, sprite pointers, sprite data, and colour RAM
 - Verifies the expected C64 palette colours appear on the HDMI RGB output
 - Included in `make test-c64-vic`
+
+**tb_c64_keyboard_matrix_joystick.vhd**
+- Instantiates the native C64 PS/2 keyboard matrix
+- Sends PS/2 Set-2 numeric keypad make/break frames
+- Verifies joystick port 2 bits on CIA1 `$DC00` go active-low and return idle-high
+- Included in `make test-c64-input`
 
 ## Test Structure
 

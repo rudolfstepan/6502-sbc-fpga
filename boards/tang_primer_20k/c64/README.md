@@ -184,6 +184,21 @@ has an independent read port for the VIC pixel pipeline.
 ### IRQ/NMI
 CIA1 IRQ + VIC raster IRQ -> CPU IRQ. CIA2 IRQ + RESTORE key -> CPU NMI.
 
+### Keyboard and joystick
+
+The PS/2 keyboard drives the C64 CIA1 keyboard matrix. The numeric keypad cursor
+legends also emulate C64 joystick port 2 (`$DC00`, active low), which is the
+default port for many games. Full implementation notes live in
+[`docs/input-devices.md`](../../../docs/input-devices.md).
+
+| PS/2 numeric keypad | C64 joystick port 2 |
+| --- | --- |
+| KP8 | Up |
+| KP2 | Down |
+| KP4 | Left |
+| KP6 | Right |
+| KP0 or KP5 | Fire |
+
 ### Native VIC-II graphics
 
 The native C64 `vic_ii` renders into the same CEA-861 720x480p HDMI timing as

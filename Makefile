@@ -60,8 +60,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
-        sid-disks reist adventure-rom multipart-d64 test-c64-vic c64-graphics-test-prg \
-        c64-sprite-test-prg c64-sid-prgs
+        sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
+        c64-graphics-test-prg c64-sprite-test-prg c64-sid-prgs
 
 ## ============================================================================
 ## Simulation targets
@@ -77,6 +77,12 @@ test-c64-vic:
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_display $(GHDL_RUN_FLAGS) --stop-time=20ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_c64_vic_graphics_modes
 	$(GHDL) -r $(GHDL_FLAGS) tb_c64_vic_graphics_modes $(GHDL_RUN_FLAGS) --stop-time=140ms
+
+test-c64-input:
+	$(GHDL) -a $(GHDL_FLAGS) rtl/c64/c64_keyboard_matrix.vhd \
+	  sim/tb/tb_c64_keyboard_matrix_joystick.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_c64_keyboard_matrix_joystick
+	$(GHDL) -r $(GHDL_FLAGS) tb_c64_keyboard_matrix_joystick $(GHDL_RUN_FLAGS)
 
 c64-graphics-test-prg:
 	$(CA65) --cpu 6502 -o roms/test.o sw/c64_vic_graphics_test.s

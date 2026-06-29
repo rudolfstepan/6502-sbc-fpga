@@ -22,6 +22,10 @@
 --   PA5   +     P     L      -     .      :     @     ,
 --   PA6   pound *     ;      HOME  RSHIFT =     ^     /
 --   PA7   1     <-    CTRL   2     SPACE  C=    Q     RUN/STOP
+--
+-- Joystick emulation: the otherwise unused numeric keypad cursor keys drive
+-- C64 joystick port 2 on CIA-1 PRA ($DC00), active low:
+--   KP8=up, KP2=down, KP4=left, KP6=right, KP0/KP5=fire.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -68,6 +72,13 @@ architecture rtl of c64_keyboard_matrix is
   signal down : row_t := (others => (others => '0'));
 
   signal restore_down : std_logic := '0';
+  signal joy2_up_down    : std_logic := '0';
+  signal joy2_down_down  : std_logic := '0';
+  signal joy2_left_down  : std_logic := '0';
+  signal joy2_right_down : std_logic := '0';
+  signal joy2_fire0_down : std_logic := '0';
+  signal joy2_fire5_down : std_logic := '0';
+  signal joy2_n          : std_logic_vector(4 downto 0);
 
   -- Decode a (non-extended) Set-2 make code to a matrix position.
   -- Returns row(2:0) & col(2:0) in bits 5:0, and valid in bit 6.
@@ -166,6 +177,31 @@ architecture rtl of c64_keyboard_matrix is
     return r;
   end function;
 
+  -- Non-extended PS/2 Set-2 numeric keypad codes. With Num Lock off, most PS/2
+  -- keyboards send these for the keypad cursor legends; the separate cursor
+  -- cluster sends E0-prefixed codes and remains mapped to C64 cursor keys.
+  procedure update_joy2(
+    signal up_down    : out std_logic;
+    signal down_down  : out std_logic;
+    signal left_down  : out std_logic;
+    signal right_down : out std_logic;
+    signal fire0_down : out std_logic;
+    signal fire5_down : out std_logic;
+    constant code     : in  std_logic_vector(7 downto 0);
+    constant pressed  : in  std_logic
+  ) is
+  begin
+    case code is
+      when x"75" => up_down    <= pressed; -- keypad 8
+      when x"72" => down_down  <= pressed; -- keypad 2
+      when x"6B" => left_down  <= pressed; -- keypad 4
+      when x"74" => right_down <= pressed; -- keypad 6
+      when x"70" => fire0_down <= pressed; -- keypad 0
+      when x"73" => fire5_down <= pressed; -- keypad 5
+      when others => null;
+    end case;
+  end procedure;
+
 begin
   -- PS/2 clock synchroniser (ps2_clk is an asynchronous open-collector input).
   -- ps2_data is sampled raw at the (synchronised) clock falling edge -- the known-
@@ -213,6 +249,9 @@ begin
       if reset_n = '0' then
         down <= (others => (others => '0'));
         is_break <= '0'; is_ext <= '0'; restore_down <= '0';
+        joy2_up_down <= '0'; joy2_down_down <= '0';
+        joy2_left_down <= '0'; joy2_right_down <= '0';
+        joy2_fire0_down <= '0'; joy2_fire5_down <= '0';
       elsif byte_rdy = '1' then
         if rx_byte = x"F0" then
           is_break <= '1';
@@ -223,6 +262,11 @@ begin
           if is_ext = '1' and rx_byte = x"7D" then
             restore_down <= not is_break;
           else
+            if is_ext = '0' then
+              update_joy2(joy2_up_down, joy2_down_down, joy2_left_down,
+                          joy2_right_down, joy2_fire0_down, joy2_fire5_down,
+                          rx_byte, not is_break);
+            end if;
             if is_ext = '1' then
               rc := map_ext(rx_byte);
             else
@@ -242,11 +286,16 @@ begin
   end process;
 
   restore_n <= '0' when restore_down = '1' else '1';
+  joy2_n <= (not joy2_fire0_down and not joy2_fire5_down) &
+            not joy2_right_down &
+            not joy2_left_down &
+            not joy2_down_down &
+            not joy2_up_down;
 
   -- Matrix read: a pin bit is pulled low when a pressed key connects it to a low
   -- pin on the opposite port. With no pressed key, the CIA reads back its own pin
   -- level (outputs included), matching the MiST/MiSTer CIA top-level feedback.
-  process(down, col_drive, row_drive)
+  process(down, col_drive, row_drive, joy2_n)
     variable cv : std_logic_vector(7 downto 0);
     variable rv : std_logic_vector(7 downto 0);
   begin
@@ -264,6 +313,7 @@ begin
         end if;
       end loop;
     end loop;
+    cv(4 downto 0) := cv(4 downto 0) and joy2_n;
     col_read <= cv;
     row_read <= rv;
   end process;

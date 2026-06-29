@@ -13,6 +13,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[Component Reference](./05_COMPONENTS.md)** - Detailed specs for major components
 - **[VIC Video Controller](./VIC.md)** - Text + bitmap modes (incl. 320×240 16-colour), `$9000` register map, MODE bits, `$6000` framebuffer window/banking, palette, bus-stealing
 - **[Sound Chip](./SOUND.md)** - Sound chips + PT8211 DAC: bring-up voice, 4-voice synth, and the native MOS 6581 SID (filter, ADSR, sync/ring) with `.sid` ROM wrapping
+- **[Input Devices](./input-devices.md)** - PS/2 keyboard matrix, RESTORE/NMI, and numeric-keypad joystick-port-2 emulation for the native C64 core
 - **[Math Coprocessor (FPU)](./FPU.md)** - Hardware fixed-point multiplier ($88B0): register map, 8.24 format, and the packed-RGB222 Mandelbrot demo
 - **[REIST Benchmark Engine](./REIST.md)** - Centered-remainder arithmetic on FPGA vs. the Gowin divider IP: engine, area/Fmax probes, hardware results; hardware counterpart to the [reist-crypto-bench](https://github.com/rudolfstepan/reist-crypto-bench) CPU suite
 - **[Simulation](./06_SIMULATION.md)** - Running and analyzing simulations
@@ -43,6 +44,7 @@ fpga/
 │   ├── 06_SIMULATION.md    Simulation guide
 │   ├── 07_DEVELOPMENT.md   Development guide
 │   ├── UART_MONITOR.md     UART hardware monitor and ROM upload
+│   ├── input-devices.md    PS/2 keyboard matrix and C64 joystick emulation
 │   ├── SPLIT_ROM_SID_UPDATE.md Split ROM and native SID migration
 │   ├── SD_BOOTLOADER_PLAN.md SD-card shadow-ROM boot flow
 │   ├── FPGA_TOOLS_GUI.md   Graphical launcher for Python tools

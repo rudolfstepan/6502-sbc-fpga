@@ -155,6 +155,7 @@ The project includes a Makefile with standard targets:
 ```bash
 make test                  # Run all default SBC tests
 make test-c64-vic          # Run focused native C64 VIC-II graphics tests
+make test-c64-input        # Run PS/2 keyboard matrix + joystick input tests
 make c64-graphics-test-prg # Build roms/test.prg for UART upload to the C64 core
 make c64-sprite-test-prg   # Build roms/sprite_test.prg for sprite testing
 make c64-sid-prgs          # Build RUN-loadable C64 SID PRGs in roms/c64_uart_sid
