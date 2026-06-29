@@ -322,9 +322,11 @@ begin
             if nv >= V_BORD and nv < TV_END then
               sy := (nv - V_BORD) / 2;
               nr := sy / 8;
-              if ((nv - V_BORD) mod 2) = 0 then
-                fetch_needed := '1';
-              end if;
+              -- Keep BA/fetch cadence identical to the pre-scroll-compat VIC:
+              -- the C64 core's single-port RAM arbiter is sensitive to long
+              -- changes in steal timing, even if the doubled HDMI lines would
+              -- visually need only every other fetch.
+              fetch_needed := '1';
             else
               sy := 0;
               nr := 0;

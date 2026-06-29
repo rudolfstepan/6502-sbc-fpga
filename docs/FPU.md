@@ -28,7 +28,7 @@ Files:
 | Output | the 64-bit product **and** an arithmetic-right-shifted result |
 | Default format | **8.24** signed fixed-point (`SHIFT = 24`), range ≈ −128.0 … +127.999999 |
 | Shift | writable register (0…63), so the same unit serves any Q-format (e.g. 4.12 with `SHIFT = 12`) |
-| Address window | SBC: `$88B0–$88BF` (16 bytes), device `DEV_MATH`; C64: `$DF00-$DF0F` in I/O2 |
+| Address window | SBC: `$88B0–$88BF` (16 bytes), device `DEV_MATH`; C64 `$DF00-$DF0F` is currently disabled in the stable C64 bitstream |
 | Latency | 2 clocks (registered multiply + registered shift); no CPU wait states |
 | FPGA cost | ~4 DSP18 macros (of 48 on the GW2A-18) + a 64-bit shifter and a few registers |
 
@@ -78,9 +78,15 @@ so other formats work by changing one register (e.g. `SHIFT = 12` gives 4.12).
 
 ## Register map
 
-The SBC build maps the 16-byte window at `$88B0`. The C64 core maps the same
-register layout at `$DF00`, using the otherwise-free I/O2 expansion area while
-leaving `$DE00/$DE01` for the virtual-1541 UART.
+The SBC build maps the 16-byte window at `$88B0`. Experimental C64 builds use
+the same register layout at `$DF00`, using the otherwise-free I/O2 expansion
+area while leaving `$DE00/$DE01` for the virtual-1541 UART.
+
+The stable Tang C64 bitstream currently keeps `$DF00-$DF0F` disabled. Hardware
+testing showed that adding the coprocessor read path to the C64 I/O mux can
+destabilize the BASIC/KERNAL timing path and cause freezes after BASIC errors.
+The C64 PRGs are retained as experimental assets for a later timing-clean
+integration pass.
 
 | Offset | SBC addr | C64 addr | Write | Read |
 | --- | --- | --- | --- | --- |
