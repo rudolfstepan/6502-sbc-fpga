@@ -17,7 +17,7 @@ Target: Sipeed Tang Primer 20K (Gowin GW2A-LV18PG256C8/I7)
 
 ## Toolchain
 
-- **Synthesis/P&R**: GowinEDA (GOWIN FPGA Designer) ≥ 1.9.9
+- **Synthesis/P&R**: GowinEDA (GOWIN FPGA Designer) ≥ 1.9.12
 - **Constraints**: CST format (`constraints/*.cst`)
 - **Programming**: `openFPGALoader` or GowinEDA Programmer
 
@@ -325,11 +325,12 @@ described under *Optional DDR3* before P&R.
 
 | Tool              | Purpose                     | Notes                                    |
 |-------------------|-----------------------------|------------------------------------------|
-| GowinEDA >= 1.9.8 | Synthesis + P&R + bitstream | `gw_sh` must be on `PATH`               |
+| GowinEDA >= 1.9.12 | Synthesis + P&R + bitstream | `gw_sh` must be on `PATH`               |
 | openFPGALoader    | Flash bitstream to board    | Optional; GowinEDA Programmer also works |
 
-On Windows, add `C:\Gowin\Gowin_V1.9.8.08\IDE\bin` to your `PATH` or set
-`GOWIN=C:/Gowin/Gowin_V1.9.8.08/IDE/bin/gw_sh.exe` when invoking make.
+On Windows, add the normal GowinEDA install's `IDE\bin` directory to your
+`PATH`, for example `C:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin`, or set
+`GOWIN=C:/Gowin/Gowin_V1.9.12.03_x64/IDE/bin/gw_sh.exe` when invoking make.
 
 ### Building the bitstream
 

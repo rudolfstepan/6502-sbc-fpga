@@ -44,6 +44,19 @@ ghdl -e --std=08 --ieee=synopsys tb_bus_decode
 ghdl -r --std=08 --ieee=synopsys tb_bus_decode --ieee-asserts=disable-at-0
 ```
 
+### Native C64 VIC-II Graphics Tests
+
+Run the focused native C64 video tests without the full SBC suite:
+
+```bash
+make test-c64-vic
+```
+
+This analyzes `rtl/c64/vic_ii.vhd`, runs the existing text-render smoke test
+(`tb_vic_display`), and then runs `tb_c64_vic_graphics_modes`. The graphics-mode
+test checks actual RGB output for hires bitmap and multicolour bitmap, not just
+register writes or fetch addresses.
+
 ### Run Tests with Output
 
 Capture waveforms for analysis:
@@ -189,6 +202,21 @@ The project includes comprehensive test coverage:
 - `STA ($zp),Y` instruction to VIC text RAM
 - Known issue: T65 addressing mode not fully integrated
 - Kept separate from main test suite for future work
+
+#### Native C64 Tests
+
+**tb_vic_display.vhd**
+- Instantiates the native C64 `vic_ii`
+- Feeds a known `HELLO` text row through screen RAM, colour RAM, and CHARGEN
+- Captures rendered RGB pixels on a visible scanline
+- Included in `make test-c64-vic`
+
+**tb_c64_vic_graphics_modes.vhd**
+- Instantiates the native C64 `vic_ii`
+- Programs the real VIC register interface for hires bitmap and multicolour bitmap
+- Models C64 bitmap memory at `$2000`, screen attributes at `$0400`, and colour RAM
+- Verifies the expected C64 palette colours appear on the HDMI RGB output
+- Included in `make test-c64-vic`
 
 ## Test Structure
 

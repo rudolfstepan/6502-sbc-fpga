@@ -22,6 +22,7 @@ and [docs/FPGA_TOOLS_GUI.md](../docs/FPGA_TOOLS_GUI.md) for details.
 | File | Description |
 | --- | --- |
 | `upload_demo.rom` | Bring-up demo: LED blink + VGA/HDMI text + UART banner. No arguments needed. |
+| `test.prg` | Native C64 VIC-II graphics test PRG for `tools/c64_uart_prg_loader.py`; loads at `$0801`, run with `RUN`, then press any key to cycle text, hires bitmap, multicolour bitmap, ECM text, and multicolour text. Build with `make c64-graphics-test-prg`. |
 | `soundtest.rom` | Legacy 4-voice sound-chip demo (each waveform, an ADSR swell, a 4-voice chord). Uses the old contiguous `$C000–$FFFF` layout — not for the current split map. |
 | `mandelbrot_bitmap.rom` | Standalone Mandelbrot renderer using software fixed-point multiply (split-ROM). |
 | `mandelbrot_bitmap.img` | SD boot image of the Mandelbrot bitmap ROM. |

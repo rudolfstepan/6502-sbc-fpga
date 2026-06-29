@@ -2,10 +2,14 @@
 """
 Load a C64 .prg through the FPGA UART monitor.
 
-The Tang C64 bitstream enters the monitor when the PC sends any byte on the
-CH340 UART. This tool sends a wake-up CR, uploads the PRG payload to the load
-address stored in the first two bytes, fixes BASIC pointers for normal $0801
-programs, then sends "G" without an address so the C64 resumes at READY.
+The Tang C64 bitstream enters the monitor when the PC sends the monitor magic
+byte on the CH340 UART. This tool sends that wake-up byte, uploads the PRG
+payload to the load address stored in the first two bytes, fixes BASIC pointers
+for normal $0801 programs, then sends "G" without an address so the C64 resumes
+at READY.
+
+The monitor has no per-line ACK and no deep UART receive FIFO while it writes
+C64 RAM, so the default pacing is deliberately conservative.
 
 Example:
   python tools/c64_uart_prg_loader.py demo.prg --port COM15
@@ -21,7 +25,18 @@ from pathlib import Path
 
 DEFAULT_PORT = "COM15"
 DEFAULT_BAUD = 115200
-PROMPTS = (b"> ", b">", b". ", b".")
+DEFAULT_WAKE_BYTE = 0xA5
+DEFAULT_BYTES_PER_LINE = 1
+DEFAULT_LINE_DELAY = 0.010
+DEFAULT_COMMAND_DELAY = 0.08
+DEFAULT_WAIT_LOAD = 1.0
+DEFAULT_WAIT_DONE = 1.5
+COMMAND_PROMPTS = (b". ",)
+LOAD_PROMPTS = (b"> ",)
+MONITOR_BANNER = b"FPGA MONITOR"
+MONITOR_HELP = b"H for help"
+MONITOR_USB_DIAG = b"USB CON="
+MONITOR_ERROR_PROMPT = b"\r\n?\r\n. "
 
 
 def require_pyserial():
@@ -53,14 +68,70 @@ def write_line(port, text: str, delay: float) -> None:
         time.sleep(delay)
 
 
-def wait_for_prompt(port, timeout: float) -> bytes:
+def parse_byte(value: str) -> int:
+    try:
+        byte = int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid byte value: {value}") from exc
+    if byte < 0 or byte > 0xFF:
+        raise argparse.ArgumentTypeError("byte value must be in range 0..255")
+    return byte
+
+
+def has_prompt(data: bytes, prompts: tuple[bytes, ...]) -> bool:
+    for prompt in prompts:
+        start = 0
+        while True:
+            pos = data.find(prompt, start)
+            if pos < 0:
+                break
+            if pos == 0 or data[pos - 1] in (0x0A, 0x0D):
+                return True
+            start = pos + 1
+    return False
+
+
+def has_monitor_ready(data: bytes) -> bool:
+    if (
+        MONITOR_BANNER in data
+        or MONITOR_HELP in data
+        or MONITOR_USB_DIAG in data
+    ) and has_prompt(data, COMMAND_PROMPTS):
+        return True
+    if MONITOR_ERROR_PROMPT in data or data.startswith(MONITOR_ERROR_PROMPT[2:]):
+        return True
+    return False
+
+
+def response_preview(data: bytes, limit: int = 500) -> str:
+    text = data.decode("ascii", errors="replace").strip()
+    if len(text) > limit:
+        text = text[-limit:]
+    return text
+
+
+def wait_for_prompt(port, timeout: float, prompts: tuple[bytes, ...]) -> bytes:
     deadline = time.monotonic() + timeout
     out = bytearray()
     while time.monotonic() < deadline:
         waiting = getattr(port, "in_waiting", 0)
         if waiting:
             out.extend(port.read(waiting))
-            if any(prompt in out or out.endswith(prompt) for prompt in PROMPTS):
+            if has_prompt(out, prompts):
+                break
+        else:
+            time.sleep(0.02)
+    return bytes(out)
+
+
+def wait_for_monitor_ready(port, timeout: float) -> bytes:
+    deadline = time.monotonic() + timeout
+    out = bytearray()
+    while time.monotonic() < deadline:
+        waiting = getattr(port, "in_waiting", 0)
+        if waiting:
+            out.extend(port.read(waiting))
+            if has_monitor_ready(out):
                 break
         else:
             time.sleep(0.02)
@@ -72,10 +143,10 @@ def enter_monitor(port, args: argparse.Namespace) -> bytes:
     for attempt in range(args.wake_retries):
         if args.verbose:
             print(f"wake attempt {attempt + 1}/{args.wake_retries}")
-        port.write(b"\r")
+        port.write(bytes([args.wake_byte]) + b"\r")
         port.flush()
-        out.extend(wait_for_prompt(port, args.wait_prompt))
-        if any(prompt in out for prompt in PROMPTS):
+        out.extend(wait_for_monitor_ready(port, args.wait_prompt))
+        if has_monitor_ready(out):
             return bytes(out)
         time.sleep(args.wake_gap)
     return bytes(out)
@@ -97,10 +168,14 @@ def hex_lines(data: bytes, bytes_per_line: int) -> list[str]:
 def upload_bytes(port, address: int, data: bytes, args: argparse.Namespace, label: str) -> None:
     print(f"Uploading {label}: ${address:04X}-${address + len(data) - 1:04X} ({len(data)} bytes)")
     write_line(port, f"L {address:04X}", args.command_delay)
-    response = read_some(port, args.wait_load)
+    response = wait_for_prompt(port, args.wait_load, LOAD_PROMPTS)
     if args.verbose and response:
         print(response.decode("ascii", errors="replace"), end="")
     check_monitor_response(response, f"L ${address:04X}")
+    if not has_prompt(response, LOAD_PROMPTS):
+        preview = response_preview(response)
+        detail = f"\nReceived after L command:\n{preview}" if preview else ""
+        raise SystemExit(f"ERROR: monitor did not enter load mode at ${address:04X}" + detail)
 
     sent = 0
     for line in hex_lines(data, args.bytes_per_line):
@@ -110,7 +185,7 @@ def upload_bytes(port, address: int, data: bytes, args: argparse.Namespace, labe
             print(f"  {sent:5d}/{len(data)} bytes")
 
     write_line(port, ".", args.command_delay)
-    response = wait_for_prompt(port, args.wait_done)
+    response = wait_for_prompt(port, args.wait_done, COMMAND_PROMPTS)
     if args.verbose and response:
         print(response.decode("ascii", errors="replace"), end="")
     check_monitor_response(response, f"upload {label}")
@@ -160,12 +235,11 @@ def upload(args: argparse.Namespace) -> None:
         banner = enter_monitor(port, args)
         if args.verbose and banner:
             print(banner.decode("ascii", errors="replace"), end="")
-        if not any(prompt in banner for prompt in PROMPTS):
-            preview = banner.decode("ascii", errors="replace").strip()
-            if len(preview) > 500:
-                preview = preview[-500:]
+        if not has_monitor_ready(banner):
+            preview = response_preview(banner)
             detail = f"\nReceived while waiting:\n{preview}" if preview else ""
             raise SystemExit("ERROR: no monitor prompt received after wake-up" + detail)
+        port.reset_input_buffer()
 
         upload_bytes(port, load_addr, data, args, image.name)
 
@@ -189,15 +263,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("prg", help="C64 .prg file")
     parser.add_argument("--port", default=DEFAULT_PORT, help=f"serial port, default {DEFAULT_PORT}")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"baud rate, default {DEFAULT_BAUD}")
-    parser.add_argument("--bytes-per-line", type=int, default=32, help="hex bytes per monitor line")
-    parser.add_argument("--line-delay", type=float, default=0.005, help="delay after each data line")
-    parser.add_argument("--command-delay", type=float, default=0.05, help="delay after monitor commands")
+    parser.add_argument(
+        "--wake-byte",
+        type=parse_byte,
+        default=DEFAULT_WAKE_BYTE,
+        help=f"monitor wake magic byte, default 0x{DEFAULT_WAKE_BYTE:02X}",
+    )
+    parser.add_argument(
+        "--bytes-per-line",
+        type=int,
+        default=DEFAULT_BYTES_PER_LINE,
+        help=f"hex bytes per monitor line, default {DEFAULT_BYTES_PER_LINE} for reliable C64 uploads",
+    )
+    parser.add_argument(
+        "--line-delay",
+        type=float,
+        default=DEFAULT_LINE_DELAY,
+        help=f"delay after each data line, default {DEFAULT_LINE_DELAY}",
+    )
+    parser.add_argument(
+        "--command-delay",
+        type=float,
+        default=DEFAULT_COMMAND_DELAY,
+        help=f"delay after monitor commands, default {DEFAULT_COMMAND_DELAY}",
+    )
     parser.add_argument("--settle", type=float, default=0.2, help="delay after opening the port")
     parser.add_argument("--wait-prompt", type=float, default=2.0, help="seconds to wait for monitor prompt")
-    parser.add_argument("--wake-retries", type=int, default=5, help="wake-up CR retries before failing")
+    parser.add_argument("--wake-retries", type=int, default=5, help="wake magic byte retries before failing")
     parser.add_argument("--wake-gap", type=float, default=0.15, help="delay between wake-up retries")
-    parser.add_argument("--wait-load", type=float, default=0.4, help="seconds to read after L command")
-    parser.add_argument("--wait-done", type=float, default=1.0, help="seconds to wait after upload or G")
+    parser.add_argument("--wait-load", type=float, default=DEFAULT_WAIT_LOAD, help="seconds to wait for load prompt")
+    parser.add_argument("--wait-done", type=float, default=DEFAULT_WAIT_DONE, help="seconds to wait after upload or G")
     parser.add_argument("--progress", type=int, default=1024, help="progress interval in bytes, 0 disables")
     parser.add_argument("--basic", action="store_true", help="force BASIC pointer patch")
     parser.add_argument(

@@ -26,6 +26,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[Roadmap](./roadmap.md)** - Project roadmap and milestones
 - **[PIX16 Build Guide](../boards/pix16/README.md)** - Xilinx ISE build and programming guide for the PIX16 Spartan-6 board
 - **[Tang Primer 20K Guide](../boards/tang_primer_20k/README.md)** - Gowin build notes, CH340 UART, HDMI boot screen, and on-board microSD wiring
+- **[Native C64 on Tang Primer 20K](../boards/tang_primer_20k/c64/README.md)** - Original C64 ROM boot, VIC-II text/bitmap modes, UART PRG upload, and C64-specific Gowin build
 - **[Hardware Support](./HARDWARE_SUPPORT.md)** - PIX16 board pinout, target device, and VGA smoke-test notes
 
 ## Project Structure
@@ -49,7 +50,7 @@ fpga/
 │   └── roadmap.md          Project roadmap
 ├── boards/
 │   ├── pix16/              PIX16 Spartan-6 (constraints, scripts, project, bitstreams)
-│   └── tang_primer_20k/    Gowin GW2A-18 (HDMI, CH340 UART, on-board SD boot)
+│   └── tang_primer_20k/    Gowin GW2A-18 (SBC plus native C64 subproject)
 ├── rtl/core/               Board-agnostic VHDL
 │   ├── cpu/                CPU adapters
 │   ├── mem/                Memory (RAM/ROM)

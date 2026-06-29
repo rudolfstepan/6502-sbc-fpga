@@ -34,14 +34,17 @@ entity tang20k_c64_top is
     -- block below, the led pins in the .cst, and dbg_cia1_irq in c64_core.
     -- led     : out std_logic_vector(1 downto 0);
 
-    -- CH340 USB-UART. It streams c64_dbg_uart while idle; sending any byte from
-    -- the PC enters the UART monitor/loader, which owns the link until "G".
+    -- CH340 USB-UART. It streams c64_dbg_uart while idle; sending the monitor
+    -- magic byte from the PC enters the UART monitor/loader, which owns the
+    -- link until "G".
     uart_tx    : out std_logic;
     uart_rx    : in  std_logic
   );
 end entity;
 
 architecture rtl of tang20k_c64_top is
+  constant MONITOR_MAGIC : std_logic_vector(7 downto 0) := x"A5";
+
   signal clk_pix  : std_logic;
   signal clk_sys  : std_logic;
   signal pll_lock : std_logic;
@@ -221,9 +224,12 @@ begin
       busy    => mon_tx_busy
     );
 
-  -- A received byte acts as a soft monitor button. The first byte is consumed as
-  -- wake-up; upload tools send an initial CR, then wait for the monitor prompt.
-  mon_enter <= '1' when mon_active = '0' and mon_rx_valid = '1' else '0';
+  -- A magic byte acts as a soft monitor button. The wake byte is consumed by
+  -- the enter edge; upload tools then wait for the monitor banner/prompt before
+  -- sending commands. Other received bytes are ignored while the monitor is idle
+  -- so C64 debug output cannot be mistaken for a monitor session.
+  mon_enter <= '1' when mon_active = '0' and mon_rx_valid = '1' and
+                        mon_rx_data = MONITOR_MAGIC else '0';
 
   monitor_i : entity work.uart_debug_monitor
     generic map (FLAT_64K => true)

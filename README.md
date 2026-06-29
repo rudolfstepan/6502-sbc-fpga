@@ -120,6 +120,28 @@ USB HID keyboard input via the nand2mario `usb_hid_host` bit-bang core was
 attempted but USB enumeration did not complete reliably (see
 `boards/tang_primer_20k/README.md` for details). PS/2 was adopted instead.
 
+### Native C64 core on Tang Primer 20K
+
+A separate native C64 project lives under `boards/tang_primer_20k/c64/` and
+`rtl/c64/`. It runs the original BASIC/KERNAL/CHARGEN ROMs, uses the same HDMI
+and audio board plumbing, and keeps the C64-specific PLA, 6510 port, CIAs,
+colour RAM, SID, keyboard matrix, and VIC-II isolated from the SBC design.
+
+The native C64 VIC-II currently supports text, ECM text, multicolour text, hires
+bitmap, multicolour bitmap, raster readback, raster IRQ, and `$D020-$D024`
+colour registers. Sprites, collisions, badlines, and cycle-exact effects remain
+future work. A hardware smoke PRG can be built and uploaded over the C64 UART
+monitor:
+
+```powershell
+make c64-graphics-test-prg
+python tools/c64_uart_prg_loader.py roms/test.prg --port COM15
+```
+
+Then type `RUN` on the C64 and press any key to step through the graphics modes.
+See [Native C64 on Tang Primer 20K](boards/tang_primer_20k/c64/README.md) for
+the build flow, register notes, and focused `make test-c64-vic` simulation.
+
 ## Current Tests
 
 Run from this directory:
@@ -145,6 +167,7 @@ The current GHDL tests cover:
   the `$FFFE-$FFFF` vector
 - T65 boot smoke test with composed `kernel.rom + msbasic.rom`, verifying reset
   fetch, VIA DDRA init, and kernel screen-pointer setup
+- Native C64 VIC-II text/bitmap graphics smoke tests via `make test-c64-vic`
 
 ## CPU Core
 

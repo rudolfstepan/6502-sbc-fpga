@@ -4,7 +4,7 @@
 --   cpu6510  -- T65 + processor port ($00/$01) for ROM banking
 --   64K DRAM -- single-port BSRAM, time-shared with the VIC steal bus
 --   ROMs     -- original BASIC/KERNAL/CHARGEN (rtl/c64/c64_roms.vhd)
---   vic_ii   -- text-mode video + raster IRQ (HDMI-ready RGB565)
+--   vic_ii   -- text/bitmap video + raster IRQ (HDMI-ready RGB565)
 --   colour_ram, 2x cia6526_full, sid6581, keyboard matrix
 --
 -- Banking is the PLA decode from c64_pkg (unexpanded machine: GAME=EXROM=1).

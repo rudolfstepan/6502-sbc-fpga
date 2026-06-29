@@ -23,7 +23,8 @@ For actual FPGA implementation, you'll need vendor tools:
 - **Xilinx Vivado** (Xilinx FPGA targets)
 - **Intel Quartus** (Intel Altera FPGA targets)
 - **Lattice Diamond** (Lattice FPGA targets)
-- **GowinEDA / GOWIN FPGA Designer** (Tang Primer 20K / GW2A targets)
+- **GowinEDA / GOWIN FPGA Designer** (Tang Primer 20K / GW2A targets; use the
+  normal x64 install, for example `C:\Gowin\Gowin_V1.9.12.03_x64`)
 - **Open Source**: Project Trellis, nextpnr (for open source flows)
 
 ## Building the Project
@@ -152,9 +153,11 @@ python tools/bin_to_vhdl_hex.py --size 0x4000 \
 The project includes a Makefile with standard targets:
 
 ```bash
-make test       # Run all tests (default)
-make clean      # Remove generated files
-make help       # Show available targets
+make test                  # Run all default SBC tests
+make test-c64-vic          # Run focused native C64 VIC-II graphics tests
+make c64-graphics-test-prg # Build roms/test.prg for UART upload to the C64 core
+make clean                 # Remove generated files
+make help                  # Show available targets, if supported by your make
 ```
 
 ### Makefile Variables
@@ -164,6 +167,33 @@ Override variables when running make:
 ```bash
 make test GHDL=/path/to/ghdl     # Specify GHDL path
 make clean                        # Clean working directory
+```
+
+### Native C64 graphics PRG
+
+The native C64 core has a small UART-uploadable graphics test. It builds a
+standard C64 PRG with load address `$0801` and a BASIC `SYS 2064` stub:
+
+```powershell
+make c64-graphics-test-prg
+python tools/c64_uart_prg_loader.py roms/test.prg --port COM15
+```
+
+The PRG loader first sends monitor wake byte `0xA5`; the C64 board top ignores
+all other received bytes while the monitor is idle, so ordinary C64 debug output
+cannot be mistaken for a loader prompt. Uploads are then paced for the monitor:
+one data byte per line with a short delay. That avoids dropped UART characters
+while the monitor waits for safe C64 RAM writes. For stubborn boards or older
+loader copies, use `--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.02`.
+
+After upload, type `RUN` on the C64. The program cycles through text, hires
+bitmap, multicolour bitmap, ECM text, and multicolour text; press any key for the
+next screen.
+
+The same VIC-II renderer can be checked without hardware:
+
+```powershell
+make test-c64-vic
 ```
 
 ## VHDL Compilation Flags
