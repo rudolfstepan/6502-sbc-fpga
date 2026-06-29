@@ -2,8 +2,8 @@
 """
 Load a C64 .prg through the FPGA UART monitor.
 
-The Tang C64 bitstream enters the monitor when the PC sends the monitor magic
-byte on the CH340 UART. This tool sends that wake-up byte, uploads the PRG
+The Tang C64 bitstream enters the monitor when the PC sends the monitor wake
+sequence on the CH340 UART. This tool sends that wake-up sequence, uploads the PRG
 payload to the load address stored in the first two bytes, fixes BASIC pointers
 for normal $0801 programs, then sends "G" without an address so the C64 resumes
 at READY.
@@ -32,7 +32,7 @@ from pathlib import Path
 
 DEFAULT_PORT = "COM15"
 DEFAULT_BAUD = 115200
-DEFAULT_WAKE_BYTE = 0xA5
+DEFAULT_WAKE_SEQUENCE = bytes([0xA5, 0x5A, 0xC3, 0x3C])
 DEFAULT_BYTES_PER_LINE = 16
 DEFAULT_LINE_DELAY = 0.0
 SAFE_BYTES_PER_LINE = 1
@@ -87,6 +87,20 @@ def parse_byte(value: str) -> int:
     if byte < 0 or byte > 0xFF:
         raise argparse.ArgumentTypeError("byte value must be in range 0..255")
     return byte
+
+
+def parse_wake_sequence(value: str) -> bytes:
+    cleaned = value.replace(",", " ").replace(":", " ").replace("-", " ")
+    parts = [part for part in cleaned.split() if part]
+    if not parts:
+        raise argparse.ArgumentTypeError("wake sequence must not be empty")
+    try:
+        data = bytes(parse_byte(part) for part in parts)
+    except argparse.ArgumentTypeError:
+        raise
+    except Exception as exc:
+        raise argparse.ArgumentTypeError(f"invalid wake sequence: {value}") from exc
+    return data
 
 
 def has_prompt(data: bytes, prompts: tuple[bytes, ...]) -> bool:
@@ -154,7 +168,7 @@ def enter_monitor(port, args: argparse.Namespace) -> bytes:
     for attempt in range(args.wake_retries):
         if args.verbose:
             print(f"wake attempt {attempt + 1}/{args.wake_retries}")
-        port.write(bytes([args.wake_byte]) + b"\r")
+        port.write(args.wake_sequence + b"\r")
         port.flush()
         out.extend(wait_for_monitor_ready(port, args.wait_prompt))
         if has_monitor_ready(out):
@@ -371,10 +385,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", default=DEFAULT_PORT, help=f"serial port, default {DEFAULT_PORT}")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help=f"baud rate, default {DEFAULT_BAUD}")
     parser.add_argument(
+        "--wake-sequence",
+        type=parse_wake_sequence,
+        default=DEFAULT_WAKE_SEQUENCE,
+        help="monitor wake byte sequence, default '0xA5 0x5A 0xC3 0x3C'",
+    )
+    parser.add_argument(
         "--wake-byte",
         type=parse_byte,
-        default=DEFAULT_WAKE_BYTE,
-        help=f"monitor wake magic byte, default 0x{DEFAULT_WAKE_BYTE:02X}",
+        default=None,
+        help="legacy single-byte monitor wake override",
     )
     parser.add_argument(
         "--bytes-per-line",
@@ -401,7 +421,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--settle", type=float, default=0.2, help="delay after opening the port")
     parser.add_argument("--wait-prompt", type=float, default=2.0, help="seconds to wait for monitor prompt")
-    parser.add_argument("--wake-retries", type=int, default=5, help="wake magic byte retries before failing")
+    parser.add_argument("--wake-retries", type=int, default=5, help="wake sequence retries before failing")
     parser.add_argument("--wake-gap", type=float, default=0.15, help="delay between wake-up retries")
     parser.add_argument("--wait-load", type=float, default=DEFAULT_WAIT_LOAD, help="seconds to wait for load prompt")
     parser.add_argument("--wait-done", type=float, default=DEFAULT_WAIT_DONE, help="seconds to wait after upload or G")
@@ -430,6 +450,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.wake_byte is not None:
+        args.wake_sequence = bytes([args.wake_byte])
     if args.safe:
         args.bytes_per_line = SAFE_BYTES_PER_LINE
         args.line_delay = SAFE_LINE_DELAY

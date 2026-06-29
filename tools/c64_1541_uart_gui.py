@@ -14,8 +14,8 @@ Binary UART response frame, PC -> FPGA:
 
 The checksum is the low byte of the sum from CMD through payload.  For quick
 manual tests the same commands are also accepted as newline-terminated ASCII:
-PING, IMAGES, MOUNT <name>, DIR, LOADFIRST, LOAD <name>, SECTOR <track> <sector>,
-STATUS.
+PING, IMAGES, MOUNT <name>, DIR, LOADFIRST, LOADFIRSTCHUNK, LOADCHUNK,
+LOAD <name>, SECTOR <track> <sector>, STATUS.
 """
 
 from __future__ import annotations
@@ -36,8 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 D64_TOOLS = ROOT / "tools" / "d64"
 sys.path.insert(0, str(D64_TOOLS))
 
-from d64_common import D64_35_TRACK_SIZE, SECTOR_SIZE, d64_byte_offset, is_supported_size  # noqa: E402
-from extract_prg import follow_chain  # noqa: E402
+from d64_common import BAM_SECTOR, DIR_TRACK, D64_35_TRACK_SIZE, SECTOR_SIZE, d64_byte_offset, is_supported_size  # noqa: E402
 from list_d64 import disk_name, iter_entries  # noqa: E402
 
 
@@ -50,6 +49,8 @@ CMD_MOUNT = 0x11
 CMD_DIR = 0x12
 CMD_LOAD_FIRST = 0x20
 CMD_LOAD = 0x21
+CMD_LOAD_FIRST_CHUNK = 0x22
+CMD_LOAD_CHUNK = 0x23
 CMD_SECTOR = 0x30
 CMD_STATUS = 0x31
 
@@ -66,6 +67,8 @@ CMD_NAMES = {
     CMD_DIR: "DIR",
     CMD_LOAD_FIRST: "LOADFIRST",
     CMD_LOAD: "LOAD",
+    CMD_LOAD_FIRST_CHUNK: "LOADFIRSTCHUNK",
+    CMD_LOAD_CHUNK: "LOADCHUNK",
     CMD_SECTOR: "SECTOR",
     CMD_STATUS: "STATUS",
 }
@@ -102,6 +105,59 @@ class DirEntry:
     blocks: int
     first_track: int
     first_sector: int
+
+
+def follow_prg_chain(data: bytes, track: int, sector: int) -> bytes:
+    out = bytearray()
+    seen: set[tuple[int, int]] = set()
+    for _ in range(683):
+        if (track, sector) in seen:
+            raise ValueError(f"loop in file chain at T{track}/S{sector}")
+        seen.add((track, sector))
+        off = d64_byte_offset(track, sector)
+        if off == 0xFFFFFFFF:
+            raise ValueError(f"invalid file sector T{track}/S{sector}")
+        sec = data[off : off + SECTOR_SIZE]
+        if len(sec) != SECTOR_SIZE:
+            raise ValueError(f"short file sector T{track}/S{sector}")
+        next_t, next_s = sec[0], sec[1]
+        if next_t == 0:
+            if next_s >= 2:
+                out.extend(sec[2 : next_s + 1])
+            if len(out) < 2:
+                raise ValueError("PRG has no load address")
+            return bytes(out)
+        out.extend(sec[2:])
+        track, sector = next_t, next_s
+    raise ValueError("file chain too long")
+
+
+def decode_c64_name(raw: bytes) -> str:
+    """Decode the KERNAL SETNAM byte string enough for D64 directory matching."""
+    name = raw.strip(b"\x00 \xa0").strip(b'"')
+    chars: list[str] = []
+    for byte in name:
+        if 0x41 <= byte <= 0x5A or 0x30 <= byte <= 0x39 or byte in b"$*?_-.!+":
+            chars.append(chr(byte))
+        elif 0x61 <= byte <= 0x7A:
+            chars.append(chr(byte).upper())
+        elif byte == 0xA0:
+            chars.append(" ")
+    return "".join(chars).strip()
+
+
+def make_basic_prg(lines: list[tuple[int, str]]) -> bytes:
+    addr = 0x0801
+    body = bytearray()
+    for line_no, text in lines:
+        line = text.encode("ascii", errors="replace")
+        next_addr = addr + 4 + len(line) + 1
+        body.extend((next_addr & 0xFF, next_addr >> 8, line_no & 0xFF, line_no >> 8))
+        body.extend(line)
+        body.append(0)
+        addr = next_addr
+    body.extend((0, 0))
+    return bytes((0x01, 0x08)) + bytes(body)
 
 
 class D64Drive:
@@ -166,8 +222,21 @@ class D64Drive:
         lines = [f'0 "{self.disk_title}" 00 2A']
         for entry in self.entries:
             lines.append(f'{entry.blocks:>4} "{entry.name}" {entry.type}')
-        lines.append("BLOCKS FREE.")
+        lines.append(f"{self.free_blocks()} BLOCKS FREE.")
         return ("\r".join(lines) + "\r").encode("ascii", errors="replace")
+
+    def directory_prg_payload(self) -> bytes:
+        self._require_disk()
+        lines = [(0, f'"{self.disk_title}" 00 2A')]
+        for entry in self.entries:
+            lines.append((entry.blocks, f'"{entry.name}" {entry.type}'))
+        lines.append((self.free_blocks(), "BLOCKS FREE."))
+        return make_basic_prg(lines)
+
+    def free_blocks(self) -> int:
+        assert self.mounted_data is not None
+        bam = self.read_sector(DIR_TRACK, BAM_SECTOR)
+        return sum(bam[4 + (track - 1) * 4] for track in range(1, 36))
 
     def status_payload(self) -> bytes:
         if self.mounted_path is None:
@@ -175,21 +244,49 @@ class D64Drive:
         return b"00,OK,00,00"
 
     def load_first_prg(self) -> bytes:
+        return self.load_entry(self.first_prg_entry())
+
+    def load_prg(self, name: str) -> bytes:
+        if name.strip().startswith("$"):
+            return self.directory_prg_payload()
+        return self.load_entry(self.find_prg_entry(name))
+
+    def load_chunk(self, name: str, offset: int, size: int) -> tuple[DirEntry, bytes]:
+        if size < 0 or size > 0xFFFF:
+            raise ValueError("invalid chunk size")
+        if name.strip().startswith("$"):
+            data = self.directory_prg_payload()
+            entry = DirEntry("$", "PRG", 0, 18, 0)
+            return entry, data[offset : offset + size]
+        entry = self.find_prg_entry(name)
+        data = self.load_entry(entry)
+        return entry, data[offset : offset + size]
+
+    def first_prg_entry(self) -> DirEntry:
         self._require_disk()
         for entry in self.entries:
             if entry.type == "PRG":
-                return self._load_entry(entry)
+                return entry
         raise FileNotFoundError("no PRG file on mounted image")
 
-    def load_prg(self, name: str) -> bytes:
+    def find_prg_entry(self, name: str) -> DirEntry:
         self._require_disk()
         target = name.strip().strip('"').upper()
         if target in ("*", ""):
-            return self.load_first_prg()
+            return self.first_prg_entry()
         for entry in self.entries:
             if entry.type == "PRG" and entry.name.upper() == target:
-                return self._load_entry(entry)
+                return entry
+        if "*" in target or "?" in target:
+            prefix = target.split("*", 1)[0].split("?", 1)[0]
+            for entry in self.entries:
+                if entry.type == "PRG" and entry.name.upper().startswith(prefix):
+                    return entry
         raise FileNotFoundError(name)
+
+    def load_entry(self, entry: DirEntry) -> bytes:
+        assert self.mounted_data is not None
+        return follow_prg_chain(self.mounted_data, entry.first_track, entry.first_sector)
 
     def read_sector(self, track: int, sector: int) -> bytes:
         self._require_disk()
@@ -198,10 +295,6 @@ class D64Drive:
         if off == 0xFFFFFFFF:
             raise ValueError(f"invalid sector T{track}/S{sector}")
         return self.mounted_data[off : off + SECTOR_SIZE]
-
-    def _load_entry(self, entry: DirEntry) -> bytes:
-        assert self.mounted_data is not None
-        return follow_chain(self.mounted_data, entry.first_track, entry.first_sector)
 
     def _require_disk(self) -> None:
         if self.mounted_data is None:
@@ -230,9 +323,42 @@ class Protocol:
             if cmd == CMD_DIR:
                 return STATUS_OK, self.drive.directory_payload()
             if cmd == CMD_LOAD_FIRST:
-                return STATUS_OK, self.drive.load_first_prg()
+                entry = self.drive.first_prg_entry()
+                self.log(f"  loading \"{entry.name}\" T{entry.first_track}/S{entry.first_sector}")
+                data = self.drive.load_entry(entry)
+                self.log(f"  loaded {len(data)} bytes")
+                return STATUS_OK, data
+            if cmd == CMD_LOAD_FIRST_CHUNK:
+                if len(payload) != 4:
+                    return STATUS_BAD_REQUEST, b"LOADFIRSTCHUNK expects offset,length"
+                offset = payload[0] | (payload[1] << 8)
+                size = payload[2] | (payload[3] << 8)
+                entry = self.drive.first_prg_entry()
+                data = self.drive.load_entry(entry)
+                chunk = data[offset : offset + size]
+                self.log(f"  chunk \"{entry.name}\" +{offset} {len(chunk)}/{size}")
+                return STATUS_OK, chunk
+            if cmd == CMD_LOAD_CHUNK:
+                if len(payload) < 4:
+                    return STATUS_BAD_REQUEST, b"LOADCHUNK expects offset,length,name"
+                offset = payload[0] | (payload[1] << 8)
+                size = payload[2] | (payload[3] << 8)
+                req_name = decode_c64_name(payload[4:])
+                entry, chunk = self.drive.load_chunk(req_name, offset, size)
+                self.log(f"  chunk \"{entry.name}\" +{offset} {len(chunk)}/{size}")
+                return STATUS_OK, chunk
             if cmd == CMD_LOAD:
-                return STATUS_OK, self.drive.load_prg(payload.decode("utf-8", errors="replace"))
+                req_name = decode_c64_name(payload)
+                if req_name.startswith("$"):
+                    self.log("  loading directory as BASIC PRG")
+                    data = self.drive.load_prg(req_name)
+                    self.log(f"  loaded {len(data)} bytes")
+                    return STATUS_OK, data
+                entry = self.drive.find_prg_entry(req_name)
+                self.log(f"  loading \"{entry.name}\" T{entry.first_track}/S{entry.first_sector}")
+                data = self.drive.load_entry(entry)
+                self.log(f"  loaded {len(data)} bytes")
+                return STATUS_OK, data
             if cmd == CMD_SECTOR:
                 if len(payload) != 2:
                     return STATUS_BAD_REQUEST, b"SECTOR expects track,sector"
@@ -241,10 +367,13 @@ class Protocol:
                 return STATUS_OK, self.drive.status_payload()
             return STATUS_BAD_REQUEST, b"unknown command"
         except FileNotFoundError as exc:
+            self.log(f"! not found: {exc}")
             return STATUS_NOT_FOUND, str(exc).encode("utf-8", errors="replace")
         except RuntimeError as exc:
+            self.log(f"! no disk: {exc}")
             return STATUS_NO_DISK, str(exc).encode("utf-8", errors="replace")
         except Exception as exc:
+            self.log(f"! io error: {exc}")
             return STATUS_IO_ERROR, str(exc).encode("utf-8", errors="replace")
 
     def handle_ascii(self, line: str) -> bytes:
@@ -270,6 +399,22 @@ class Protocol:
                 return self._ascii_data(self.drive.directory_payload())
             if cmd == "LOADFIRST":
                 return self._ascii_data(self.drive.load_first_prg())
+            if cmd == "LOADFIRSTCHUNK":
+                parts = arg.replace(",", " ").split()
+                if len(parts) != 2:
+                    return b"ERR LOADFIRSTCHUNK expects: LOADFIRSTCHUNK <offset> <length>\n"
+                data = self.drive.load_first_prg()
+                offset = int(parts[0], 0)
+                size = int(parts[1], 0)
+                return self._ascii_data(data[offset : offset + size])
+            if cmd == "LOADCHUNK":
+                parts = arg.replace(",", " ").split(maxsplit=2)
+                if len(parts) != 3:
+                    return b"ERR LOADCHUNK expects: LOADCHUNK <offset> <length> <name>\n"
+                offset = int(parts[0], 0)
+                size = int(parts[1], 0)
+                _entry, chunk = self.drive.load_chunk(parts[2], offset, size)
+                return self._ascii_data(chunk)
             if cmd == "LOAD":
                 return self._ascii_data(self.drive.load_prg(arg))
             if cmd == "SECTOR":
@@ -289,7 +434,15 @@ class Protocol:
 
 
 class SerialWorker:
-    def __init__(self, port_name: str, baud: int, protocol: Protocol, log: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        port_name: str,
+        baud: int,
+        protocol: Protocol,
+        log: Callable[[str], None],
+        tx_chunk_size: int,
+        tx_chunk_delay: float,
+    ) -> None:
         serial, _ = require_pyserial()
         if serial is None:
             raise RuntimeError("pyserial is not installed")
@@ -298,6 +451,8 @@ class SerialWorker:
         self.baud = baud
         self.protocol = protocol
         self.log = log
+        self.tx_chunk_size = max(tx_chunk_size, 1)
+        self.tx_chunk_delay = max(tx_chunk_delay, 0.0)
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.port = None
@@ -318,6 +473,8 @@ class SerialWorker:
         assert self.port is not None
         buf = bytearray()
         self.log(f"connected {self.port_name} @ {self.baud}")
+        if self.tx_chunk_delay > 0.0:
+            self.log(f"tx pacing: {self.tx_chunk_size} bytes / {self.tx_chunk_delay * 1000:.1f} ms")
         while not self.stop_event.is_set():
             chunk = self.port.read(128)
             if not chunk:
@@ -343,11 +500,13 @@ class SerialWorker:
                 del buf[:frame_len]
                 if checksum != expect:
                     self.log(f"! bad checksum for ${cmd:02X}: got ${checksum:02X}, expected ${expect:02X}")
-                    self.port.write(make_response(cmd, STATUS_BAD_REQUEST, b"bad checksum"))
+                    self._write_response(make_response(cmd, STATUS_BAD_REQUEST, b"bad checksum"))
                     continue
                 status, response = self.protocol.handle_binary(cmd, payload)
-                self.port.write(make_response(cmd, status, response))
+                frame = make_response(cmd, status, response)
                 self.log(f"> {CMD_NAMES.get(cmd, f'${cmd:02X}')} status={status} {len(response)} bytes")
+                self._write_response(frame)
+                self.log(f"  sent {len(frame)} bytes")
                 continue
 
             newline = find_newline(buf)
@@ -358,8 +517,20 @@ class SerialWorker:
             line = bytes(buf[:newline]).decode("utf-8", errors="replace").strip()
             del buf[: newline + 1]
             response = self.protocol.handle_ascii(line)
-            self.port.write(response)
+            self._write_response(response)
             self.log(f"> ASCII {len(response)} bytes")
+
+    def _write_response(self, data: bytes) -> None:
+        assert self.port is not None
+        if self.tx_chunk_delay <= 0.0 or len(data) <= self.tx_chunk_size:
+            self.port.write(data)
+            return
+        for offset in range(0, len(data), self.tx_chunk_size):
+            if self.stop_event.is_set():
+                return
+            self.port.write(data[offset : offset + self.tx_chunk_size])
+            self.port.flush()
+            time.sleep(self.tx_chunk_delay)
 
 
 def make_response(cmd: int, status: int, payload: bytes) -> bytes:
@@ -378,7 +549,14 @@ def find_newline(buf: bytearray) -> int:
 
 
 class App(tk.Tk):
-    def __init__(self, initial_folder: Path, port: str, baud: int) -> None:
+    def __init__(
+        self,
+        initial_folder: Path,
+        port: str,
+        baud: int,
+        tx_chunk_size: int,
+        tx_chunk_delay: float,
+    ) -> None:
         super().__init__()
         self.title("C64 Virtual 1541 UART Drive")
         self.geometry("1040x760")
@@ -392,6 +570,8 @@ class App(tk.Tk):
         self.serial_mod, self.list_ports = require_pyserial()
         self.power_on = False
         self.activity_after: str | None = None
+        self.tx_chunk_size = tx_chunk_size
+        self.tx_chunk_delay = tx_chunk_delay
 
         self.folder_var = tk.StringVar(value=str(self.drive.folder))
         self.port_var = tk.StringVar(value=port)
@@ -623,7 +803,14 @@ class App(tk.Tk):
 
         protocol = Protocol(self.drive, self._thread_log, self._thread_mounted)
         try:
-            worker = SerialWorker(self.port_var.get(), int(self.baud_var.get()), protocol, self._thread_log)
+            worker = SerialWorker(
+                self.port_var.get(),
+                int(self.baud_var.get()),
+                protocol,
+                self._thread_log,
+                self.tx_chunk_size,
+                self.tx_chunk_delay,
+            )
             worker.start()
         except Exception as exc:
             messagebox.showerror("Serial error", str(exc))
@@ -682,12 +869,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--folder", type=Path, default=ROOT / "roms" / "test_d64", help="folder containing .d64 images")
     parser.add_argument("--port", default="COM12", help="UART port, default COM12")
     parser.add_argument("--baud", type=int, default=115200, help="UART baud rate, default 115200")
+    parser.add_argument("--tx-chunk-size", type=int, default=8, help="bytes per paced response chunk, default 8")
+    parser.add_argument("--tx-chunk-delay", type=float, default=0.005, help="seconds between response chunks, default 0.005")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    app = App(args.folder, args.port, args.baud)
+    app = App(args.folder, args.port, args.baud, args.tx_chunk_size, args.tx_chunk_delay)
     app.mainloop()
     return 0
 

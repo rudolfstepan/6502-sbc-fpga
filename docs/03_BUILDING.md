@@ -182,13 +182,15 @@ make c64-graphics-test-prg
 python tools/c64_uart_prg_loader.py roms/test.prg --port COM15
 ```
 
-The PRG loader first sends monitor wake byte `0xA5`; the C64 board top ignores
-all other received bytes while the monitor is idle, so ordinary C64 debug output
-cannot be mistaken for a loader prompt. Uploads are then paced for the monitor:
-the current default streams 16 bytes per line with no artificial delay, which
-keeps larger PRGs practical at the fixed 115200 baud. For stubborn boards or
-older bitstreams, use `--safe` to return to one byte per line with a short delay,
-or set `--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.001` explicitly.
+The PRG loader first sends monitor wake sequence `A5 5A C3 3C`; the C64 board
+top ignores all other received bytes while the monitor is idle. Normal C64 mode uses the
+same CH340 link for the host-disk UART at `$DE00/$DE01`, so the old idle debug
+stream is not driven on that line. Uploads are then paced for the monitor: the
+current default streams 16 bytes per line with no artificial delay, which keeps
+larger PRGs practical at the fixed 115200 baud. For stubborn boards or older
+bitstreams, use `--safe` to return to one byte per line with a short delay, or
+set `--wake-sequence "0xA5 0x5A 0xC3 0x3C" --bytes-per-line 1 --line-delay 0.001`
+explicitly.
 
 After upload, type `RUN` on the C64. The program cycles through text, hires
 bitmap, multicolour bitmap, ECM text, and multicolour text; press any key for the
@@ -237,6 +239,106 @@ player tick. In this core `DEN=0` also stops VIC RAM fetches, so the single-port
 C64 RAM no longer stalls the CPU during playback and long SID players avoid
 audible timing hiccups. See `roms/c64_uart_sid/README.md` for details and known
 conversion limits.
+
+### Native C64 virtual 1541 transport
+
+The Tang native-C64 top routes the C64 core's host-disk UART to the CH340 while
+the FPGA monitor is inactive. The C64-side registers are:
+
+| Address | Direction | Meaning |
+| --- | --- | --- |
+| `$DE00` | read/write | UART data byte; reading consumes the received byte |
+| `$DE01` | read | bit 0 = RX byte available, bit 1 = TX busy, bit 2 = RX overflow |
+
+Run the PC-side virtual drive server with a D64 folder:
+
+```powershell
+python tools/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
+```
+
+The server already supports D64 mount/list/load/sector commands plus named
+chunk reads over its binary packet protocol. The current single-PRG D64
+extraction path is still the quickest way to start one-file games. For large
+PC-to-C64 responses the server sends small paced chunks (default 8 bytes every
+5 ms), and the C64 core has a 256-byte RX FIFO behind `$DE00`. That FIFO is
+cleared while the FPGA monitor is active so PRG uploads cannot leave stale bytes
+for the virtual-drive client.
+
+Transport-only smoke test:
+
+```powershell
+make c64-v1541-ping-prg
+python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_ping.prg --port COM15
+```
+
+Close the upload tool, start `tools/c64_1541_uart_gui.py` on the same COM port,
+then type `RUN` on the C64. The PRG sends a binary `PING` over `$DE00/$DE01` and
+prints the virtual-drive reply.
+
+The `LOADFIRST` smoke loader verifies a complete D64 PRG transfer before the
+KERNAL `LOAD` hook exists:
+
+```powershell
+make c64-v1541-loadfirst-prg
+python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_loadfirst.prg --port COM15
+```
+
+Close the upload tool, start the virtual 1541 server, mount/select a D64, and
+type `RUN`. The loader runs from `$C000`, requests the first PRG from the mounted
+disk, writes it to the PRG's own load address, and updates BASIC pointers for
+normal `$0801` BASIC programs. It does not queue `RUN`, `SYS`, or alter the
+loaded bytes; the PRG is placed at the load address stored in the file, like
+`LOAD "",8,1`, then returns to READY. Start it manually afterwards if applicable.
+Its temporary zero-page workspace is restored before returning to BASIC. Do not
+use `LIST` as a game-loader test: many crack loaders keep binary data directly
+behind the BASIC start line. `NO DISK MOUNTED` means the GUI is connected but no
+D64 is mounted yet. This test needs a bitstream that includes the C64 UART RX
+FIFO.
+The GUI should log repeated `< LOADFIRSTCHUNK` / `> LOADFIRSTCHUNK status=...`
+pairs while the C64 pulls the PRG in 128-byte blocks. This avoids one long
+PC-to-C64 burst and keeps the transfer paced by the C64 RAM-copy loop.
+
+To test normal KERNAL-style program loads and later KERNAL-based part loads,
+first patch the KERNAL `LOAD` entry at `$FFD5` to the guarded virtual-1541 stub,
+then regenerate the compiled-in C64 ROM VHDL:
+
+```powershell
+make c64-kernal-load-vector-patch
+make c64-roms
+```
+
+The patch changes `$FFD5` from `JMP $F49E` to `JMP $ECB9`. The stub at `$ECB9`
+checks whether the RAM hook is installed at `$C000` and jumps to `$C02C` only
+when the hook guard byte is present; otherwise it falls back to the original
+KERNAL `LOAD` routine at `$F49E`. This avoids the earlier READY hang where
+KERNAL/BASIC restored `$0330/$0331` to `$F4A5` after a directory load.
+
+After rebuilding and flashing the Tang C64 bitstream, install the RAM hook on
+the FPGA C64. Start with the diagnostic variant:
+
+```powershell
+make c64-v1541-hook-diag-prg c64-v1541-hook-prg
+python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_hook_diag.prg --port COM15
+```
+
+Run the hook once on the C64. Then start the virtual 1541 server, mount a D64,
+and use normal C64 commands:
+
+```basic
+LOAD"$",8
+LIST
+LOAD"*",8,1
+RUN
+```
+
+The hook requests the named PRG in 128-byte `LOADCHUNK` blocks, honours the
+embedded PRG load address for `,8,1`, and returns the end address in X/Y.
+Custom fastloaders still bypass this path, and the temporary hook currently
+lives at `$C000`.
+
+See [Native C64 Virtual 1541 UART Technote](./C64_V1541_UART_TECHNOTE.md) for
+the READY hang analysis, the guarded `$FFD5` stub, and the UART monitor probe
+workflow.
 
 ## VHDL Compilation Flags
 

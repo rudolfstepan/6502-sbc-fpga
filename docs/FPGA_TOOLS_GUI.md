@@ -141,7 +141,7 @@ und SID-Player/Payload. Die Liste zeigt dann beide Größen an, z. B.
 | ↻ Refresh | Liest `roms/c64_uart_sid/*.prg` neu ein |
 | C64 SID PRG-Liste | Alle gefundenen RUN-PRGs; **Doppelklick lädt direkt hoch** |
 | Port / Baud | Serieller Port und Baudrate für den C64-UART-Monitor |
-| Wake byte | Monitor-Magic-Byte, Standard `0xA5` |
+| Wake seq | Monitor-Wake-Sequenz, Standard `0xA5 0x5A 0xC3 0x3C` |
 | Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload; Standard `16` / `0` für schnelle C64-PRG-Uploads |
 | Verbose | Monitor-Antworten anzeigen (`--verbose`) |
 | Stay in FPGA monitor | Nach Upload nicht mit `G` zurück zur C64-Umgebung springen |
@@ -191,6 +191,13 @@ Dieser Weg ist absichtlich pragmatisch: er funktioniert für viele Single-load-
 oder gecrackte Onefile-D64s. Multi-load-Spiele, Fastloader und echte
 IEC/1541-Kompatibilität brauchen später den KERNAL/IEC/1541-Ladepfad.
 
+Für Nachlade-Tests mit normalen KERNAL-`LOAD`-Aufrufen gibt es zusätzlich den
+virtuellen 1541-UART-Server `tools/c64_1541_uart_gui.py`. Den RAM-Hook mit
+`make c64-v1541-hook-prg` bauen, `roms/v1541_hook.prg` hochladen und einmal
+`RUN` ausführen. Danach beantwortet der Server `LOAD"*",8,1` und spätere
+KERNAL-basierte Nachladezugriffe über benannte `LOADCHUNK`-Blöcke. Eigene
+Fastloader laufen darüber noch nicht.
+
 | Feld / Option | Beschreibung |
 |---|---|
 | D64 folder | Root-Ordner mit `.d64`-Images; Unterordner werden mitgescannt |
@@ -198,7 +205,7 @@ IEC/1541-Kompatibilität brauchen später den KERNAL/IEC/1541-Ladepfad.
 | D64-Liste | Alle gefundenen Images; **Doppelklick lädt direkt hoch** |
 | PRG name (optional) | Exakter oder eindeutiger Teilname eines PRG-Eintrags; leer = erstes PRG |
 | Port / Baud | Serieller Port und Baudrate für den C64-UART-Monitor |
-| Wake byte | Monitor-Magic-Byte, Standard `0xA5` |
+| Wake seq | Monitor-Wake-Sequenz, Standard `0xA5 0x5A 0xC3 0x3C` |
 | Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload; Standard `16` / `0` für schnelle C64-PRG-Uploads |
 | Verbose | Monitor-Antworten anzeigen (`--verbose`) |
 | Stay in FPGA monitor | Nach Upload nicht mit `G` zurück zur C64-Umgebung springen |

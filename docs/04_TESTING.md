@@ -71,6 +71,25 @@ cursor keys drive C64 joystick port 2 (`$DC00`) active-low: KP8/KP2/KP4/KP6 for
 directions and KP0/KP5 for fire. See [`input-devices.md`](./input-devices.md)
 for the current input-device mapping and limitations.
 
+### Native C64 Virtual-1541 Hook Test
+
+Run the KERNAL `LOAD` hook self-test in SDL2VICE before building/flashing the
+FPGA image:
+
+```bash
+make c64-kernal-load-vector-patch
+make c64-roms
+make test-c64-v1541-hook-vice
+```
+
+The test uses `roms/c64/kernal.rom` with `$FFD5 = JMP ($0330)`, starts the
+dummy hook PRG in VICE, and expects an intentional CPU JAM at the exported
+`selftest_pass_jam` label. A successful run ends with:
+
+```text
+PASS: v1541 dummy hook selftest completed
+```
+
 ### Run Tests with Output
 
 Capture waveforms for analysis:

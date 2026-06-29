@@ -32,6 +32,15 @@ entity uart_debug_monitor is
     jump_req  : out std_logic;
     jump_addr : out addr_t;
 
+    dbg_addr   : in addr_t := (others => '0');
+    dbg_di     : in data_t := (others => '0');
+    dbg_do     : in data_t := (others => '0');
+    dbg_sync   : in std_logic := '0';
+    dbg_phi    : in std_logic := '0';
+    dbg_status : in std_logic_vector(15 downto 0) := (others => '0');
+    dbg_cia1   : in std_logic_vector(31 downto 0) := (others => '0');
+    dbg_regs   : in std_logic_vector(63 downto 0) := (others => '0');
+
     usb_connected : in std_logic := '0';
     usb_keycode   : in std_logic_vector(7 downto 0) := (others => '0');
     usb_modif     : in std_logic_vector(7 downto 0) := (others => '0');
@@ -69,6 +78,7 @@ architecture rtl of uart_debug_monitor is
     S_DIS_BYTE_SP, S_DIS_BYTE_HI, S_DIS_BYTE_LO, S_DIS_BYTE_NEXT,
     S_DIS_GAP1, S_DIS_GAP2, S_DIS_MNEM, S_DIS_OPER_SP,
     S_DIS_OPER_CHAR, S_DIS_NEXT, S_DIS_END_LF,
+    S_REGS_CR, S_REGS_LF, S_REGS_CHAR,
     S_USB_DIAG,
     S_USB_KEY,
     S_USB_CAP,
@@ -117,6 +127,15 @@ architecture rtl of uart_debug_monitor is
   signal dis_byte   : natural range 0 to 2 := 0;
   signal dis_midx   : natural range 0 to 2 := 0;
   signal dis_oidx   : natural range 0 to 6 := 0;
+  signal regs_idx   : natural range 0 to 63 := 0;
+  signal dbg_last_pc : addr_t := (others => '0');
+  signal dbg_snap_pc     : addr_t := (others => '0');
+  signal dbg_snap_addr   : addr_t := (others => '0');
+  signal dbg_snap_di     : data_t := (others => '0');
+  signal dbg_snap_do     : data_t := (others => '0');
+  signal dbg_snap_status : std_logic_vector(15 downto 0) := (others => '0');
+  signal dbg_snap_cia1   : std_logic_vector(31 downto 0) := (others => '0');
+  signal dbg_snap_regs   : std_logic_vector(63 downto 0) := (others => '0');
 
   signal mem_req_reg   : std_logic := '0';
   signal mem_we_reg    : std_logic := '0';
@@ -255,6 +274,108 @@ architecture rtl of uart_debug_monitor is
       return std_logic_vector(to_unsigned(48 + n, 8));
     end if;
     return std_logic_vector(to_unsigned(55 + n, 8));
+  end function;
+
+  function hex64(v : std_logic_vector(63 downto 0); idx : natural) return data_t is
+    variable n : std_logic_vector(3 downto 0);
+  begin
+    case idx is
+      when 0  => n := v(63 downto 60);
+      when 1  => n := v(59 downto 56);
+      when 2  => n := v(55 downto 52);
+      when 3  => n := v(51 downto 48);
+      when 4  => n := v(47 downto 44);
+      when 5  => n := v(43 downto 40);
+      when 6  => n := v(39 downto 36);
+      when 7  => n := v(35 downto 32);
+      when 8  => n := v(31 downto 28);
+      when 9  => n := v(27 downto 24);
+      when 10 => n := v(23 downto 20);
+      when 11 => n := v(19 downto 16);
+      when 12 => n := v(15 downto 12);
+      when 13 => n := v(11 downto 8);
+      when 14 => n := v(7 downto 4);
+      when others => n := v(3 downto 0);
+    end case;
+    return hex_char(n);
+  end function;
+
+  function regs_msg_char(
+    i : natural;
+    pc : addr_t;
+    status : std_logic_vector(15 downto 0);
+    regs : std_logic_vector(63 downto 0);
+    cia1 : std_logic_vector(31 downto 0);
+    bus_addr : addr_t;
+    bus_di : data_t;
+    bus_do : data_t
+  ) return data_t is
+  begin
+    case i is
+      when 0 => return ascii('P');
+      when 1 => return ascii('C');
+      when 2 => return ascii('=');
+      when 3 => return hex_char(pc(15 downto 12));
+      when 4 => return hex_char(pc(11 downto 8));
+      when 5 => return hex_char(pc(7 downto 4));
+      when 6 => return hex_char(pc(3 downto 0));
+      when 7 => return ascii(' ');
+      when 8 => return ascii('S');
+      when 9 => return ascii('T');
+      when 10 => return ascii('=');
+      when 11 => return hex_char(status(15 downto 12));
+      when 12 => return hex_char(status(11 downto 8));
+      when 13 => return hex_char(status(7 downto 4));
+      when 14 => return hex_char(status(3 downto 0));
+      when 15 => return ascii(' ');
+      when 16 => return ascii('R');
+      when 17 => return ascii('=');
+      when 18 => return hex64(regs, 0);
+      when 19 => return hex64(regs, 1);
+      when 20 => return hex64(regs, 2);
+      when 21 => return hex64(regs, 3);
+      when 22 => return hex64(regs, 4);
+      when 23 => return hex64(regs, 5);
+      when 24 => return hex64(regs, 6);
+      when 25 => return hex64(regs, 7);
+      when 26 => return hex64(regs, 8);
+      when 27 => return hex64(regs, 9);
+      when 28 => return hex64(regs, 10);
+      when 29 => return hex64(regs, 11);
+      when 30 => return hex64(regs, 12);
+      when 31 => return hex64(regs, 13);
+      when 32 => return hex64(regs, 14);
+      when 33 => return hex64(regs, 15);
+      when 34 => return ascii(' ');
+      when 35 => return ascii('C');
+      when 36 => return ascii('1');
+      when 37 => return ascii('=');
+      when 38 => return hex_char(cia1(31 downto 28));
+      when 39 => return hex_char(cia1(27 downto 24));
+      when 40 => return hex_char(cia1(23 downto 20));
+      when 41 => return hex_char(cia1(19 downto 16));
+      when 42 => return hex_char(cia1(15 downto 12));
+      when 43 => return hex_char(cia1(11 downto 8));
+      when 44 => return hex_char(cia1(7 downto 4));
+      when 45 => return hex_char(cia1(3 downto 0));
+      when 46 => return ascii(' ');
+      when 47 => return ascii('B');
+      when 48 => return ascii('U');
+      when 49 => return ascii('S');
+      when 50 => return ascii('=');
+      when 51 => return hex_char(bus_addr(15 downto 12));
+      when 52 => return hex_char(bus_addr(11 downto 8));
+      when 53 => return hex_char(bus_addr(7 downto 4));
+      when 54 => return hex_char(bus_addr(3 downto 0));
+      when 55 => return ascii(':');
+      when 56 => return hex_char(bus_di(7 downto 4));
+      when 57 => return hex_char(bus_di(3 downto 0));
+      when 58 => return ascii('/');
+      when 59 => return hex_char(bus_do(7 downto 4));
+      when 60 => return hex_char(bus_do(3 downto 0));
+      when 61 => return x"0D";
+      when others => return x"0A";
+    end case;
   end function;
 
   function printable_char(v : data_t) return data_t is
@@ -734,6 +855,15 @@ begin
         dis_byte     <= 0;
         dis_midx     <= 0;
         dis_oidx     <= 0;
+        regs_idx     <= 0;
+        dbg_last_pc  <= (others => '0');
+        dbg_snap_pc     <= (others => '0');
+        dbg_snap_addr   <= (others => '0');
+        dbg_snap_di     <= (others => '0');
+        dbg_snap_do     <= (others => '0');
+        dbg_snap_status <= (others => '0');
+        dbg_snap_cia1   <= (others => '0');
+        dbg_snap_regs   <= (others => '0');
         mem_req_reg  <= '0';
         mem_we_reg   <= '0';
         mem_addr_reg <= (others => '0');
@@ -760,12 +890,23 @@ begin
           end if;
         end if;
 
+        if dbg_phi = '1' and dbg_sync = '1' then
+          dbg_last_pc <= dbg_addr;
+        end if;
+
         if active_reg = '0' and enter_btn = '1' and btn_d = '0' then
           active_reg <= '1';
           msg        <= MSG_BANNER;
           msg_idx    <= 0;
           after_msg  <= S_SEND_MSG;
           state      <= S_SEND_MSG;
+          dbg_snap_pc     <= dbg_last_pc;
+          dbg_snap_addr   <= dbg_addr;
+          dbg_snap_di     <= dbg_di;
+          dbg_snap_do     <= dbg_do;
+          dbg_snap_status <= dbg_status;
+          dbg_snap_cia1   <= dbg_cia1;
+          dbg_snap_regs   <= dbg_regs;
         end if;
 
         if wait_uart = '1' then
@@ -897,6 +1038,9 @@ begin
                 msg <= MSG_HELP;
                 after_msg <= S_SEND_MSG;
                 state <= S_SEND_MSG;
+              elsif cmd = ascii('R') then
+                regs_idx <= 0;
+                state <= S_REGS_CR;
               elsif cmd = ascii('G') then
                 if arg0_nibs > 0 then
                   jump_addr_reg <= arg0;
@@ -1250,6 +1394,31 @@ begin
               msg <= MSG_PROMPT;
               after_msg <= S_INPUT;
               state <= S_SEND_MSG;
+
+            when S_REGS_CR =>
+              tx_data_reg <= x"0D";
+              tx_valid_reg <= '1';
+              wait_uart <= '1';
+              state <= S_REGS_LF;
+
+            when S_REGS_LF =>
+              tx_data_reg <= x"0A";
+              tx_valid_reg <= '1';
+              wait_uart <= '1';
+              state <= S_REGS_CHAR;
+
+            when S_REGS_CHAR =>
+              tx_data_reg <= regs_msg_char(regs_idx, dbg_snap_pc, dbg_snap_status, dbg_snap_regs,
+                                           dbg_snap_cia1, dbg_snap_addr, dbg_snap_di, dbg_snap_do);
+              tx_valid_reg <= '1';
+              wait_uart <= '1';
+              if regs_idx = 62 then
+                msg <= MSG_PROMPT;
+                after_msg <= S_INPUT;
+                state <= S_SEND_MSG;
+              else
+                regs_idx <= regs_idx + 1;
+              end if;
 
             when S_USB_DIAG =>
               -- Print "USB CON=X PH=X KEY=XX MOD=XX ASC=XX POLL=X EV=X\r\n"

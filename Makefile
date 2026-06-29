@@ -2,6 +2,7 @@ GHDL          ?= C:\Users\oe3sr\AppData\Local\ghdl\bin\ghdl.exe
 PYTHON        ?= python
 GHDL_FLAGS    ?= --std=08 --ieee=synopsys
 GHDL_RUN_FLAGS ?= --ieee-asserts=disable-at-0
+C64_DIAG_DIR  = roms/diagnostics
 
 CHESS_ROM_HEX        = sim/generated/chess_rom.hex
 SBC_ROM_HEX          = sim/generated/sbc_rom.hex
@@ -61,7 +62,13 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
         sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
-        c64-graphics-test-prg c64-sprite-test-prg c64-sid-prgs
+        c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
+        c64-graphics-test-prg c64-sprite-test-prg c64-v1541-ping-prg \
+        c64-spin-diag-prg c64-hang-diag-prg c64-hang-loop-diag-prg \
+        c64-cli-noirq-diag-prg c64-rti-diag-prg c64-hang-raw-irq-diag-prg \
+        c64-v1541-loadfirst-prg c64-v1541-hook-prg c64-v1541-hook-diag-prg \
+        c64-v1541-hook-dummy-diag-prg \
+        c64-sid-prgs
 
 ## ============================================================================
 ## Simulation targets
@@ -84,6 +91,15 @@ test-c64-input:
 	$(GHDL) -e $(GHDL_FLAGS) tb_c64_keyboard_matrix_joystick
 	$(GHDL) -r $(GHDL_FLAGS) tb_c64_keyboard_matrix_joystick $(GHDL_RUN_FLAGS)
 
+c64-kernal-load-vector-patch:
+	$(PYTHON) tools/patch_c64_kernal_load_vector.py
+
+c64-roms:
+	$(PYTHON) tools/build_c64_roms.py
+
+c64-tang20k-build: c64-roms
+	cd boards/tang_primer_20k/c64/project && build.bat
+
 c64-graphics-test-prg:
 	$(CA65) --cpu 6502 -o roms/test.o sw/c64_vic_graphics_test.s
 	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/test.prg roms/test.o
@@ -95,6 +111,86 @@ c64-sprite-test-prg:
 	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/sprite_test.prg roms/sprite_test.o
 	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/sprite_test.o').unlink(missing_ok=True)"
 	@echo "Built roms/sprite_test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
+
+c64-hang-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/hang_diag.o sw/c64_hang_diag.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/hang_diag.prg $(C64_DIAG_DIR)/hang_diag.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/hang_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/hang_diag.prg (no-drive READY/IRQ hang diagnostic)"
+
+c64-spin-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/spin_diag.o sw/c64_spin_diag.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/spin_diag.prg $(C64_DIAG_DIR)/spin_diag.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/spin_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/spin_diag.prg (absolute no-stack spin diagnostic)"
+
+c64-hang-loop-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/hang_loop_diag.o sw/c64_hang_loop_diag.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/hang_loop_diag.prg $(C64_DIAG_DIR)/hang_loop_diag.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/hang_loop_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/hang_loop_diag.prg (no-drive/no-IRQ CPU loop diagnostic)"
+
+c64-cli-noirq-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/cli_noirq_diag.o sw/c64_cli_noirq_diag.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/cli_noirq_diag.prg $(C64_DIAG_DIR)/cli_noirq_diag.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/cli_noirq_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/cli_noirq_diag.prg (CLI with CIA/VIC IRQs masked)"
+
+c64-rti-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/rti_diag.o sw/c64_rti_diag.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/rti_diag.prg $(C64_DIAG_DIR)/rti_diag.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/rti_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/rti_diag.prg (manual stack frame RTI diagnostic)"
+
+c64-hang-raw-irq-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/hang_raw_irq_diag.o sw/c64_hang_raw_irq_diag.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/hang_raw_irq_diag.prg $(C64_DIAG_DIR)/hang_raw_irq_diag.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/hang_raw_irq_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/hang_raw_irq_diag.prg (CINV CIA1 IRQ heartbeat diagnostic)"
+
+c64-v1541-ping-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/v1541_ping.o sw/c64_v1541_ping.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/v1541_ping.prg $(C64_DIAG_DIR)/v1541_ping.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_ping.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/v1541_ping.prg (upload, start tools/c64_1541_uart_gui.py, then RUN)"
+
+c64-v1541-loadfirst-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/v1541_loadfirst.o sw/c64_v1541_loadfirst.s
+	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o $(C64_DIAG_DIR)/v1541_loadfirst.prg $(C64_DIAG_DIR)/v1541_loadfirst.o
+	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_loadfirst.prg
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_loadfirst.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/v1541_loadfirst.prg (upload, start tools/c64_1541_uart_gui.py, then RUN)"
+
+c64-v1541-hook-prg:
+	$(CA65) --cpu 6502 -o roms/v1541_hook.o sw/c64_v1541_kernal_hook.s
+	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o roms/v1541_hook.prg roms/v1541_hook.o
+	$(PYTHON) tools/build_c64_v1541_segment_map.py roms/v1541_hook.prg
+	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/v1541_hook.o').unlink(missing_ok=True)"
+	@echo "Built roms/v1541_hook.prg (upload, RUN once, then use LOAD\"*\",8,1)"
+
+c64-v1541-hook-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -D DIAG_LOAD_RETURN -o $(C64_DIAG_DIR)/v1541_hook_diag.o sw/c64_v1541_kernal_hook.s
+	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o $(C64_DIAG_DIR)/v1541_hook_diag.prg $(C64_DIAG_DIR)/v1541_hook_diag.o
+	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_hook_diag.prg
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_hook_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/v1541_hook_diag.prg (prints LOAD return diagnostics)"
+
+c64-v1541-hook-dummy-diag-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -D DUMMY_DRIVE -D DIAG_LOAD_RETURN -o $(C64_DIAG_DIR)/v1541_hook_dummy_diag.o sw/c64_v1541_kernal_hook.s
+	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg $(C64_DIAG_DIR)/v1541_hook_dummy_diag.o
+	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_hook_dummy_diag.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg (hardware dummy LOAD hook, no UART)"
 
 c64-sid-prgs:
 	$(PYTHON) tools/build_c64_sid_prgs.py

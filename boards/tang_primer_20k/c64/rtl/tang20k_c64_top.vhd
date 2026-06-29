@@ -34,16 +34,21 @@ entity tang20k_c64_top is
     -- block below, the led pins in the .cst, and dbg_cia1_irq in c64_core.
     -- led     : out std_logic_vector(1 downto 0);
 
-    -- CH340 USB-UART. It streams c64_dbg_uart while idle; sending the monitor
-    -- magic byte from the PC enters the UART monitor/loader, which owns the
-    -- link until "G".
+    -- CH340 USB-UART. In normal C64 mode this is the host-disk UART used by
+    -- the virtual 1541 server. Sending the monitor wake sequence from the PC
+    -- enters the UART monitor/loader, which owns the link until "G".
     uart_tx    : out std_logic;
     uart_rx    : in  std_logic
   );
 end entity;
 
 architecture rtl of tang20k_c64_top is
-  constant MONITOR_MAGIC : std_logic_vector(7 downto 0) := x"A5";
+  -- Four-byte monitor wake sequence. A single magic byte is unsafe once the
+  -- same UART also carries arbitrary D64/PRG binary data for the virtual 1541.
+  constant MONITOR_MAGIC0 : std_logic_vector(7 downto 0) := x"A5";
+  constant MONITOR_MAGIC1 : std_logic_vector(7 downto 0) := x"5A";
+  constant MONITOR_MAGIC2 : std_logic_vector(7 downto 0) := x"C3";
+  constant MONITOR_MAGIC3 : std_logic_vector(7 downto 0) := x"3C";
   -- Short press = normal C64 reset. Hold KEY[0] for ~1 s to request a cold
   -- FPGA reset that clears C64 RAM before BASIC/KERNAL restarts.
   constant LONG_RESET_CYCLES      : integer := 27_000_000;
@@ -76,6 +81,7 @@ architecture rtl of tang20k_c64_top is
   signal dbg_regs   : std_logic_vector(63 downto 0);
 
   signal dbg_uart_tx : std_logic;
+  signal c64_disk_uart_tx : std_logic;
 
   signal mon_rx_data    : std_logic_vector(7 downto 0);
   signal mon_rx_valid   : std_logic;
@@ -84,7 +90,8 @@ architecture rtl of tang20k_c64_top is
   signal mon_tx_busy    : std_logic;
   signal mon_uart_tx    : std_logic;
   signal mon_active     : std_logic;
-  signal mon_enter      : std_logic;
+  signal mon_enter      : std_logic := '0';
+  signal mon_magic_idx  : integer range 0 to 3 := 0;
   signal mon_mem_req    : std_logic;
   signal mon_mem_we     : std_logic;
   signal mon_mem_addr   : std_logic_vector(15 downto 0);
@@ -124,7 +131,10 @@ begin
   -- led(0) <= not irq_stuck;
   -- led(1) <= cpu_cnt(19);
 
-  uart_tx <= mon_uart_tx when mon_active = '1' else dbg_uart_tx;
+  -- The virtual 1541 protocol is binary, so the debug stream must not share the
+  -- line while the C64 is running. The monitor still preempts the link after the
+  -- wake-sequence handshake.
+  uart_tx <= mon_uart_tx when mon_active = '1' else c64_disk_uart_tx;
 
   -- Reset: hold until the PLL locks and the button is released, in the pixel domain.
   -- A long button press requests a cold reset and keeps the core reset long
@@ -210,8 +220,8 @@ begin
       ps2_clk  => ps2_clk,
       ps2_data => ps2_data,
       audio    => audio,
-      uart_tx  => open,
-      uart_rx  => '1',
+      uart_tx  => c64_disk_uart_tx,
+      uart_rx  => uart_rx,
       monitor_hold      => mon_active,
       monitor_mem_req   => mon_mem_req,
       monitor_mem_we    => mon_mem_we,
@@ -259,12 +269,48 @@ begin
       busy    => mon_tx_busy
     );
 
-  -- A magic byte acts as a soft monitor button. The wake byte is consumed by
-  -- the enter edge; upload tools then wait for the monitor banner/prompt before
-  -- sending commands. Other received bytes are ignored while the monitor is idle
-  -- so C64 debug output cannot be mistaken for a monitor session.
-  mon_enter <= '1' when mon_active = '0' and mon_rx_valid = '1' and
-                        mon_rx_data = MONITOR_MAGIC else '0';
+  -- A magic sequence acts as a soft monitor button. It must be longer than one
+  -- byte because normal C64 mode now uses the same UART for arbitrary binary
+  -- PRG/D64 traffic, and a single wake byte can naturally occur in game data.
+  process(clk_pix)
+  begin
+    if rising_edge(clk_pix) then
+      mon_enter <= '0';
+      if reset_n = '0' or mon_active = '1' then
+        mon_magic_idx <= 0;
+      elsif mon_rx_valid = '1' then
+        case mon_magic_idx is
+          when 0 =>
+            if mon_rx_data = MONITOR_MAGIC0 then
+              mon_magic_idx <= 1;
+            else
+              mon_magic_idx <= 0;
+            end if;
+          when 1 =>
+            if mon_rx_data = MONITOR_MAGIC1 then
+              mon_magic_idx <= 2;
+            elsif mon_rx_data = MONITOR_MAGIC0 then
+              mon_magic_idx <= 1;
+            else
+              mon_magic_idx <= 0;
+            end if;
+          when 2 =>
+            if mon_rx_data = MONITOR_MAGIC2 then
+              mon_magic_idx <= 3;
+            elsif mon_rx_data = MONITOR_MAGIC0 then
+              mon_magic_idx <= 1;
+            else
+              mon_magic_idx <= 0;
+            end if;
+          when others =>
+            if mon_rx_data = MONITOR_MAGIC3 then
+              mon_enter <= '1';
+            end if;
+            mon_magic_idx <= 0;
+        end case;
+      end if;
+    end if;
+  end process;
 
   monitor_i : entity work.uart_debug_monitor
     generic map (FLAT_64K => true)
@@ -285,7 +331,15 @@ begin
       mem_rdata => mon_mem_rdata,
       mem_ready => mon_mem_ready,
       jump_req  => mon_jump_req,
-      jump_addr => mon_jump_addr
+      jump_addr => mon_jump_addr,
+      dbg_addr   => dbg_addr,
+      dbg_di     => dbg_di,
+      dbg_do     => dbg_do,
+      dbg_sync   => dbg_sync,
+      dbg_phi    => dbg_phi,
+      dbg_status => dbg_status,
+      dbg_cia1   => dbg_cia1,
+      dbg_regs   => dbg_regs
     );
 
   -- Audio DAC (PT8211), pixel-clock domain (BCK_HALF=4 -> ~27/8 MHz BCK).

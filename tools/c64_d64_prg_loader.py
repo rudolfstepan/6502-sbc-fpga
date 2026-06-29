@@ -86,7 +86,11 @@ def load_entries(image: Path):
             f"using the first {D64_35_TRACK_SIZE} bytes"
         )
         data = data[:D64_35_TRACK_SIZE]
-    return data, list(iter_entries(data))
+    try:
+        entries = list(iter_entries(data))
+    except ValueError as exc:
+        raise SystemExit(f"ERROR: could not read D64 directory in {image}: {exc}") from exc
+    return data, entries
 
 
 def print_directory(image: Path, data: bytes, entries) -> None:
@@ -156,7 +160,8 @@ def make_upload_args(args: argparse.Namespace, prg: Path) -> SimpleNamespace:
         prg=str(prg),
         port=args.port,
         baud=args.baud,
-        wake_byte=args.wake_byte,
+        wake_sequence=bytes([args.wake_byte]) if args.wake_byte is not None else args.wake_sequence,
+        wake_byte=None,
         bytes_per_line=bytes_per_line,
         line_delay=line_delay,
         command_delay=args.command_delay,
@@ -189,7 +194,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     parser.add_argument("--port", default=c64_uart_prg_loader.DEFAULT_PORT)
     parser.add_argument("--baud", type=int, default=c64_uart_prg_loader.DEFAULT_BAUD)
-    parser.add_argument("--wake-byte", type=c64_uart_prg_loader.parse_byte, default=c64_uart_prg_loader.DEFAULT_WAKE_BYTE)
+    parser.add_argument("--wake-sequence", type=c64_uart_prg_loader.parse_wake_sequence, default=c64_uart_prg_loader.DEFAULT_WAKE_SEQUENCE)
+    parser.add_argument("--wake-byte", type=c64_uart_prg_loader.parse_byte, default=None, help="legacy single-byte monitor wake override")
     parser.add_argument("--bytes-per-line", type=int, default=c64_uart_prg_loader.DEFAULT_BYTES_PER_LINE)
     parser.add_argument("--line-delay", type=float, default=c64_uart_prg_loader.DEFAULT_LINE_DELAY)
     parser.add_argument(

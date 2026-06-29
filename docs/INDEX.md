@@ -19,6 +19,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[Simulation](./06_SIMULATION.md)** - Running and analyzing simulations
 - **[Development Guide](./07_DEVELOPMENT.md)** - Contributing and development workflow
 - **[UART Monitor](./UART_MONITOR.md)** - Hardware monitor commands and live ROM upload over UART
+- **[Native C64 Virtual 1541 UART Technote](./C64_V1541_UART_TECHNOTE.md)** - KERNAL `LOAD` hook, UART monitor split, READY hang root cause, and guarded `$FFD5` stub
 - **[Screen-Editor Line Replay](./SCREEN_EDITOR_REPLAY.md)** - C64-style on-screen line editing for EhBASIC and the input-buffer flush that keeps edited lines in sync
 - **[Split ROM and Native SID Update](./SPLIT_ROM_SID_UPDATE.md)** - New memory map, EhBASIC/Soundsid layout, and uploader migration
 - **[SD Bootloader](./SD_BOOTLOADER_PLAN.md)** - SD-card shadow-ROM boot flow

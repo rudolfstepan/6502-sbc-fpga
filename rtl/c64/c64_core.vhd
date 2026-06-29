@@ -235,9 +235,20 @@ architecture rtl of c64_core is
   signal uart_dout : std_logic_vector(7 downto 0);
   signal urx_data  : std_logic_vector(7 downto 0);
   signal urx_valid : std_logic;
-  signal rx_data   : std_logic_vector(7 downto 0) := (others => '0');
-  signal rx_avail  : std_logic := '0';
-  signal utx_busy  : std_logic;
+  constant RX_FIFO_DEPTH : integer := 256;
+  type rx_fifo_t is array (0 to RX_FIFO_DEPTH-1) of std_logic_vector(7 downto 0);
+  signal rx_fifo     : rx_fifo_t;
+  signal rx_rd_ptr   : unsigned(7 downto 0) := (others => '0');
+  signal rx_wr_ptr   : unsigned(7 downto 0) := (others => '0');
+  signal rx_count    : integer range 0 to RX_FIFO_DEPTH := 0;
+  signal rx_avail    : std_logic;
+  signal rx_overflow : std_logic := '0';
+  signal rx_pop      : std_logic;
+  signal uart_read_sel   : std_logic;
+  signal uart_read_held  : std_logic := '0';
+  signal uart_data_latch : std_logic_vector(7 downto 0) := (others => '0');
+  signal uart_data_dout  : std_logic_vector(7 downto 0);
+  signal utx_busy    : std_logic;
   signal utx_send  : std_logic;
 
   -- Packed for the board debug UART:
@@ -653,11 +664,10 @@ begin
 
   -- ---- Host disk UART (I/O area 1, $DE00-$DE01) ----
   -- A PC runs a "1541 server" on this serial link and LOAD is done over UART.
-  --   $DE00 DATA   : write -> transmit a byte; read -> the received byte (clears
-  --                  the rx-available flag)
-  --   $DE01 STATUS : bit0 = RX byte available, bit1 = TX busy
+  --   $DE00 DATA   : write -> transmit a byte; read -> pop one received byte
+  --   $DE01 STATUS : bit0 = RX byte available, bit1 = TX busy, bit2 = RX overflow
   -- 115200 8N1 on the CH340 USB-UART; the held-cs C64 bus is handled by pulsing
-  -- TX/clear once per CPU access (phi2_en) -- no 27x repeat.
+  -- TX/pop once per CPU access (phi2_en) -- no 27x repeat.
   cs_uart <= '1' when io = IO_EXP1 else '0';
 
   utx_i : entity work.uart_tx_ser
@@ -674,25 +684,81 @@ begin
   utx_send <= '1' when (cs_uart = '1' and cpu_we = '1' and cpu_addr(0) = '0'
                         and phi2_en = '1') else '0';
 
-  -- Latch each received byte; a CPU read of $DE00 consumes it.
-  process(clk) begin
+  uart_read_sel <= '1' when (cs_uart = '1' and cpu_we = '0' and cpu_addr(0) = '0') else '0';
+
+  rx_pop <= '1' when (uart_read_sel = '1' and phi2_en = '1'
+                      and uart_read_held = '0' and rx_count > 0) else '0';
+  rx_avail <= '1' when rx_count > 0 else '0';
+
+  -- Buffer PC->C64 bursts. A single-byte latch is enough for PING, but D64 PRG
+  -- loads arrive as long serial frames while the 1 MHz CPU is also storing each
+  -- payload byte to RAM. While the FPGA monitor owns the same UART link, keep
+  -- this FIFO empty so upload commands do not become stale disk bytes.
+  process(clk)
+    variable count_v : integer range 0 to RX_FIFO_DEPTH;
+    variable rd_v    : unsigned(7 downto 0);
+    variable wr_v    : unsigned(7 downto 0);
+  begin
     if rising_edge(clk) then
-      if core_reset_n = '0' then
-        rx_avail <= '0';
+      if core_reset_n = '0' or monitor_hold = '1' then
+        rx_count    <= 0;
+        rx_rd_ptr   <= (others => '0');
+        rx_wr_ptr   <= (others => '0');
+        rx_overflow <= '0';
       else
-        if urx_valid = '1' then
-          rx_data  <= urx_data;
-          rx_avail <= '1';
+        count_v := rx_count;
+        rd_v    := rx_rd_ptr;
+        wr_v    := rx_wr_ptr;
+
+        if rx_pop = '1' and count_v > 0 then
+          rd_v    := rd_v + 1;
+          count_v := count_v - 1;
         end if;
-        if cs_uart = '1' and cpu_we = '0' and cpu_addr(0) = '0' and phi2_en = '1' then
-          rx_avail <= '0';
+
+        if urx_valid = '1' then
+          if count_v < RX_FIFO_DEPTH then
+            rx_fifo(to_integer(wr_v)) <= urx_data;
+            wr_v    := wr_v + 1;
+            count_v := count_v + 1;
+          else
+            rx_overflow <= '1';
+          end if;
+        end if;
+
+        rx_count  <= count_v;
+        rx_rd_ptr <= rd_v;
+        rx_wr_ptr <= wr_v;
+      end if;
+    end if;
+  end process;
+
+  -- Keep a $DE00 read stable after the pop edge. T65 can hold the same read
+  -- address across more than one phi2 tick; without this latch the FIFO pointer
+  -- may advance while the CPU is still sampling the data bus.
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' or monitor_hold = '1' then
+        uart_read_held  <= '0';
+        uart_data_latch <= (others => '0');
+      elsif uart_read_sel = '0' then
+        uart_read_held <= '0';
+      elsif phi2_en = '1' and uart_read_held = '0' then
+        uart_read_held <= '1';
+        if rx_count > 0 then
+          uart_data_latch <= rx_fifo(to_integer(rx_rd_ptr));
+        else
+          uart_data_latch <= (others => '0');
         end if;
       end if;
     end if;
   end process;
 
-  uart_dout <= rx_data when cpu_addr(0) = '0'           -- $DE00 received byte
-               else "000000" & utx_busy & rx_avail;     -- $DE01 status
+  uart_data_dout <= uart_data_latch when uart_read_held = '1'
+                    else rx_fifo(to_integer(rx_rd_ptr));
+
+  uart_dout <= uart_data_dout when cpu_addr(0) = '0'
+               else "00000" & rx_overflow & utx_busy & rx_avail;
 
   -- ---- CPU read data mux ----
   -- The CPU read mux is split so the steal-coupled main-RAM read (dram_dout, from

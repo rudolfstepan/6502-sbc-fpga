@@ -34,12 +34,19 @@ boards/tang_primer_20k/c64/
 ## Building
 
 1. Put the original ROMs in `roms/c64/` (`BASIC.ROM` 8K, `KERNAL.ROM` 8K,
-   `CHAR.ROM` 4K) and generate the VHDL image:
+   `CHAR.ROM` 4K). For the virtual-1541 KERNAL hook, patch the local KERNAL
+   `LOAD` entry to the guarded `$ECB9` stub, then generate the VHDL image:
    ```
-   python tools/build_c64_roms.py
+   make c64-kernal-load-vector-patch
+   make c64-roms
    ```
    (The ROMs themselves are not redistributed; this is run locally.)
-2. Open `project/tang_c64.gprj` in Gowin IDE, or run `gw_sh project/build.tcl`.
+2. Build the FPGA image:
+   ```
+   make c64-tang20k-build
+   ```
+   This runs `boards/tang_primer_20k/c64/project/build.bat`, which drives
+   `gw_sh project/build.tcl` with a fresh source file list.
 3. Flash `impl/pnr/tang_c64.fs`.
 
 Reset = KEY[0] (T10). A short press is a normal C64 reset and leaves RAM
@@ -65,15 +72,15 @@ make c64-sprite-test-prg
 python tools/c64_uart_prg_loader.py roms/sprite_test.prg --port COM15
 ```
 
-The C64 PRG loader sends monitor wake byte `0xA5` before uploading. The board
-top ignores all other received bytes while the monitor is idle, so the C64 debug
-UART stream cannot accidentally start or spoof the loader session. The loader
+The C64 PRG loader sends monitor wake sequence `A5 5A C3 3C` before uploading. The board
+top ignores all other received bytes while the monitor is idle; normal C64 mode
+uses the same CH340 link for the host-disk UART at `$DE00/$DE01`. The loader
 also uses conservative UART pacing by default because the FPGA monitor writes
 directly into C64 RAM and does not acknowledge each byte. The default streams
 16 bytes per monitor line with no artificial delay, which keeps 16 KB uploads
 practical at the fixed 115200 baud. If a board or older bitstream still drops
 bytes, fall back to the old pacing with `--safe` or explicitly use
-`--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.001`.
+`--wake-sequence "0xA5 0x5A 0xC3 0x3C" --bytes-per-line 1 --line-delay 0.001`.
 
 After upload, type:
 
@@ -140,6 +147,120 @@ the desired starter. This is for single-load/cracked games; multi-load games,
 fastloaders, and copy-protected disks still need the later KERNAL/IEC/1541 load
 path. After testing large games, use a long KEY[0] reset if BASIC/KERNAL should
 restart with clean RAM instead of preserving the uploaded program bytes.
+
+### Virtual 1541 UART transport
+
+The C64 board top now routes the native C64 host-disk UART to the CH340 while
+the monitor is inactive. The C64 sees this transport at:
+
+| Address | Direction | Meaning |
+| --- | --- | --- |
+| `$DE00` | read/write | UART data byte; reading consumes the received byte |
+| `$DE01` | read | bit 0 = RX byte available, bit 1 = TX busy, bit 2 = RX overflow |
+
+The PC-side companion is:
+
+```powershell
+python tools/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
+```
+
+That tool already implements the host-heavy side of the virtual drive: D64
+mounting, directory parsing, PRG chain reads, raw sector reads, and a small
+binary packet protocol (`0xC6` request magic, `0x64` response magic). The FPGA
+monitor still uses the same USB-UART: send the monitor wake sequence
+`A5 5A C3 3C` to take over the line for uploads, then `G` returns control to the
+C64 disk transport. The sequence keeps arbitrary PRG bytes from accidentally
+starting the monitor during a virtual-drive transfer.
+Large PC-to-C64 responses are paced by the server in small chunks (default
+8 bytes every 5 ms for the smoke loader), and the C64
+core buffers received bytes in a 256-byte FIFO so PRG loads are not limited by a
+single UART latch. The FIFO is held empty while the FPGA monitor owns the link,
+so monitor uploads cannot leave stale bytes for the next virtual-drive command.
+
+The server supports full-file `LOAD`, chunked `LOADFIRSTCHUNK`, named
+`LOADCHUNK`, directory, status, and raw sector requests. It is not a
+cycle-accurate IEC bus yet; custom fastloaders and copy protection still need
+deeper 1541/IEC work.
+
+To smoke-test the serial path without a KERNAL patch:
+
+```powershell
+make c64-v1541-ping-prg
+python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_ping.prg --port COM15
+```
+
+Then close the upload tool, start `tools/c64_1541_uart_gui.py` on the same COM
+port, and type `RUN` on the C64 keyboard. The PRG sends a binary `PING` frame
+through `$DE00/$DE01` and prints the server reply.
+
+The next-level test loads the first PRG from the mounted D64 through the same
+transport. The small BASIC stub lives at `$0801`, but the loader itself runs at
+`$C000` so it can safely load a normal BASIC PRG over `$0801`:
+
+```powershell
+make c64-v1541-loadfirst-prg
+python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_loadfirst.prg --port COM15
+```
+
+Close the upload tool, start the virtual 1541 server, mount/select a D64, and
+type `RUN`. On success the loader prints the end address, patches BASIC pointers
+for `$0801` PRGs, and returns to READY. It does not queue `RUN`, `SYS`, or alter
+the loaded bytes; the PRG is placed at the load address stored in the file, like
+`LOAD "",8,1`. The loader preserves its temporary zero-page workspace before
+returning to BASIC. Start the PRG manually afterwards if applicable. Avoid `LIST`
+on crack/game loaders: many use only a tiny BASIC start line followed by binary
+data, and the BASIC lister can run into that data.
+If it reports `NO DISK MOUNTED`, mount a D64 in the GUI before running the
+loader again. If `$DE01` bit 2 ever appears during debugging, the server response
+is still too fast for the current C64-side loader loop.
+The GUI logs the load in stages: `< LOADFIRST`, `loading "..."`, `> LOADFIRST
+status=...`, and `sent ... bytes`. Missing stages point to PC-side D64 parsing,
+serial writes, or C64-side receive timing respectively.
+Current smoke-loader builds request the PRG in 128-byte `LOADFIRSTCHUNK` blocks
+instead of accepting one large response frame; this keeps the PC-to-C64 transfer
+paced by the C64's own RAM-copy loop.
+
+For games that use the normal KERNAL `LOAD` entry point to fetch later program
+parts, patch the C64 KERNAL entry at `$FFD5` to the guarded virtual-1541 stub.
+Then regenerate the compiled ROM VHDL:
+
+```powershell
+make c64-kernal-load-vector-patch
+make c64-roms
+```
+
+The patch changes `$FFD5` from `JMP $F49E` to `JMP $ECB9`. The `$ECB9` guard
+stub checks whether the RAM hook is installed at `$C000` and only then jumps to
+the hook entry at `$C02C`; otherwise it falls back to `$F49E`. This avoids the
+earlier READY hang caused by KERNAL/BASIC restoring `$0330/$0331` to `$F4A5`
+after a directory load. After rebuilding and flashing the FPGA bitstream,
+install the RAM hook on the real C64 core. Start with the diagnostic variant:
+
+```powershell
+make c64-v1541-hook-diag-prg c64-v1541-hook-prg
+python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_hook_diag.prg --port COM15
+```
+
+Run the PRG once on the C64. After that, start the virtual 1541 server, mount a
+D64, and use normal C64 commands such as:
+
+```basic
+LOAD"$",8
+LIST
+LOAD"*",8,1
+RUN
+```
+
+The hook reads the real KERNAL filename/device variables, asks the PC server for
+the requested PRG in 128-byte `LOADCHUNK` blocks, honours the file's embedded
+load address for `,8,1`, and returns the end address in X/Y like KERNAL `LOAD`.
+This is enough for programs that later call KERNAL `LOAD` for additional parts.
+It will not catch games that replace the KERNAL path with a custom fastloader,
+and the current hook lives at `$C000`, so software that overwrites that area can
+still destroy it.
+
+See `docs/C64_V1541_UART_TECHNOTE.md` for the READY hang analysis and monitor
+probe workflow.
 
 ## Architecture
 

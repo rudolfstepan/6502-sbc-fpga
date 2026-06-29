@@ -127,3 +127,5 @@ paper/*
 roms/_imgdisk/
 sw/*_preview.png
 sw/*_bg.inc
+
+.tmp

@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from d64_common import (  # noqa: E402
     BAM_SECTOR,
     DIR_TRACK,
+    INVALID_INDEX,
     SECTOR_SIZE,
     d64_byte_offset,
     is_supported_size,
@@ -30,7 +31,12 @@ FILE_TYPES = {0: "DEL", 1: "SEQ", 2: "PRG", 3: "USR", 4: "REL"}
 
 def read_sector(data: bytes, track: int, sector: int) -> bytes:
     off = d64_byte_offset(track, sector)
-    return data[off : off + SECTOR_SIZE]
+    if off == INVALID_INDEX:
+        raise ValueError(f"invalid T{track}/S{sector} in directory chain")
+    sec = data[off : off + SECTOR_SIZE]
+    if len(sec) != SECTOR_SIZE:
+        raise ValueError(f"short sector at T{track}/S{sector}")
+    return sec
 
 
 def decode_name(raw: bytes) -> str:
@@ -53,10 +59,21 @@ def iter_entries(data: bytes):
         seen.add((track, sector))
         sec = read_sector(data, track, sector)
         for j in range(8):
-            entry = sec[2 + j * 32 : 2 + j * 32 + 32]
+            start = 2 + j * 32
+            if start >= SECTOR_SIZE:
+                break
+            entry = sec[start : min(start + 32, SECTOR_SIZE)]
+            if len(entry) < 30:
+                continue
             ftype = entry[0]
             if ftype == 0:
                 continue  # deleted / empty slot
+            # Real 1541 directories keep the block count at file-entry offsets
+            # 28/29. Older project-generated test D64s wrote it at 30/31, so
+            # prefer the real location and fall back to the local legacy one.
+            blocks = entry[28] | (entry[29] << 8)
+            if blocks == 0 and len(entry) >= 32:
+                blocks = entry[30] | (entry[31] << 8)
             yield {
                 "type_byte": ftype,
                 "type": FILE_TYPES.get(ftype & 0x07, "???"),
@@ -64,7 +81,7 @@ def iter_entries(data: bytes):
                 "first_track": entry[1],
                 "first_sector": entry[2],
                 "name": decode_name(entry[3:19]),
-                "blocks": entry[30] | (entry[31] << 8),
+                "blocks": blocks,
             }
         track, sector = sec[0], sec[1]
 
