@@ -13,9 +13,9 @@ By default the SBC target keeps the PRG's **load address also its entry point**
 
 This trades a tiny startup copy for a single, predictable entry address.
 
-The C64 target adds a normal BASIC `10 SYS <entry>` stub at $0801 by default, so
-the resulting PRG can be loaded through the C64 UART monitor and started with
-`RUN`.
+The C64 target adds a normal BASIC `10 SYS <entry>` stub at $0801 by default and
+uses CIA Timer A for a PAL-like 50 Hz player tick, so the resulting PRG can be
+loaded through the C64 UART monitor and started with `RUN`.
 """
 from __future__ import annotations
 
@@ -32,12 +32,15 @@ VIC_BITMAP = 0x6000
 RAM_FLOOR = 0x2000      # lowest safe PRG load addr (BASIC/loader live below this)
 PLAYER_RESERVE = 0x80   # bytes reserved below the payload for the in-place player
 BASIC_LOAD = 0x0801
+C64_PAL_FRAME_PERIOD = 19999  # 1 MHz PHI2 / 50 Hz, minus one for CIA underflow
 
 
 def target_symbols(target: str) -> list[str]:
     if target == "c64":
-        return ["RASTER = $D012", "CIA_TALO = $DC04", "CIA_TAHI = $DC05",
-                "CIA_CRA = $DC0E", "SRC = $F0", "DST = $F2", ""]
+        return ["CIA_TALO = $DC04", "CIA_TAHI = $DC05",
+                "CIA_ICR = $DC0D", "CIA_CRA = $DC0E",
+                "VIC_D011 = $D011", "VIC_D01A = $D01A",
+                "SRC = $F0", "DST = $F2", ""]
     return ["TIME_MS = $883A", "LAST_MS = $0FFF",
             "CIA_TALO = $DC04", "CIA_TAHI = $DC05", "CIA_CRA = $DC0E",
             "SRC = $F0", "DST = $F2", ""]
@@ -46,12 +49,27 @@ def target_symbols(target: str) -> list[str]:
 def target_timer_init(target: str) -> list[str]:
     if target != "c64":
         return []
+    period = C64_PAL_FRAME_PERIOD
     return [
-        # Some SID players read CIA Timer A directly. Once the tune owns the
-        # machine, run it as a free-running down-counter.
+        # Drive PAL SID updates from CIA Timer A (~50 Hz). Polling ICR keeps the
+        # wrapper independent of KERNAL IRQ vectors and avoids 60 Hz video timing.
         "    lda #0", "    sta CIA_CRA",
-        "    lda #$FF", "    sta CIA_TALO", "    lda #$FF", "    sta CIA_TAHI",
-        "    lda #$01", "    sta CIA_CRA",
+        "    lda #$7F", "    sta CIA_ICR",  # mask all CIA IRQ sources
+        f"    lda #${period & 0xFF:02X}", "    sta CIA_TALO",
+        f"    lda #${period >> 8:02X}", "    sta CIA_TAHI",
+        "    lda #$11", "    sta CIA_CRA",  # start + force-load
+        "    lda CIA_ICR",
+    ]
+
+
+def target_video_quiet(target: str) -> list[str]:
+    if target != "c64":
+        return []
+    return [
+        # Pure SID PRGs do not need the VIC display. Clearing DEN stops VIC RAM
+        # fetches in this core, removing playback jitter from RDY bus steals.
+        "    lda VIC_D011", "    and #$EF", "    sta VIC_D011",
+        "    lda #0", "    sta VIC_D01A",
     ]
 
 
@@ -59,8 +77,7 @@ def target_wait_loop(target: str, play: int) -> list[str]:
     if target == "c64":
         return [
             "play_loop:",
-            "@wait_not_zero:", "    lda RASTER", "    beq @wait_not_zero",
-            "@wait_zero:", "    lda RASTER", "    bne @wait_zero",
+            "@wait_timer:", "    lda CIA_ICR", "    and #$01", "    beq @wait_timer",
             f"    jsr ${play:04X}",
             "    jmp play_loop",
         ]
@@ -90,7 +107,8 @@ def render_asm(name: str, base: int, load: int, init: int, play: int,
         "    dex", "    bne @page",
         "    lda #0", "    tax", "    tay",
         f"    jsr ${init:04X}",
-    ] + target_timer_init(target) + target_wait_loop(target, play) + [
+        "    sei",
+    ] + target_video_quiet(target) + target_timer_init(target) + target_wait_loop(target, play) + [
         "", '.segment "RODATA"', "sid_data:",
     ]
     return "\n".join(lines)
@@ -152,10 +170,10 @@ def render_inplace_asm(name: str, entry: int, load: int, init: int,
         '.segment "CODE"',
         "start:",
         "    sei", "    cld",
-    ] + target_timer_init("c64") + [
+    ] + [
         f"    lda #{song}", "    tax", "    tay", f"    jsr ${init:04X}",
         "    sei",        # re-mask: some inits CLI (no $0314 bridge in a RAM PRG)
-    ] + target_wait_loop(target, play) + [
+    ] + target_video_quiet(target) + target_timer_init(target) + target_wait_loop(target, play) + [
         "", '.segment "PAYLOAD"', "sid_data:",
     ]
     return "\n".join(lines)
@@ -228,7 +246,7 @@ def main() -> int:
     ap.add_argument("--ca65", default="C:/tools/cc65/bin/ca65")
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65")
     ap.add_argument("--target", choices=("sbc", "c64"), default="sbc",
-                    help="player timing target: sbc uses $883A, c64 uses VIC raster $D012")
+                    help="player timing target: sbc uses $883A, c64 uses CIA Timer A")
     ap.add_argument("--basic-run", dest="basic_run", action="store_true",
                     help="prepend BASIC 10 SYS <entry> at $0801 so RUN starts the PRG")
     ap.add_argument("--no-basic-run", dest="basic_run", action="store_false",
@@ -239,7 +257,7 @@ def main() -> int:
         a.basic_run = a.target == "c64"
 
     try:
-        info = parse_payload(a.sid.read_bytes())
+        info = parse_payload(a.sid.read_bytes(), a.sid.name)
     except SidUnsupported as e:
         raise SystemExit(f"{a.sid.name}: {e}")
 

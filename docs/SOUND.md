@@ -353,6 +353,28 @@ python tools/upload_monitor_hex.py roms/sound_commando.rom --split-rom \
 python tools/build_native_sid_rom.py path/to/tune.sid sw/<name>.s   # one wrapper
 ```
 
+### C64 UART SID PRGs
+
+The native C64 core uses a different SID wrapper for UART-uploadable PRGs. These
+files live in `roms/c64_uart_sid/`, load at `$0801`, include a BASIC `SYS` line,
+and start with `RUN` after upload through `tools/c64_uart_prg_loader.py`:
+
+```sh
+make c64-sid-prgs
+python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
+```
+
+The C64 PRG wrapper is **sound-only**. It runs the tune's native `init`, masks
+CIA IRQ sources, disables VIC raster IRQs, clears `$D011.DEN`, and then polls CIA
+Timer A for a PAL-like 50 Hz player tick. The C64 VIC implementation treats
+`DEN=0` as "no display fetch", so the VIC stops asserting BA/RDY while the tune
+plays. That removes audible stalls from the single-port RAM sharing path; the
+HDMI output is intentionally blank while these PRGs play.
+
+This is separate from the `sound_*.rom` split-ROM path above. The split-ROM
+wrappers target the SBC monitor/ROM map, while `roms/c64_uart_sid/*.prg` targets
+the native C64 BASIC environment and UART PRG loader.
+
 ### Bulk-building a whole `.sid` collection
 
 `tools/build_all_sid_roms.py` wraps **every** suitable tune under `sid_orig/` at

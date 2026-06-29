@@ -85,9 +85,7 @@ c64-graphics-test-prg:
 	@echo "Built roms/test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
 
 c64-sid-prgs:
-	$(PYTHON) tools/build_sid_prg.py sid_orig/Erebus.sid roms/c64_uart_sid/Erebus.prg --target c64
-	$(PYTHON) tools/build_sid_prg.py sid_orig/Cool_Tune.sid roms/c64_uart_sid/Cool_Tune.prg --target c64
-	$(PYTHON) tools/build_sid_prg.py sid_orig/Simple_Music.sid roms/c64_uart_sid/Simple_Music.prg --target c64
+	$(PYTHON) tools/build_c64_sid_prgs.py
 	@echo Built C64 UART SID PRGs in roms/c64_uart_sid - upload, then RUN
 
 ## REIST benchmark engine (standalone, no 6502): unit + end-to-end GHDL run.

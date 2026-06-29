@@ -156,6 +156,7 @@ The project includes a Makefile with standard targets:
 make test                  # Run all default SBC tests
 make test-c64-vic          # Run focused native C64 VIC-II graphics tests
 make c64-graphics-test-prg # Build roms/test.prg for UART upload to the C64 core
+make c64-sid-prgs          # Build RUN-loadable C64 SID PRGs in roms/c64_uart_sid
 make clean                 # Remove generated files
 make help                  # Show available targets, if supported by your make
 ```
@@ -196,6 +197,33 @@ The same VIC-II renderer can be checked without hardware:
 ```powershell
 make test-c64-vic
 ```
+
+### Native C64 SID PRGs
+
+The C64 core can also play SID tunes through UART-uploadable PRGs. Build every
+convertible tune from `sid_orig/*.sid` with:
+
+```powershell
+make c64-sid-prgs
+```
+
+The generated files are written to `roms/c64_uart_sid/`. Upload one with the C64
+UART loader and start it from BASIC:
+
+```powershell
+python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
+```
+
+```text
+RUN
+```
+
+These PRGs are intentionally sound-only. Their wrapper clears `$D011.DEN` and
+disables VIC raster IRQs before starting CIA Timer A as a roughly 50 Hz SID
+player tick. In this core `DEN=0` also stops VIC RAM fetches, so the single-port
+C64 RAM no longer stalls the CPU during playback and long SID players avoid
+audible timing hiccups. See `roms/c64_uart_sid/README.md` for details and known
+conversion limits.
 
 ## VHDL Compilation Flags
 

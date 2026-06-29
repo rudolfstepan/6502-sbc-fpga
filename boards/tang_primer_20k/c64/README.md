@@ -75,6 +75,29 @@ text. Press any key to advance to the next page. Bitmap data is written at
 `$2000`, while the video matrix remains at `$0400`, so the test does not
 overwrite its own BASIC/loader area.
 
+### UART-uploadable SID PRGs
+
+SID tunes can be built as normal C64 PRGs with a BASIC `SYS` header and uploaded
+through the same UART monitor:
+
+```powershell
+make c64-sid-prgs
+python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
+```
+
+After upload, type:
+
+```text
+RUN
+```
+
+The C64 SID wrapper is sound-only. It calls the tune's native `init`, then
+clears `$D011.DEN`, disables VIC raster IRQs, and drives the `play` routine from
+CIA Timer A at roughly 50 Hz. The native VIC honours `DEN=0` by stopping its
+RAM-fetch window, which removes BA/RDY stalls from the single-port RAM path and
+keeps playback stable for heavy SID players. The HDMI output is blank while the
+tune plays by design.
+
 ## Architecture
 
 ### Reused vs. new

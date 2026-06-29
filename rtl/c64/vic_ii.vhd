@@ -172,6 +172,7 @@ architecture rtl of vic_ii is
   signal bitmap_base : unsigned(15 downto 0);
   signal fetch_offset : unsigned(15 downto 0);
   signal raster_v    : unsigned(8 downto 0);
+  signal display_en  : std_logic;
 
   -- Pepto palette in RGB565 split (same constants as vic_vga).
   type pal5_t is array (0 to 15) of std_logic_vector(4 downto 0);
@@ -206,6 +207,7 @@ begin
   screen_base <= "00" & unsigned(reg_d018(7 downto 4)) & "0000000000";
   bitmap_base <= "00" & unsigned(reg_d018(3 downto 3)) & "0000000000000";
   raster_v    <= to_unsigned(vc mod 512, 9);
+  display_en  <= reg_d011(4);
 
   -- ----- per-line character/colour fetch -----
   process(clk)
@@ -236,7 +238,7 @@ begin
             fetch_phase <= 0;
             fetch_bmm   <= reg_d011(5);
             fetch_valid <= '0';
-            if nv >= V_BORD and nv < TV_END then
+            if display_en = '1' and nv >= V_BORD and nv < TV_END then
               fetching <= '1';
             end if;
           end if;
@@ -286,7 +288,8 @@ begin
 
   -- ----- display geometry -----
   hx     <= hc - H_PILL when hc >= H_PILL and hc < H_CEND else 0;
-  in_text <= '1' when hc >= H_PILL and hc < H_CEND and
+  in_text <= '1' when display_en = '1' and
+                      hc >= H_PILL and hc < H_CEND and
                       vc >= V_BORD and vc < TV_END else '0';
   v_off  <= (vc - V_BORD) when vc >= V_BORD else 0;
   src_y  <= (v_off / 2) when v_off < 400 else 0;
