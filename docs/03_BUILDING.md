@@ -156,6 +156,7 @@ The project includes a Makefile with standard targets:
 make test                  # Run all default SBC tests
 make test-c64-vic          # Run focused native C64 VIC-II graphics tests
 make c64-graphics-test-prg # Build roms/test.prg for UART upload to the C64 core
+make c64-sprite-test-prg   # Build roms/sprite_test.prg for sprite testing
 make c64-sid-prgs          # Build RUN-loadable C64 SID PRGs in roms/c64_uart_sid
 make clean                 # Remove generated files
 make help                  # Show available targets, if supported by your make
@@ -191,6 +192,17 @@ is tuned for larger uploads; for stubborn boards or older loader copies, use
 After upload, type `RUN` on the C64. The program cycles through text, hires
 bitmap, multicolour bitmap, ECM text, and multicolour text; press any key for the
 next screen.
+
+For the focused sprite path:
+
+```powershell
+make c64-sprite-test-prg
+python tools/c64_uart_prg_loader.py roms/sprite_test.prg --port COM15
+```
+
+After `RUN`, the PRG displays a moving hires sprite and static multicolour,
+expanded, and X-MSB sprites. Sprite data lives at `$3000`, with pointers in the
+screen matrix at `$07F8-$07FB`.
 
 The same VIC-II renderer can be checked without hardware:
 

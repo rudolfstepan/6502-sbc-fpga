@@ -58,6 +58,13 @@ make c64-graphics-test-prg
 python tools/c64_uart_prg_loader.py roms/test.prg --port COM15
 ```
 
+The focused sprite smoke test is built and uploaded the same way:
+
+```powershell
+make c64-sprite-test-prg
+python tools/c64_uart_prg_loader.py roms/sprite_test.prg --port COM15
+```
+
 The C64 PRG loader sends monitor wake byte `0xA5` before uploading. The board
 top ignores all other received bytes while the monitor is idle, so the C64 debug
 UART stream cannot accidentally start or spoof the loader session. The loader
@@ -78,6 +85,10 @@ through text mode, hires bitmap, multicolour bitmap, ECM text, and multicolour
 text. Press any key to advance to the next page. Bitmap data is written at
 `$2000`, while the video matrix remains at `$0400`, so the test does not
 overwrite its own BASIC/loader area.
+
+`sprite_test.prg` also loads at `$0801` and starts with `RUN`. It shows a moving
+hires sprite plus multicolour, expanded, and X-MSB sprites using data at `$3000`
+and sprite pointers at `$07F8-$07FB`.
 
 ### UART-uploadable SID PRGs
 
@@ -201,6 +212,7 @@ Relevant registers:
 | `$D019/$D01A` | raster IRQ latch/enable |
 | `$D020` | border colour |
 | `$D021-$D024` | background colours 0-3 |
+| `$D000-$D00F`, `$D010`, `$D015`, `$D017`, `$D01B-$D01D`, `$D025-$D02E` | first-pass sprite positions, enable, expansion, priority, multicolour, and colours |
 
 Text modes fetch 40 screen bytes and colour nibbles per visible scanline. When
 `$D018` points at the VIC character-ROM window (`$1000-$1FFF` in banks 0 and 2),
@@ -214,6 +226,12 @@ the current 8-line character row. Colour RAM is read in parallel during the firs
 phase. This preserves a single steal window per output scanline and keeps the
 CPU-visible C64 addresses standard.
 
+Sprites are implemented as a first-pass scanline overlay. The VIC fetches sprite
+pointers from the active video matrix at `$03F8-$03FF`, reads the visible sprite
+row bytes from the selected VIC bank, and renders hires/multicolour sprites with
+X/Y expansion and foreground/background priority. Collision registers currently
+read as zero.
+
 Focused simulation:
 
 ```powershell
@@ -221,8 +239,8 @@ make test-c64-vic
 ```
 
 That target runs the existing text-render smoke test plus
-`tb_c64_vic_graphics_modes`, which checks actual RGB output for hires bitmap and
-multicolour bitmap.
+`tb_c64_vic_graphics_modes`, which checks actual RGB output for hires bitmap,
+multicolour bitmap, RAM charsets, and hires/multicolour sprites.
 
 ## Milestones
 
@@ -237,13 +255,14 @@ multicolour bitmap.
   the C64 UART monitor. Next: a KERNAL/IEC/1541 path for `LOAD"*",8,1`, `RUN`,
   multi-load games, and fastloader-aware compatibility work.
 - **M2 — full VIC-II**
-  Hires/multicolour bitmap, ECM, multicolour text, and RAM charsets are in place. Remaining:
-  8 sprites + collisions, sprite/gfx priority, per-cycle accuracy, badlines,
-  and more exact badline/fetch timing.
+  Hires/multicolour bitmap, ECM, multicolour text, RAM charsets, and first-pass
+  sprites are in place. Remaining: sprite collisions, per-cycle accuracy,
+  badlines, and more exact badline/fetch timing.
 
 ## Known limitations (M1)
-- VIC-II has text, ECM, multicolour text, hires bitmap, and multicolour bitmap.
-  Sprites, collisions, badlines, and cycle-exact display effects are still M2.
+- VIC-II has text, ECM, multicolour text, hires bitmap, multicolour bitmap, RAM
+  charsets, and first-pass sprites. Sprite collisions, badlines, and cycle-exact
+  display effects are still M2.
 - CHARGEN/RAM charset selection follows `$D018` for the common text-mode cases;
   the character-ROM window is modelled for VIC banks 0 and 2.
 - CHARGEN read has 1-cycle latency (sync BSRAM) -> at most a 1-pixel horizontal

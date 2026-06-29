@@ -23,6 +23,7 @@ and [docs/FPGA_TOOLS_GUI.md](../docs/FPGA_TOOLS_GUI.md) for details.
 | --- | --- |
 | `upload_demo.rom` | Bring-up demo: LED blink + VGA/HDMI text + UART banner. No arguments needed. |
 | `test.prg` | Native C64 VIC-II graphics test PRG for `tools/c64_uart_prg_loader.py`; loads at `$0801`, run with `RUN`, then press any key to cycle text, hires bitmap, multicolour bitmap, ECM text, and multicolour text. Build with `make c64-graphics-test-prg`. |
+| `sprite_test.prg` | Native C64 VIC-II sprite test PRG for `tools/c64_uart_prg_loader.py`; loads at `$0801`, run with `RUN`, then shows a moving hires sprite plus multicolour, expanded, and X-MSB sprites. Build with `make c64-sprite-test-prg`. |
 | `c64_uart_sid/*.prg` | Native C64 UART SID player PRGs. Build with `make c64-sid-prgs`, upload with `tools/c64_uart_prg_loader.py`, then start with `RUN`. Matching `*.prg.segments.json` sidecars let the loader skip large zero-filled gaps during UART upload. These are sound-only PRGs: they clear `$D011.DEN` so the VIC stops RAM fetches and SID playback stays steady. |
 | `soundtest.rom` | Legacy 4-voice sound-chip demo (each waveform, an ADSR swell, a 4-voice chord). Uses the old contiguous `$C000–$FFFF` layout — not for the current split map. |
 | `mandelbrot_bitmap.rom` | Standalone Mandelbrot renderer using software fixed-point multiply (split-ROM). |

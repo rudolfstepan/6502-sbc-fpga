@@ -61,7 +61,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
         sid-disks reist adventure-rom multipart-d64 test-c64-vic c64-graphics-test-prg \
-        c64-sid-prgs
+        c64-sprite-test-prg c64-sid-prgs
 
 ## ============================================================================
 ## Simulation targets
@@ -76,13 +76,19 @@ test-c64-vic:
 	$(GHDL) -e $(GHDL_FLAGS) tb_vic_display
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_display $(GHDL_RUN_FLAGS) --stop-time=20ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_c64_vic_graphics_modes
-	$(GHDL) -r $(GHDL_FLAGS) tb_c64_vic_graphics_modes $(GHDL_RUN_FLAGS) --stop-time=60ms
+	$(GHDL) -r $(GHDL_FLAGS) tb_c64_vic_graphics_modes $(GHDL_RUN_FLAGS) --stop-time=140ms
 
 c64-graphics-test-prg:
 	$(CA65) --cpu 6502 -o roms/test.o sw/c64_vic_graphics_test.s
 	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/test.prg roms/test.o
 	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/test.o').unlink(missing_ok=True)"
 	@echo "Built roms/test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
+
+c64-sprite-test-prg:
+	$(CA65) --cpu 6502 -o roms/sprite_test.o sw/c64_vic_sprite_test.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/sprite_test.prg roms/sprite_test.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/sprite_test.o').unlink(missing_ok=True)"
+	@echo "Built roms/sprite_test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
 
 c64-sid-prgs:
 	$(PYTHON) tools/build_c64_sid_prgs.py

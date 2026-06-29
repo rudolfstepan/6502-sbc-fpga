@@ -4,6 +4,7 @@
 --   * BMM=1, MCM=0: hires bitmap uses screen-RAM nibbles as fg/bg.
 --   * BMM=1, MCM=1: multicolour bitmap maps bit-pairs to bg/screen/colour RAM.
 --   * BMM=0, custom RAM charset selected through $D018.
+--   * Sprite pointer fetch + hires/multicolour sprite overlay.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -34,8 +35,9 @@ architecture sim of tb_c64_vic_graphics_modes is
   signal vga_r, vga_b : std_logic_vector(4 downto 0);
   signal vga_g        : std_logic_vector(5 downto 0);
 
-  signal test_mode : natural range 0 to 2 := 0;
+  signal test_mode : natural range 0 to 4 := 0;
   signal hi_red, hi_white, mc_green, mc_black, ram_white, ram_black : boolean := false;
+  signal spr_red, spr_mc_green : boolean := false;
 
   constant TARGET_VC : integer := 44;  -- visible row 0, glyph/bitmap line 2
   constant H_PILL    : integer := 40;
@@ -67,7 +69,16 @@ begin
   begin
     if rising_edge(clk) then
       a := to_integer(unsigned(vic_addr));
-      if a >= 16#0000# and a < 16#0140# and (a mod 40) = 0 then
+      if (test_mode = 3 or test_mode = 4) and a = 16#07F8# then
+        vic_data <= x"20";  -- sprite 0 pointer -> $0800
+      elsif (test_mode = 3 or test_mode = 4) and
+            a >= 16#0800# and a < 16#0840# and ((a - 16#0800#) mod 3) = 0 then
+        if test_mode = 3 then
+          vic_data <= x"80";  -- hires sprite first pixel set
+        else
+          vic_data <= x"40";  -- multicolour sprite first pair = 01
+        end if;
+      elsif a >= 16#0000# and a < 16#0140# and (a mod 40) = 0 then
         if test_mode = 0 then
           vic_data <= x"80";  -- first hires bitmap pixel set, rest clear
         else
@@ -155,6 +166,25 @@ begin
     assert ram_white report "RAM charset text did not render foreground pixel" severity failure;
     assert ram_black report "RAM charset text did not render background pixel" severity failure;
 
+    -- Hires sprite 0: screen=$0400, pointer at $07F8 -> $0800, X/Y biased to
+    -- the first visible text pixel of the test scanline.
+    test_mode <= 3;
+    write_reg("000000", x"18");  -- $D000 sprite 0 X = 24
+    write_reg("000001", x"34");  -- $D001 sprite 0 Y = 52
+    write_reg("010000", x"00");  -- $D010 X MSB clear
+    write_reg("010101", x"01");  -- $D015 enable sprite 0
+    write_reg("011100", x"00");  -- $D01C hires sprite
+    write_reg("100111", x"02");  -- $D027 sprite 0 colour red
+    wait for 25 ms;
+    assert spr_red report "hires sprite did not render over text/background" severity failure;
+
+    -- Multicolour sprite 0: pair 01 must use $D025.
+    test_mode <= 4;
+    write_reg("011100", x"01");  -- $D01C sprite 0 multicolour
+    write_reg("100101", x"05");  -- $D025 sprite multicolour 0 = green
+    wait for 25 ms;
+    assert spr_mc_green report "multicolour sprite did not render shared colour 0" severity failure;
+
     report "tb_c64_vic_graphics_modes passed" severity note;
     running <= false;
     wait;
@@ -177,29 +207,37 @@ begin
 
       if vga_de = '1' then
         if line_cnt = TARGET_VC and pix >= H_PILL and pix < H_PILL + 20 then
-          if test_mode = 0 then
+          case test_mode is
+          when 0 =>
             if vga_r = "10001" and vga_g = "001110" and vga_b = "00110" then
               hi_red <= true;
             end if;
             if vga_r = "11111" and vga_g = "111111" and vga_b = "11111" then
               hi_white <= true;
             end if;
-          else
+          when 1 =>
             if vga_r = "01011" and vga_g = "101000" and vga_b = "01001" then
               mc_green <= true;
             end if;
             if vga_r = "00000" and vga_g = "000000" and vga_b = "00000" then
               mc_black <= true;
             end if;
-            if test_mode = 2 then
-              if vga_r = "11111" and vga_g = "111111" and vga_b = "11111" then
-                ram_white <= true;
-              end if;
-              if vga_r = "00000" and vga_g = "000000" and vga_b = "00000" then
-                ram_black <= true;
-              end if;
+          when 2 =>
+            if vga_r = "11111" and vga_g = "111111" and vga_b = "11111" then
+              ram_white <= true;
             end if;
-          end if;
+            if vga_r = "00000" and vga_g = "000000" and vga_b = "00000" then
+              ram_black <= true;
+            end if;
+          when 3 =>
+            if vga_r = "10001" and vga_g = "001110" and vga_b = "00110" then
+              spr_red <= true;
+            end if;
+          when others =>
+            if vga_r = "01011" and vga_g = "101000" and vga_b = "01001" then
+              spr_mc_green <= true;
+            end if;
+          end case;
         end if;
         pix := pix + 1;
       end if;

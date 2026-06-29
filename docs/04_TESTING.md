@@ -54,8 +54,8 @@ make test-c64-vic
 
 This analyzes `rtl/c64/vic_ii.vhd`, runs the existing text-render smoke test
 (`tb_vic_display`), and then runs `tb_c64_vic_graphics_modes`. The graphics-mode
-test checks actual RGB output for hires bitmap and multicolour bitmap, not just
-register writes or fetch addresses.
+test checks actual RGB output for hires bitmap, multicolour bitmap, RAM charset
+text, and hires/multicolour sprites, not just register writes or fetch addresses.
 
 ### Run Tests with Output
 
@@ -213,8 +213,8 @@ The project includes comprehensive test coverage:
 
 **tb_c64_vic_graphics_modes.vhd**
 - Instantiates the native C64 `vic_ii`
-- Programs the real VIC register interface for hires bitmap and multicolour bitmap
-- Models C64 bitmap memory at `$2000`, screen attributes at `$0400`, and colour RAM
+- Programs the real VIC register interface for bitmap, RAM charset, and sprite modes
+- Models C64 bitmap memory, screen attributes at `$0400`, sprite pointers, sprite data, and colour RAM
 - Verifies the expected C64 palette colours appear on the HDMI RGB output
 - Included in `make test-c64-vic`
 
