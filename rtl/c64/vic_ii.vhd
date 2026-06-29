@@ -91,6 +91,11 @@ architecture rtl of vic_ii is
   constant V_TOT  : natural := 525;
   constant V_SS   : natural := 489;
   constant V_SE   : natural := 495;
+  -- Software-visible VIC raster. The HDMI output uses 480p and doubles C64
+  -- scanlines vertically, so expose a logical C64 raster rather than the raw
+  -- HDMI line counter through $D011/$D012 and raster IRQ compare.
+  constant C64_RASTER_LINES  : natural := 263;
+  constant C64_RASTER_OFFSET : natural := 30;
 
   -- Text band: 40 px top border, 25 rows * 16 px = 400, 40 px bottom border.
   constant V_BORD : natural := 40;
@@ -130,6 +135,7 @@ architecture rtl of vic_ii is
   signal fetch_phase: natural range 0 to 3 := 0;
   signal fetch_bmm  : std_logic := '0';
   signal fetch_chargen : std_logic := '0';
+  signal fetch_latch_matrix : std_logic := '0';
   signal fetch_valid: std_logic := '0';
   signal fetch_addr_col : natural range 0 to 39 := 0;
   signal fetch_spr_idx : natural range 0 to 7 := 0;
@@ -144,6 +150,7 @@ architecture rtl of vic_ii is
   signal reg_d015 : std_logic_vector(7 downto 0) := x"00";
   signal reg_d012 : std_logic_vector(7 downto 0) := x"00";
   signal reg_d016 : std_logic_vector(7 downto 0) := x"08";  -- CSEL=1
+  signal reg_d016_disp : std_logic_vector(7 downto 0) := x"08";
   signal reg_d017 : std_logic_vector(7 downto 0) := x"00";
   signal reg_d018 : std_logic_vector(7 downto 0) := x"15";  -- screen $0400, char $1000
   signal reg_d01b : std_logic_vector(7 downto 0) := x"00";
@@ -176,6 +183,8 @@ architecture rtl of vic_ii is
   signal src_y: natural range 0 to 199 := 0;
   signal src_x: natural range 0 to 319 := 0;
   signal xscroll: natural range 0 to 7 := 0;
+  signal h_text_left : natural range 0 to H_CONT := 0;
+  signal h_text_right: natural range 0 to H_CONT := H_CONT;
 
   signal scr_code : std_logic_vector(7 downto 0);
   signal glyph_code : std_logic_vector(7 downto 0);
@@ -275,7 +284,7 @@ begin
   -- 2 only. Other char bases/banks are RAM charsets.
   char_rom_visible <= '1' when (vic_bank = "00" or vic_bank = "10") and
                                reg_d018(3 downto 2) = "01" else '0';
-  raster_v    <= to_unsigned(vc mod 512, 9);
+  raster_v    <= to_unsigned(((vc / 2) + C64_RASTER_OFFSET) mod C64_RASTER_LINES, 9);
   display_en  <= reg_d011(4);
   fetch_addr_col <= fetch_col when fetch_col < 40 else 39;
   fetch_spr_idx <= fetch_col / 3 when fetch_col < 24 else 7;
@@ -302,6 +311,7 @@ begin
         fetching <= '0'; fetch_col <= 0; fetch_store <= 0;
         fetch_row <= 0; fetch_y <= 0; fetch_phase <= 0; fetch_bmm <= '0';
         fetch_chargen <= '0';
+        fetch_latch_matrix <= '0';
         fetch_valid <= '0';
         spr_activebuf <= (others => '0');
       else
@@ -323,6 +333,11 @@ begin
             fetch_row   <= nr;
             fetch_bmm   <= reg_d011(5);
             fetch_chargen <= char_rom_visible;
+            if (sy mod 8) = 0 then
+              fetch_latch_matrix <= '1';
+            else
+              fetch_latch_matrix <= '0';
+            end if;
             fetch_valid <= '0';
             spr_line_y := sy + SPR_Y_BIAS;
             sprite_any := '0';
@@ -366,12 +381,18 @@ begin
           if fetch_valid = '1' then
             if fetch_bmm = '1' and fetch_phase = 0 then
               bmpbuf(fetch_store) <= vic_data;
-              colbuf(fetch_store) <= color_data;
+              if fetch_latch_matrix = '1' then
+                colbuf(fetch_store) <= color_data;
+              end if;
             elsif fetch_bmm = '1' then
-              linebuf(fetch_store) <= vic_data;
+              if fetch_latch_matrix = '1' then
+                linebuf(fetch_store) <= vic_data;
+              end if;
             elsif fetch_phase = 0 then
-              linebuf(fetch_store) <= vic_data;
-              colbuf(fetch_store)  <= color_data;
+              if fetch_latch_matrix = '1' then
+                linebuf(fetch_store) <= vic_data;
+                colbuf(fetch_store)  <= color_data;
+              end if;
             elsif fetch_phase = 1 then
               glyphbuf(fetch_store) <= vic_data;
             elsif fetch_phase = 2 then
@@ -447,22 +468,28 @@ begin
   color_addr <= std_logic_vector(to_unsigned(fetch_row * 40 + fetch_col, 10));
 
   -- ----- display geometry -----
-  xscroll <= to_integer(unsigned(reg_d016(2 downto 0)));
+  xscroll <= to_integer(unsigned(reg_d016_disp(2 downto 0)));
   hx     <= hc - H_PILL when hc >= H_PILL and hc < H_CEND else 0;
   in_text <= '1' when display_en = '1' and
-                      hc >= H_PILL and hc < H_CEND and
+                      hc >= H_PILL + h_text_left and
+                      hc < H_PILL + h_text_right and
                       vc >= V_BORD and vc < TV_END else '0';
   v_off  <= (vc - V_BORD) when vc >= V_BORD else 0;
   src_y  <= (v_off / 2) when v_off < 400 else 0;
 
+  h_text_left  <= 0 when reg_d016_disp(3) = '1' else 16; -- CSEL: 40/38 columns, in 720p pixels.
+  h_text_right <= H_CONT when reg_d016_disp(3) = '1' else H_CONT - 16;
+
   process(hx, xscroll)
-    variable sx_sum : natural range 0 to 326;
+    variable sx_base : natural range 0 to 319;
   begin
-    sx_sum := (hx / 2) + xscroll;
-    if sx_sum >= 320 then
-      src_x <= sx_sum - 320;
+    sx_base := hx / 2;
+    -- $D016 fine X scroll shifts the display right. Convert back to source
+    -- coordinates so left-scrollers that count 7..0 move smoothly.
+    if sx_base < xscroll then
+      src_x <= sx_base + 320 - xscroll;
     else
-      src_x <= sx_sum;
+      src_x <= sx_base - xscroll;
     end if;
   end process;
 
@@ -568,7 +595,7 @@ begin
       col_d    <= colbuf(col);
       bmm_d    <= reg_d011(5);
       ecm_d    <= reg_d011(6);
-      mcm_d    <= reg_d016(4);
+      mcm_d    <= reg_d016_disp(4);
       chargen_d <= char_rom_visible;
       inb_d    <= in_border;
       intext_d <= in_text;
@@ -586,6 +613,7 @@ begin
     if rising_edge(clk) then
       if reset_n = '0' then
         reg_d011 <= x"1B"; reg_d012 <= x"00"; reg_d016 <= x"08";
+        reg_d016_disp <= x"08";
         reg_d018 <= x"15"; reg_d020 <= x"E"; reg_d021 <= x"6";
         reg_d022 <= x"0"; reg_d023 <= x"0"; reg_d024 <= x"0";
         reg_spr_x_lo <= (others => (others => '0'));
@@ -598,9 +626,14 @@ begin
         d01e_read_armed <= '1'; d01f_read_armed <= '1';
         raster_cmp <= (others => '0');
       else
-        -- Raster compare: latch IRQ when the current line crosses the compare.
-        if hc = 0 then
-          if to_unsigned(vc mod 512, 9) = raster_cmp then
+        if hc = H_PILL - 1 then
+          reg_d016_disp <= reg_d016;
+        end if;
+
+        -- Raster compare: latch IRQ when the logical C64 raster crosses the
+        -- compare. Each C64 raster line spans two HDMI lines in this renderer.
+        if hc = 0 and (vc mod 2) = 0 then
+          if raster_v = raster_cmp then
             irq_latch(0) <= '1';
           end if;
         end if;

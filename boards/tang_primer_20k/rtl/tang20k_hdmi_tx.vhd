@@ -148,9 +148,8 @@ architecture rtl of tang20k_hdmi_tx is
   signal g8 : std_logic_vector(7 downto 0);
   signal b8 : std_logic_vector(7 downto 0);
 
-  -- Pixel-domain input registers. The VIC/boot renderer runs from the 54 MHz
-  -- system clock with a /2 pixel enable; registering here gives the TMDS
-  -- encoder a clean 27 MHz clock-domain boundary.
+  -- Pixel-domain input registers. The current C64/VIC path produces pixels on
+  -- clk_pix_i already, so keep the HDMI handoff in the same pixel domain.
   signal de_pix : std_logic := '0';
   signal hs_pix : std_logic := '1';
   signal vs_pix : std_logic := '1';
@@ -237,12 +236,9 @@ begin
       CLKOUT => clk_pix_i
     );
 
-  pixel_input_regs : process(clk_sys_i)
+  pixel_input_regs : process(clk_pix_i)
   begin
-    -- The divided clocks transition on common 54 MHz rising edges. Capture on
-    -- the falling system edge instead, halfway between producer updates and
-    -- the next 27 MHz TMDS encoder edge.
-    if falling_edge(clk_sys_i) then
+    if rising_edge(clk_pix_i) then
       if reset_n = '0' then
         de_pix <= '0';
         hs_pix <= '1';

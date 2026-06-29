@@ -63,7 +63,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
         fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
         sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
         c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
-        c64-graphics-test-prg c64-sprite-test-prg c64-v1541-ping-prg \
+        c64-graphics-test-prg c64-sprite-test-prg c64-d016-scroll-test-prg \
+        c64-v1541-ping-prg \
         c64-spin-diag-prg c64-hang-diag-prg c64-hang-loop-diag-prg \
         c64-cli-noirq-diag-prg c64-rti-diag-prg c64-hang-raw-irq-diag-prg \
         c64-v1541-loadfirst-prg c64-v1541-hook-prg c64-v1541-hook-diag-prg \
@@ -111,6 +112,12 @@ c64-sprite-test-prg:
 	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/sprite_test.prg roms/sprite_test.o
 	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/sprite_test.o').unlink(missing_ok=True)"
 	@echo "Built roms/sprite_test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
+
+c64-d016-scroll-test-prg:
+	$(CA65) --cpu 6502 -o roms/d016_scroll_test.o sw/c64_vic_d016_scroll_test.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/d016_scroll_test.prg roms/d016_scroll_test.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/d016_scroll_test.o').unlink(missing_ok=True)"
+	@echo "Built roms/d016_scroll_test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
 
 c64-hang-diag-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
