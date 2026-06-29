@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Wrap a PSID tune as a RAM-loadable PRG.
 
-The PRG's **load address is also its entry point** (uniform with the other test
-PRGs), so it is always run with `CALL <load address>`:
+By default the SBC target keeps the PRG's **load address also its entry point**
+(uniform with the other test PRGs), so it is run with `CALL <load address>`:
 
   PRG @ base (default $2000):
     [ player stub: copy payload to its native load addr, init, play loop ]
@@ -12,6 +12,10 @@ PRGs), so it is always run with `CALL <load address>`:
   overlaps, and the whole PRG must stay below the VIC bitmap window ($6000).
 
 This trades a tiny startup copy for a single, predictable entry address.
+
+The C64 target adds a normal BASIC `10 SYS <entry>` stub at $0801 by default, so
+the resulting PRG can be loaded through the C64 UART monitor and started with
+`RUN`.
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ from build_native_sid_rom import parse_payload, SidUnsupported  # noqa: E402
 VIC_BITMAP = 0x6000
 RAM_FLOOR = 0x2000      # lowest safe PRG load addr (BASIC/loader live below this)
 PLAYER_RESERVE = 0x80   # bytes reserved below the payload for the in-place player
+BASIC_LOAD = 0x0801
 
 
 def target_symbols(target: str) -> list[str]:
@@ -96,6 +101,37 @@ def render_data(body: bytes) -> str:
     for i in range(0, len(body), 16):
         lines.append("    .byte " + ",".join(str(x) for x in body[i:i + 16]))
     return "\n".join(lines) + "\n"
+
+
+def basic_stub(entry: int) -> bytes:
+    sys_text = str(entry).encode("ascii")
+    next_line = BASIC_LOAD + 2 + 2 + 1 + len(sys_text) + 1
+    return bytes(
+        [
+            next_line & 0xFF,
+            next_line >> 8,
+            10,
+            0,
+            0x9E,
+        ]
+    ) + sys_text + b"\x00\x00\x00"
+
+
+def make_prg(entry: int, payload: bytes, basic_run: bool) -> bytes:
+    if not basic_run:
+        return bytes([entry & 0xFF, (entry >> 8) & 0xFF]) + payload
+
+    stub = basic_stub(entry)
+    payload_offset = entry - BASIC_LOAD
+    if payload_offset < len(stub):
+        raise SystemExit(
+            f"cannot add BASIC RUN stub: entry ${entry:04X} overlaps the BASIC line")
+    return (
+        bytes([BASIC_LOAD & 0xFF, BASIC_LOAD >> 8])
+        + stub
+        + bytes(payload_offset - len(stub))
+        + payload
+    )
 
 
 def render_inplace_asm(name: str, entry: int, load: int, init: int,
@@ -172,11 +208,12 @@ def build_inplace(a, info: dict, load: int, body: bytes, top: int,
                         "-o", str(t / "p.bin"), str(t / "p.o")], check=True)
         payload = (t / "p.bin").read_bytes()
 
-    prg = bytes([entry & 0xFF, (entry >> 8) & 0xFF]) + payload
+    prg = make_prg(entry, payload, a.basic_run)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(prg)
     print(f"{a.sid.name}: {a.target} in-place native ${load:04X}-${top:04X}; "
-          f"player @ ${entry:04X} ({len(prg)} bytes); SYS {entry} (${entry:04X}) "
+          f"player @ ${entry:04X} ({len(prg)} bytes); "
+          f"{'RUN' if a.basic_run else f'SYS {entry} (${entry:04X})'} "
           f"to play -> {a.output}")
     return 0
 
@@ -192,7 +229,14 @@ def main() -> int:
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65")
     ap.add_argument("--target", choices=("sbc", "c64"), default="sbc",
                     help="player timing target: sbc uses $883A, c64 uses VIC raster $D012")
+    ap.add_argument("--basic-run", dest="basic_run", action="store_true",
+                    help="prepend BASIC 10 SYS <entry> at $0801 so RUN starts the PRG")
+    ap.add_argument("--no-basic-run", dest="basic_run", action="store_false",
+                    help="keep load address equal to the machine-code entry")
+    ap.set_defaults(basic_run=None)
     a = ap.parse_args()
+    if a.basic_run is None:
+        a.basic_run = a.target == "c64"
 
     try:
         info = parse_payload(a.sid.read_bytes())
@@ -254,13 +298,15 @@ def main() -> int:
     if a.base + len(payload) > VIC_BITMAP:
         raise SystemExit(f"{a.sid.name}: PRG overruns the VIC bitmap window")
 
-    # PRG = 2-byte LE load address (= entry) + binary.
-    prg = bytes([a.base & 0xFF, (a.base >> 8) & 0xFF]) + payload
+    # PRG = either 2-byte LE entry/load address + binary, or a $0801 BASIC
+    # wrapper that SYSes to the entry and leaves the machine-code payload at it.
+    prg = make_prg(a.base, payload, a.basic_run)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(prg)
     print(f"{a.sid.name}: {a.target} native ${load:04X}-${pad_end:04X}; "
-          f"PRG @ ${a.base:04X} ({len(prg)} bytes); SYS {a.base} "
-          f"(${a.base:04X}) to play -> {a.output}")
+          f"player @ ${a.base:04X} ({len(prg)} bytes); "
+          f"{'RUN' if a.basic_run else f'SYS {a.base} (${a.base:04X})'} "
+          f"to play -> {a.output}")
     return 0
 
 

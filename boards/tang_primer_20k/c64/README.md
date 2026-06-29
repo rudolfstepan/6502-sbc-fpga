@@ -58,9 +58,10 @@ The C64 PRG loader sends monitor wake byte `0xA5` before uploading. The board
 top ignores all other received bytes while the monitor is idle, so the C64 debug
 UART stream cannot accidentally start or spoof the loader session. The loader
 also uses conservative UART pacing by default because the FPGA monitor writes
-directly into C64 RAM and does not acknowledge each byte. If an older local copy
-still fails after a reset, run it explicitly as
-`--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.02`.
+directly into C64 RAM and does not acknowledge each byte. The default
+`--line-delay 0.001` is tuned for larger uploads; if a board still drops bytes,
+slow it down with `--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.01` or
+`0.02`.
 
 After upload, type:
 
