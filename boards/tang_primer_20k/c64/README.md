@@ -69,10 +69,11 @@ The C64 PRG loader sends monitor wake byte `0xA5` before uploading. The board
 top ignores all other received bytes while the monitor is idle, so the C64 debug
 UART stream cannot accidentally start or spoof the loader session. The loader
 also uses conservative UART pacing by default because the FPGA monitor writes
-directly into C64 RAM and does not acknowledge each byte. The default
-`--line-delay 0.001` is tuned for larger uploads; if a board still drops bytes,
-slow it down with `--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.01` or
-`0.02`.
+directly into C64 RAM and does not acknowledge each byte. The default streams
+16 bytes per monitor line with no artificial delay, which keeps 16 KB uploads
+practical at the fixed 115200 baud. If a board or older bitstream still drops
+bytes, fall back to the old pacing with `--safe` or explicitly use
+`--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.001`.
 
 After upload, type:
 
@@ -224,16 +225,19 @@ Relevant registers:
 | `$D012` | live raster low byte on read, raster IRQ compare on write |
 | `$D016` | `MCM`, `CSEL`, `XSCROLL` |
 | `$D018` | video matrix base in bits 7:4, bitmap base in bit 3, charset base in bits 3:1 |
-| `$D019/$D01A` | raster IRQ latch/enable |
+| `$D019/$D01A` | raster IRQ latch/enable; sprite collision IRQ status is masked for now |
 | `$D020` | border colour |
 | `$D021-$D024` | background colours 0-3 |
 | `$D000-$D00F`, `$D010`, `$D015`, `$D017`, `$D01B-$D01D`, `$D025-$D02E` | first-pass sprite positions, enable, expansion, priority, multicolour, and colours |
+| `$D01E/$D01F` | first-pass sprite-sprite and sprite-background collision latches; read clears |
 
 Text modes fetch 40 screen bytes and colour nibbles per visible scanline. When
 `$D018` points at the VIC character-ROM window (`$1000-$1FFF` in banks 0 and 2),
 the renderer uses CHARGEN; otherwise it performs a second fetch phase for the 40
 RAM charset bytes of the current glyph row. This is needed for game tile graphics
-such as Boulder Dash-style custom character sets.
+such as Boulder Dash-style custom character sets. `$D011.YSCROLL` and
+`$D016.XSCROLL` are applied as first-pass fine-scroll offsets for text and
+bitmap pixels.
 
 Bitmap modes fetch 40 bitmap bytes per visible scanline from `(VIC bank +
 bitmap base + y*40 + column)`, then fetch the 40 video-matrix attribute bytes for
@@ -244,8 +248,12 @@ CPU-visible C64 addresses standard.
 Sprites are implemented as a first-pass scanline overlay. The VIC fetches sprite
 pointers from the active video matrix at `$03F8-$03FF`, reads the visible sprite
 row bytes from the selected VIC bank, and renders hires/multicolour sprites with
-X/Y expansion and foreground/background priority. Collision registers currently
-read as zero.
+X/Y expansion and foreground/background priority. Sprite rendering and fetches
+continue while `$D011.DEN=0`, which is needed by games that blank character or
+bitmap fetches during raster sections. `$D01E/$D01F` latch sprite-sprite and
+sprite-background pixel collisions and clear on read. Sprite collision IRQ status
+is currently masked from `$D019` and `irq_n` because the collision model is
+pixel-based and not yet cycle-exact.
 
 Focused simulation:
 
@@ -255,7 +263,8 @@ make test-c64-vic
 
 That target runs the existing text-render smoke test plus
 `tb_c64_vic_graphics_modes`, which checks actual RGB output for hires bitmap,
-multicolour bitmap, RAM charsets, and hires/multicolour sprites.
+multicolour bitmap, RAM charsets, hires/multicolour sprites, DEN-independent
+sprite rendering, and sprite collision latches.
 
 ## Milestones
 
@@ -271,13 +280,13 @@ multicolour bitmap, RAM charsets, and hires/multicolour sprites.
   multi-load games, and fastloader-aware compatibility work.
 - **M2 — full VIC-II**
   Hires/multicolour bitmap, ECM, multicolour text, RAM charsets, and first-pass
-  sprites are in place. Remaining: sprite collisions, per-cycle accuracy,
-  badlines, and more exact badline/fetch timing.
+  sprites including collision latches are in place. Remaining: per-cycle
+  accuracy, badlines, and more exact badline/fetch timing.
 
 ## Known limitations (M1)
 - VIC-II has text, ECM, multicolour text, hires bitmap, multicolour bitmap, RAM
-  charsets, and first-pass sprites. Sprite collisions, badlines, and cycle-exact
-  display effects are still M2.
+  charsets, and first-pass sprites with pixel collision latches. Badlines and
+  cycle-exact display effects are still M2.
 - CHARGEN/RAM charset selection follows `$D018` for the common text-mode cases;
   the character-ROM window is modelled for VIC banks 0 and 2.
 - CHARGEN read has 1-cycle latency (sync BSRAM) -> at most a 1-pixel horizontal

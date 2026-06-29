@@ -4,7 +4,8 @@
 --   * BMM=1, MCM=0: hires bitmap uses screen-RAM nibbles as fg/bg.
 --   * BMM=1, MCM=1: multicolour bitmap maps bit-pairs to bg/screen/colour RAM.
 --   * BMM=0, custom RAM charset selected through $D018.
---   * Sprite pointer fetch + hires/multicolour sprite overlay.
+--   * Sprite pointer fetch + hires/multicolour sprite overlay, including DEN=0.
+--   * Sprite/sprite and sprite/background collision latches.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -35,9 +36,9 @@ architecture sim of tb_c64_vic_graphics_modes is
   signal vga_r, vga_b : std_logic_vector(4 downto 0);
   signal vga_g        : std_logic_vector(5 downto 0);
 
-  signal test_mode : natural range 0 to 4 := 0;
+  signal test_mode : natural range 0 to 6 := 0;
   signal hi_red, hi_white, mc_green, mc_black, ram_white, ram_black : boolean := false;
-  signal spr_red, spr_mc_green : boolean := false;
+  signal spr_red, spr_mc_green, spr_den0_red : boolean := false;
 
   constant TARGET_VC : integer := 44;  -- visible row 0, glyph/bitmap line 2
   constant H_PILL    : integer := 40;
@@ -69,17 +70,23 @@ begin
   begin
     if rising_edge(clk) then
       a := to_integer(unsigned(vic_addr));
-      if (test_mode = 3 or test_mode = 4) and a = 16#07F8# then
+      if (test_mode = 3 or test_mode = 4 or test_mode = 5 or test_mode = 6) and
+         a = 16#07F8# then
         vic_data <= x"20";  -- sprite 0 pointer -> $0800
-      elsif (test_mode = 3 or test_mode = 4) and
+      elsif test_mode = 6 and a = 16#07F9# then
+        vic_data <= x"21";  -- sprite 1 pointer -> $0840
+      elsif (test_mode = 3 or test_mode = 4 or test_mode = 5 or test_mode = 6) and
             a >= 16#0800# and a < 16#0840# and ((a - 16#0800#) mod 3) = 0 then
-        if test_mode = 3 then
+        if test_mode = 3 or test_mode = 5 or test_mode = 6 then
           vic_data <= x"80";  -- hires sprite first pixel set
         else
           vic_data <= x"40";  -- multicolour sprite first pair = 01
         end if;
+      elsif test_mode = 6 and
+            a >= 16#0840# and a < 16#0880# and ((a - 16#0840#) mod 3) = 0 then
+        vic_data <= x"80";  -- hires sprite 1 first pixel set
       elsif a >= 16#0000# and a < 16#0140# and (a mod 40) = 0 then
-        if test_mode = 0 then
+        if test_mode = 0 or test_mode = 6 then
           vic_data <= x"80";  -- first hires bitmap pixel set, rest clear
         else
           vic_data <= x"C0";  -- first multicolour pair = 11, then 00
@@ -89,7 +96,7 @@ begin
       elsif test_mode = 2 and a >= 16#2008# and a < 16#2010# then
         vic_data <= x"80";  -- RAM charset: first hires text pixel set
       elsif a = 16#0400# then
-        if test_mode = 0 then
+        if test_mode = 0 or test_mode = 6 then
           vic_data <= x"21";  -- hires fg=red, bg=white
         else
           vic_data <= x"12";  -- multicolour screen colours white/red
@@ -131,6 +138,19 @@ begin
       wait until rising_edge(clk);
       cs <= '0'; we <= '0';
     end procedure;
+    procedure read_reg(
+      constant a : in std_logic_vector(5 downto 0);
+      variable d : out std_logic_vector(7 downto 0)
+    ) is
+    begin
+      wait until rising_edge(clk);
+      cs <= '1'; we <= '0'; addr <= a;
+      wait for 1 ns;
+      d := dout;
+      wait until rising_edge(clk);
+      cs <= '0';
+    end procedure;
+    variable rd : std_logic_vector(7 downto 0);
   begin
     reset_n <= '0';
     for i in 1 to 10 loop wait until rising_edge(clk); end loop;
@@ -185,6 +205,50 @@ begin
     wait for 25 ms;
     assert spr_mc_green report "multicolour sprite did not render shared colour 0" severity failure;
 
+    -- Sprites must still render while DEN=0. Games often blank screen fetches
+    -- during raster sections but keep sprite objects visible over the border/bg.
+    test_mode <= 5;
+    write_reg("011100", x"00");  -- $D01C hires sprite
+    write_reg("010001", x"0B");  -- $D011 DEN=0, text/bitmap display disabled
+    wait for 25 ms;
+    assert spr_den0_red report "sprite did not render while DEN was clear" severity failure;
+
+    -- A hires sprite over a foreground bitmap pixel must latch $D01F. Collision
+    -- IRQ status is deliberately masked from $D019/irq_n for now; the latches
+    -- are stable enough for polling, but the IRQ timing is not cycle-exact
+    -- enough for game IRQ handlers yet.
+    test_mode <= 6;
+    write_reg("010001", x"3B");  -- $D011 DEN/RSEL + BMM
+    write_reg("010110", x"08");  -- $D016 hires bitmap
+    write_reg("011000", x"15");  -- $D018 screen=$0400, bitmap=$0000
+    write_reg("011001", x"07");  -- $D019 ack any older test IRQs
+    write_reg("011010", x"06");  -- $D01A enable sprite collision IRQs
+    write_reg("000000", x"18");  -- $D000 sprite 0 X = 24
+    write_reg("000001", x"34");  -- $D001 sprite 0 Y = 52
+    write_reg("000010", x"18");  -- $D002 sprite 1 X = 24
+    write_reg("000011", x"34");  -- $D003 sprite 1 Y = 52
+    write_reg("010000", x"00");  -- $D010 X MSBs clear
+    write_reg("010101", x"03");  -- $D015 enable sprites 0+1
+    write_reg("011100", x"00");  -- $D01C hires sprites
+    write_reg("100111", x"02");  -- $D027 sprite 0 colour red
+    write_reg("101000", x"01");  -- $D028 sprite 1 colour white
+    wait for 25 ms;
+    read_reg("011001", rd);       -- $D019
+    assert rd(2 downto 1) = "00" and irq_n = '1'
+      report "sprite-background collision leaked into $D019/irq_n" severity failure;
+    write_reg("011001", x"06");  -- ack collision IRQs while $D01F is still set
+    wait for 1 ms;
+    read_reg("011001", rd);       -- $D019
+    assert rd(7) = '0' and rd(1) = '0'
+      report "sprite-background IRQ re-triggered before $D01F was cleared" severity failure;
+    read_reg("011111", rd);       -- $D01F
+    assert rd(0) = '1'
+      report "sprite-background collision latch did not report sprite 0" severity failure;
+    write_reg("010101", x"00");  -- stop relatching while checking read-to-clear
+    wait for 1 ms;
+    read_reg("011111", rd);
+    assert rd = x"00" report "$D01F did not clear after read" severity failure;
+
     report "tb_c64_vic_graphics_modes passed" severity note;
     running <= false;
     wait;
@@ -233,10 +297,16 @@ begin
             if vga_r = "10001" and vga_g = "001110" and vga_b = "00110" then
               spr_red <= true;
             end if;
-          when others =>
+          when 4 =>
             if vga_r = "01011" and vga_g = "101000" and vga_b = "01001" then
               spr_mc_green <= true;
             end if;
+          when 5 =>
+            if vga_r = "10001" and vga_g = "001110" and vga_b = "00110" then
+              spr_den0_red <= true;
+            end if;
+          when others =>
+            null;
           end case;
         end if;
         pix := pix + 1;

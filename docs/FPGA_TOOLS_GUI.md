@@ -142,7 +142,7 @@ und SID-Player/Payload. Die Liste zeigt dann beide Größen an, z. B.
 | C64 SID PRG-Liste | Alle gefundenen RUN-PRGs; **Doppelklick lädt direkt hoch** |
 | Port / Baud | Serieller Port und Baudrate für den C64-UART-Monitor |
 | Wake byte | Monitor-Magic-Byte, Standard `0xA5` |
-| Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload |
+| Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload; Standard `16` / `0` für schnelle C64-PRG-Uploads |
 | Verbose | Monitor-Antworten anzeigen (`--verbose`) |
 | Stay in FPGA monitor | Nach Upload nicht mit `G` zurück zur C64-Umgebung springen |
 | ▶ Upload Selected C64 SID PRG | Lädt die markierte C64-SID-PRG hoch |
@@ -199,7 +199,7 @@ IEC/1541-Kompatibilität brauchen später den KERNAL/IEC/1541-Ladepfad.
 | PRG name (optional) | Exakter oder eindeutiger Teilname eines PRG-Eintrags; leer = erstes PRG |
 | Port / Baud | Serieller Port und Baudrate für den C64-UART-Monitor |
 | Wake byte | Monitor-Magic-Byte, Standard `0xA5` |
-| Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload |
+| Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload; Standard `16` / `0` für schnelle C64-PRG-Uploads |
 | Verbose | Monitor-Antworten anzeigen (`--verbose`) |
 | Stay in FPGA monitor | Nach Upload nicht mit `G` zurück zur C64-Umgebung springen |
 | ▶ Upload Selected D64 PRG | Extrahiert und lädt das ausgewählte D64-PRG |

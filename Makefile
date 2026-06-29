@@ -76,7 +76,7 @@ test-c64-vic:
 	$(GHDL) -e $(GHDL_FLAGS) tb_vic_display
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_display $(GHDL_RUN_FLAGS) --stop-time=20ms
 	$(GHDL) -e $(GHDL_FLAGS) tb_c64_vic_graphics_modes
-	$(GHDL) -r $(GHDL_FLAGS) tb_c64_vic_graphics_modes $(GHDL_RUN_FLAGS) --stop-time=140ms
+	$(GHDL) -r $(GHDL_FLAGS) tb_c64_vic_graphics_modes $(GHDL_RUN_FLAGS) --stop-time=200ms
 
 test-c64-input:
 	$(GHDL) -a $(GHDL_FLAGS) rtl/c64/c64_keyboard_matrix.vhd \

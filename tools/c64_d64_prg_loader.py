@@ -146,13 +146,19 @@ def write_prg(image: Path, entry, data: bytes, output: Path | None) -> Path:
 
 
 def make_upload_args(args: argparse.Namespace, prg: Path) -> SimpleNamespace:
+    bytes_per_line = c64_uart_prg_loader.SAFE_BYTES_PER_LINE if args.safe else args.bytes_per_line
+    line_delay = c64_uart_prg_loader.SAFE_LINE_DELAY if args.safe else args.line_delay
+    if bytes_per_line < 1:
+        raise SystemExit("ERROR: --bytes-per-line must be at least 1")
+    if line_delay < 0:
+        raise SystemExit("ERROR: --line-delay must not be negative")
     return SimpleNamespace(
         prg=str(prg),
         port=args.port,
         baud=args.baud,
         wake_byte=args.wake_byte,
-        bytes_per_line=args.bytes_per_line,
-        line_delay=args.line_delay,
+        bytes_per_line=bytes_per_line,
+        line_delay=line_delay,
         command_delay=args.command_delay,
         settle=args.settle,
         wait_prompt=args.wait_prompt,
@@ -186,6 +192,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--wake-byte", type=c64_uart_prg_loader.parse_byte, default=c64_uart_prg_loader.DEFAULT_WAKE_BYTE)
     parser.add_argument("--bytes-per-line", type=int, default=c64_uart_prg_loader.DEFAULT_BYTES_PER_LINE)
     parser.add_argument("--line-delay", type=float, default=c64_uart_prg_loader.DEFAULT_LINE_DELAY)
+    parser.add_argument(
+        "--safe",
+        action="store_true",
+        help="use old conservative C64 PRG upload pacing",
+    )
     parser.add_argument("--command-delay", type=float, default=c64_uart_prg_loader.DEFAULT_COMMAND_DELAY)
     parser.add_argument("--settle", type=float, default=0.2)
     parser.add_argument("--wait-prompt", type=float, default=2.0)

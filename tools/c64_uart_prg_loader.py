@@ -12,8 +12,10 @@ If a generated <file>.prg.segments.json sidecar exists, only the listed memory
 segments are uploaded. This keeps normal PRGs compatible while avoiding large
 zero-filled gaps between a BASIC header and high SID payloads.
 
-The monitor has no per-line ACK and no deep UART receive FIFO while it writes
-C64 RAM, so the default pacing is deliberately conservative.
+The UART is fixed at 115200 baud in the current Tang C64 bitstream. Upload speed
+therefore mostly comes from reducing Python/line overhead: the default streams
+16 hex bytes per monitor line without an artificial inter-line delay. Use
+`--safe` if a board/bitstream still needs the older one-byte pacing.
 
 Example:
   python tools/c64_uart_prg_loader.py demo.prg --port COM15
@@ -31,8 +33,10 @@ from pathlib import Path
 DEFAULT_PORT = "COM15"
 DEFAULT_BAUD = 115200
 DEFAULT_WAKE_BYTE = 0xA5
-DEFAULT_BYTES_PER_LINE = 1
-DEFAULT_LINE_DELAY = 0.001
+DEFAULT_BYTES_PER_LINE = 16
+DEFAULT_LINE_DELAY = 0.0
+SAFE_BYTES_PER_LINE = 1
+SAFE_LINE_DELAY = 0.001
 DEFAULT_COMMAND_DELAY = 0.08
 DEFAULT_WAIT_LOAD = 1.0
 DEFAULT_WAIT_DONE = 1.5
@@ -67,9 +71,10 @@ def read_some(port, seconds: float) -> bytes:
     return bytes(out)
 
 
-def write_line(port, text: str, delay: float) -> None:
+def write_line(port, text: str, delay: float, *, flush: bool = True) -> None:
     port.write(text.encode("ascii") + b"\r")
-    port.flush()
+    if flush:
+        port.flush()
     if delay:
         time.sleep(delay)
 
@@ -184,11 +189,15 @@ def upload_bytes(port, address: int, data: bytes, args: argparse.Namespace, labe
         raise SystemExit(f"ERROR: monitor did not enter load mode at ${address:04X}" + detail)
 
     sent = 0
+    start = time.monotonic()
     for line in hex_lines(data, args.bytes_per_line):
-        write_line(port, line, args.line_delay)
+        write_line(port, line, args.line_delay, flush=False)
         sent += min(args.bytes_per_line, len(data) - sent)
         if args.progress and (sent == len(data) or sent % args.progress == 0):
             print(f"  {sent:5d}/{len(data)} bytes")
+    port.flush()
+    elapsed = max(time.monotonic() - start, 0.001)
+    print(f"  data stream: {elapsed:.2f}s, {len(data) / elapsed:.0f} B/s")
 
     write_line(port, ".", args.command_delay)
     response = wait_for_prompt(port, args.wait_done, COMMAND_PROMPTS)
@@ -371,13 +380,18 @@ def parse_args() -> argparse.Namespace:
         "--bytes-per-line",
         type=int,
         default=DEFAULT_BYTES_PER_LINE,
-        help=f"hex bytes per monitor line, default {DEFAULT_BYTES_PER_LINE} for reliable C64 uploads",
+        help=f"hex bytes per monitor line, default {DEFAULT_BYTES_PER_LINE}",
     )
     parser.add_argument(
         "--line-delay",
         type=float,
         default=DEFAULT_LINE_DELAY,
         help=f"delay after each data line, default {DEFAULT_LINE_DELAY}",
+    )
+    parser.add_argument(
+        "--safe",
+        action="store_true",
+        help=f"use old conservative pacing ({SAFE_BYTES_PER_LINE} byte/line, {SAFE_LINE_DELAY}s line delay)",
     )
     parser.add_argument(
         "--command-delay",
@@ -415,7 +429,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    upload(parse_args())
+    args = parse_args()
+    if args.safe:
+        args.bytes_per_line = SAFE_BYTES_PER_LINE
+        args.line_delay = SAFE_LINE_DELAY
+    if args.bytes_per_line < 1:
+        raise SystemExit("ERROR: --bytes-per-line must be at least 1")
+    if args.line_delay < 0:
+        raise SystemExit("ERROR: --line-delay must not be negative")
+    upload(args)
 
 
 if __name__ == "__main__":

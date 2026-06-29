@@ -23,13 +23,17 @@
 --                    [3]=bitmap base / [3:1]=char base (CB13-11)
 --   $D000-$D00F sprite X/Y, $D010 sprite X MSBs, $D015 sprite enable
 --   $D017/$D01D expansion, $D01B priority, $D01C multicolour
---   $D019 irq      : [0]=raster IRQ latch (write 1 to ack)
---   $D01A irqen    : [0]=raster IRQ enable
+--   $D019 irq      : [0]=raster latch (write 1 to ack). Collision IRQ status
+--                    is masked from $D019/irq_n until the collision model is
+--                    cycle-closer; poll $D01E/$D01F for first-pass collisions.
+--   $D01A irqen    : [2:0]=IRQ enables (collision enables are read back)
+--   $D01E/$D01F    : sprite-sprite / sprite-background collision latches
+--                    (read clears)
 --   $D020 border, $D021-$D024 background0-3, $D025-$D026 sprite multicolours,
 --   $D027-$D02E sprite colours (palette index, 4-bit)
 -- Text, ECM text, multicolour text, hires bitmap, and multicolour bitmap are
--- implemented. Sprite rendering is a first-pass scanline overlay; sub-char-cycle
--- effects and sprite collisions are TODO (M2).
+-- implemented. Sprite rendering and collision latches are a first-pass scanline
+-- overlay; sub-char-cycle effects are TODO (M2).
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -153,8 +157,13 @@ architecture rtl of vic_ii is
   signal reg_d025 : std_logic_vector(3 downto 0) := x"0";
   signal reg_d026 : std_logic_vector(3 downto 0) := x"0";
   signal reg_spr_col : sprite_col_t := (others => x"0");
-  signal irq_latch: std_logic := '0';
-  signal irq_en   : std_logic := '0';
+  signal reg_d01e : std_logic_vector(7 downto 0) := x"00";
+  signal reg_d01f : std_logic_vector(7 downto 0) := x"00";
+  signal irq_latch: std_logic_vector(2 downto 0) := (others => '0');
+  signal irq_en   : std_logic_vector(2 downto 0) := (others => '0');
+  signal irq_master : std_logic;
+  signal d01e_read_armed : std_logic := '1';
+  signal d01f_read_armed : std_logic := '1';
   signal raster_cmp : unsigned(8 downto 0) := (others => '0');
 
   -- Display geometry (combinational).
@@ -165,6 +174,8 @@ architecture rtl of vic_ii is
   signal cpix : natural range 0 to 7  := 0;
   signal v_off: natural range 0 to V_TOT := 0;
   signal src_y: natural range 0 to 199 := 0;
+  signal src_x: natural range 0 to 319 := 0;
+  signal xscroll: natural range 0 to 7 := 0;
 
   signal scr_code : std_logic_vector(7 downto 0);
   signal glyph_code : std_logic_vector(7 downto 0);
@@ -175,6 +186,7 @@ architecture rtl of vic_ii is
   signal bg3_index : natural range 0 to 15;
   signal border_idx : natural range 0 to 15;
   signal in_border : std_logic;
+  signal in_sprite_area : std_logic;
   signal char_pbit : std_logic;
   signal bmp_pbit : std_logic;
   signal mc_pair : std_logic_vector(1 downto 0);
@@ -183,6 +195,7 @@ architecture rtl of vic_ii is
   signal spr_opaque_c : std_logic;
   signal spr_prio_c : std_logic;
   signal spr_color_c : natural range 0 to 15;
+  signal spr_mask_c : std_logic_vector(7 downto 0);
 
   -- Pixel-output pipeline stage 1: the cell colour/geometry/sync are registered
   -- so they line up with the 1-clock CHARGEN read latency AND so the long
@@ -199,6 +212,9 @@ architecture rtl of vic_ii is
   signal spr_opaque_d : std_logic := '0';
   signal spr_prio_d : std_logic := '0';
   signal spr_color_d : natural range 0 to 15 := 0;
+  signal spr_mask_d : std_logic_vector(7 downto 0) := (others => '0');
+  signal coll_spr_mask_c : std_logic_vector(7 downto 0) := (others => '0');
+  signal coll_bg_mask_c : std_logic_vector(7 downto 0) := (others => '0');
 
   -- Stage 2: combinational palette outputs, then registered so the VIC->HDMI
   -- crossing (pixel clock -> system clock inside tang20k_hdmi_tx) is a short
@@ -277,6 +293,9 @@ begin
     variable spr_rel_y : natural range 0 to 41;
     variable store_spr : natural range 0 to 7;
     variable store_byte : natural range 0 to 2;
+    variable sprite_any : std_logic;
+    variable spr_active_next : std_logic_vector(7 downto 0);
+    variable fetch_needed : std_logic;
   begin
     if rising_edge(clk) then
       if reset_n = '0' then
@@ -289,30 +308,33 @@ begin
         if fetching = '0' then
           if hc = H_VIS - 1 then                    -- last visible pixel: prefetch next line
             if vc = V_TOT - 1 then nv := 0; else nv := vc + 1; end if;
+            fetch_needed := '0';
             if nv >= V_BORD and nv < TV_END then
               sy := (nv - V_BORD) / 2;
               nr := sy / 8;
+              if ((nv - V_BORD) mod 2) = 0 then
+                fetch_needed := '1';
+              end if;
             else
               sy := 0;
               nr := 0;
             end if;
             fetch_y     <= sy;
             fetch_row   <= nr;
-            fetch_col   <= 0;
-            fetch_store <= 0;
-            fetch_phase <= 0;
             fetch_bmm   <= reg_d011(5);
             fetch_chargen <= char_rom_visible;
             fetch_valid <= '0';
             spr_line_y := sy + SPR_Y_BIAS;
-            spr_activebuf <= (others => '0');
+            sprite_any := '0';
+            spr_active_next := (others => '0');
             for i in 0 to 7 loop
               spr_y := to_integer(unsigned(reg_spr_y(i)));
               if reg_d017(i) = '1' then spr_h := 42; else spr_h := 21; end if;
               if reg_d015(i) = '1' and spr_line_y >= spr_y and
                  spr_line_y < spr_y + spr_h then
                 spr_rel_y := spr_line_y - spr_y;
-                spr_activebuf(i) <= '1';
+                spr_active_next(i) := '1';
+                sprite_any := '1';
                 if reg_d017(i) = '1' then
                   spr_rowbuf(i) <= spr_rel_y / 2;
                 else
@@ -322,8 +344,21 @@ begin
                 spr_rowbuf(i) <= 0;
               end if;
             end loop;
-            if display_en = '1' and nv >= V_BORD and nv < TV_END then
+            spr_activebuf <= spr_active_next;
+            if fetch_needed = '1' and
+               (display_en = '1' or sprite_any = '1') then
+              fetch_col   <= 0;
+              fetch_store <= 0;
+              if display_en = '1' then
+                fetch_phase <= 0;
+              else
+                fetch_phase <= 2;
+              end if;
               fetching <= '1';
+            else
+              fetch_col   <= 0;
+              fetch_store <= 0;
+              fetch_phase <= 0;
             end if;
           end if;
         else
@@ -412,15 +447,28 @@ begin
   color_addr <= std_logic_vector(to_unsigned(fetch_row * 40 + fetch_col, 10));
 
   -- ----- display geometry -----
+  xscroll <= to_integer(unsigned(reg_d016(2 downto 0)));
   hx     <= hc - H_PILL when hc >= H_PILL and hc < H_CEND else 0;
   in_text <= '1' when display_en = '1' and
                       hc >= H_PILL and hc < H_CEND and
                       vc >= V_BORD and vc < TV_END else '0';
   v_off  <= (vc - V_BORD) when vc >= V_BORD else 0;
   src_y  <= (v_off / 2) when v_off < 400 else 0;
-  col    <= hx / 16;
+
+  process(hx, xscroll)
+    variable sx_sum : natural range 0 to 326;
+  begin
+    sx_sum := (hx / 2) + xscroll;
+    if sx_sum >= 320 then
+      src_x <= sx_sum - 320;
+    else
+      src_x <= sx_sum;
+    end if;
+  end process;
+
+  col    <= src_x / 8;
   cline  <= src_y mod 8;
-  cpix   <= (hx / 2) mod 8;
+  cpix   <= src_x mod 8;
   c64_x  <= hx / 2;
 
   scr_code <= linebuf(col) when in_text = '1' else x"00";
@@ -438,8 +486,10 @@ begin
   char_addr <= reg_d018(1) & glyph_code & std_logic_vector(to_unsigned(cline, 3));
 
   in_border <= '1' when hc < H_VIS and vc < V_VIS and in_text = '0' else '0';
+  in_sprite_area <= '1' when hc >= H_PILL and hc < H_CEND and
+                             vc >= V_BORD and vc < TV_END else '0';
 
-  process(in_text, c64_x, spr_activebuf, spr_linebuf, reg_spr_x_lo, reg_d010,
+  process(in_sprite_area, c64_x, spr_activebuf, spr_linebuf, reg_spr_x_lo, reg_d010,
           reg_d01b, reg_d01c, reg_d01d, reg_d025, reg_d026, reg_spr_col)
     variable sx_abs : natural range 0 to 343;
     variable spr_x  : natural range 0 to 511;
@@ -448,13 +498,15 @@ begin
     variable bit_x  : natural range 0 to 23;
     variable bit_pos: natural range 0 to 23;
     variable pair   : std_logic_vector(1 downto 0);
+    variable mask   : std_logic_vector(7 downto 0);
   begin
     spr_opaque_c <= '0';
     spr_prio_c <= '0';
     spr_color_c <= 0;
+    mask := (others => '0');
     sx_abs := c64_x + SPR_X_BIAS;
 
-    if in_text = '1' then
+    if in_sprite_area = '1' then
       for i in 7 downto 0 loop
         spr_x := to_integer(unsigned(reg_spr_x_lo(i)));
         if reg_d010(i) = '1' then spr_x := spr_x + 256; end if;
@@ -468,6 +520,7 @@ begin
             bit_pos := 23 - 2 * (bit_x / 2);
             pair := spr_linebuf(i)(bit_pos downto bit_pos - 1);
             if pair /= "00" then
+              mask(i) := '1';
               spr_opaque_c <= '1';
               spr_prio_c <= reg_d01b(i);
               case pair is
@@ -479,6 +532,7 @@ begin
           else
             bit_pos := 23 - bit_x;
             if spr_linebuf(i)(bit_pos) = '1' then
+              mask(i) := '1';
               spr_opaque_c <= '1';
               spr_prio_c <= reg_d01b(i);
               spr_color_c <= to_integer(unsigned(reg_spr_col(i)));
@@ -487,6 +541,7 @@ begin
         end if;
       end loop;
     end if;
+    spr_mask_c <= mask;
   end process;
 
   -- Combinational sync (stage 0).
@@ -520,6 +575,7 @@ begin
       spr_opaque_d <= spr_opaque_c;
       spr_prio_d <= spr_prio_c;
       spr_color_d <= spr_color_c;
+      spr_mask_d <= spr_mask_c;
       hs_d <= hs_c; vs_d <= vs_c; de_d <= de_c;
     end if;
   end process;
@@ -537,13 +593,47 @@ begin
         reg_d010 <= x"00"; reg_d015 <= x"00"; reg_d017 <= x"00";
         reg_d01b <= x"00"; reg_d01c <= x"00"; reg_d01d <= x"00";
         reg_d025 <= x"0"; reg_d026 <= x"0"; reg_spr_col <= (others => x"0");
-        irq_latch <= '0'; irq_en <= '0'; raster_cmp <= (others => '0');
+        reg_d01e <= x"00"; reg_d01f <= x"00";
+        irq_latch <= (others => '0'); irq_en <= (others => '0');
+        d01e_read_armed <= '1'; d01f_read_armed <= '1';
+        raster_cmp <= (others => '0');
       else
         -- Raster compare: latch IRQ when the current line crosses the compare.
         if hc = 0 then
           if to_unsigned(vc mod 512, 9) = raster_cmp then
-            irq_latch <= '1';
+            irq_latch(0) <= '1';
           end if;
+        end if;
+
+        if coll_bg_mask_c /= x"00" then
+          if (coll_bg_mask_c and not reg_d01f) /= x"00" then
+            irq_latch(1) <= '1';
+          end if;
+          reg_d01f <= reg_d01f or coll_bg_mask_c;
+        end if;
+        if coll_spr_mask_c /= x"00" then
+          if (coll_spr_mask_c and not reg_d01e) /= x"00" then
+            irq_latch(2) <= '1';
+          end if;
+          reg_d01e <= reg_d01e or coll_spr_mask_c;
+        end if;
+
+        if cs = '1' and we = '0' and addr = "011110" then
+          if d01e_read_armed = '1' then
+            reg_d01e <= x"00";
+            d01e_read_armed <= '0';
+          end if;
+        else
+          d01e_read_armed <= '1';
+        end if;
+
+        if cs = '1' and we = '0' and addr = "011111" then
+          if d01f_read_armed = '1' then
+            reg_d01f <= x"00";
+            d01f_read_armed <= '0';
+          end if;
+        else
+          d01f_read_armed <= '1';
         end if;
 
         if cs = '1' and we = '1' then
@@ -563,8 +653,8 @@ begin
               when "010110" => reg_d016 <= din;               -- $D016
               when "010111" => reg_d017 <= din;               -- $D017
               when "011000" => reg_d018 <= din;               -- $D018
-              when "011001" => if din(0) = '1' then irq_latch <= '0'; end if; -- $D019 ack
-              when "011010" => irq_en <= din(0);              -- $D01A
+              when "011001" => irq_latch <= irq_latch and not din(2 downto 0); -- $D019 ack
+              when "011010" => irq_en <= din(2 downto 0);     -- $D01A
               when "011011" => reg_d01b <= din;               -- $D01B
               when "011100" => reg_d01c <= din;               -- $D01C
               when "011101" => reg_d01d <= din;               -- $D01D
@@ -591,14 +681,16 @@ begin
     end if;
   end process;
 
-  irq_n <= '0' when (irq_latch = '1' and irq_en = '1') else '1';
+  irq_master <= '1' when irq_latch(0) = '1' and irq_en(0) = '1' else '0';
+  irq_n <= '0' when irq_master = '1' else '1';
 
   -- Register read-back.
   process(addr, reg_spr_x_lo, reg_spr_y, reg_d010, reg_d011, reg_d015,
           reg_d016, reg_d017, reg_d018, reg_d01b, reg_d01c, reg_d01d,
+          reg_d01e, reg_d01f,
           reg_d020, reg_d021, reg_d022, reg_d023, reg_d024, reg_d025,
           reg_d026, reg_spr_col,
-          irq_latch, irq_en, raster_v)
+          irq_latch, irq_en, irq_master, raster_v)
   begin
     if addr(5 downto 4) = "00" then
       if addr(0) = '0' then
@@ -615,13 +707,13 @@ begin
         when "010110" => dout <= reg_d016;
         when "010111" => dout <= reg_d017;
         when "011000" => dout <= reg_d018;
-        when "011001" => dout <= irq_latch & "000000" & irq_latch;
-        when "011010" => dout <= "0000000" & irq_en;
+        when "011001" => dout <= irq_master & "000000" & irq_latch(0);
+        when "011010" => dout <= "00000" & irq_en;
         when "011011" => dout <= reg_d01b;
         when "011100" => dout <= reg_d01c;
         when "011101" => dout <= reg_d01d;
-        when "011110" => dout <= x"00"; -- $D01E sprite-sprite collisions (TODO)
-        when "011111" => dout <= x"00"; -- $D01F sprite-background collisions (TODO)
+        when "011110" => dout <= reg_d01e;
+        when "011111" => dout <= reg_d01f;
         when "100000" => dout <= x"F" & reg_d020;
         when "100001" => dout <= x"F" & reg_d021;
         when "100010" => dout <= x"F" & reg_d022;
@@ -654,11 +746,13 @@ begin
 
   process(inb_d, intext_d, bmm_d, mcm_d, ecm_d, char_pbit, bmp_pbit, mc_pair,
           fg_d, bg_d, bg1_d, bg2_d, bg3_d, bord_d, scr_d, col_d,
-          spr_opaque_d, spr_prio_d, spr_color_d)
+          spr_opaque_d, spr_prio_d, spr_color_d, spr_mask_d)
     variable base_idx : natural range 0 to 15;
     variable base_bg  : std_logic;
+    variable spr_count : natural range 0 to 8;
   begin
     base_bg := '0';
+    spr_count := 0;
     if inb_d = '1' then
       base_idx := bord_d;
       base_bg := '1';
@@ -703,6 +797,24 @@ begin
     else
       base_idx := bg_d;
       base_bg := '1';
+    end if;
+
+    for i in 0 to 7 loop
+      if spr_mask_d(i) = '1' then
+        spr_count := spr_count + 1;
+      end if;
+    end loop;
+
+    if spr_count >= 2 then
+      coll_spr_mask_c <= spr_mask_d;
+    else
+      coll_spr_mask_c <= x"00";
+    end if;
+
+    if base_bg = '0' then
+      coll_bg_mask_c <= spr_mask_d;
+    else
+      coll_bg_mask_c <= x"00";
     end if;
 
     if spr_opaque_d = '1' and (spr_prio_d = '0' or base_bg = '1') then

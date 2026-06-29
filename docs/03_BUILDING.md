@@ -185,10 +185,10 @@ python tools/c64_uart_prg_loader.py roms/test.prg --port COM15
 The PRG loader first sends monitor wake byte `0xA5`; the C64 board top ignores
 all other received bytes while the monitor is idle, so ordinary C64 debug output
 cannot be mistaken for a loader prompt. Uploads are then paced for the monitor:
-one data byte per line with a short delay. That avoids dropped UART characters
-while the monitor waits for safe C64 RAM writes. The default `--line-delay 0.001`
-is tuned for larger uploads; for stubborn boards or older loader copies, use
-`--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.01` or `0.02`.
+the current default streams 16 bytes per line with no artificial delay, which
+keeps larger PRGs practical at the fixed 115200 baud. For stubborn boards or
+older bitstreams, use `--safe` to return to one byte per line with a short delay,
+or set `--wake-byte 0xA5 --bytes-per-line 1 --line-delay 0.001` explicitly.
 
 After upload, type `RUN` on the C64. The program cycles through text, hires
 bitmap, multicolour bitmap, ECM text, and multicolour text; press any key for the

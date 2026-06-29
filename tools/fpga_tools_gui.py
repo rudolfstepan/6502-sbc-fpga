@@ -409,11 +409,11 @@ class App(tk.Tk):
         (self._c64_sid_port,
          self._c64_sid_baud,
          self._c64_sid_line_delay) = c.add_field_row(
-            ("Port", "COM15", 10), ("Baud", "115200", 10), ("Line delay", "0.001", 10)
+            ("Port", "COM15", 10), ("Baud", "115200", 10), ("Line delay", "0", 10)
         )
         (self._c64_sid_wake_byte,
          self._c64_sid_bytes_per_line) = c.add_field_row(
-            ("Wake byte", "0xA5", 10), ("Bytes/line", "1", 10)
+            ("Wake byte", "0xA5", 10), ("Bytes/line", "16", 10)
         )
         self._c64_sid_verbose = c.add_check("Verbose — print monitor responses")
         self._c64_sid_stay = c.add_check("Stay in FPGA monitor after upload")
@@ -558,11 +558,11 @@ class App(tk.Tk):
         (self._c64_d64_port,
          self._c64_d64_baud,
          self._c64_d64_line_delay) = d64.add_field_row(
-            ("Port", "COM15", 10), ("Baud", "115200", 10), ("Line delay", "0.001", 10)
+            ("Port", "COM15", 10), ("Baud", "115200", 10), ("Line delay", "0", 10)
         )
         (self._c64_d64_wake_byte,
          self._c64_d64_bytes_per_line) = d64.add_field_row(
-            ("Wake byte", "0xA5", 10), ("Bytes/line", "1", 10)
+            ("Wake byte", "0xA5", 10), ("Bytes/line", "16", 10)
         )
         self._c64_d64_verbose = d64.add_check("Verbose — print monitor responses")
         self._c64_d64_stay = d64.add_check("Stay in FPGA monitor after upload")

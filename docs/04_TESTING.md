@@ -55,7 +55,8 @@ make test-c64-vic
 This analyzes `rtl/c64/vic_ii.vhd`, runs the existing text-render smoke test
 (`tb_vic_display`), and then runs `tb_c64_vic_graphics_modes`. The graphics-mode
 test checks actual RGB output for hires bitmap, multicolour bitmap, RAM charset
-text, and hires/multicolour sprites, not just register writes or fetch addresses.
+text, hires/multicolour sprites, DEN-independent sprite rendering, and sprite
+collision latches, not just register writes or fetch addresses.
 
 ### Native C64 Input Tests
 
@@ -229,6 +230,7 @@ The project includes comprehensive test coverage:
 - Programs the real VIC register interface for bitmap, RAM charset, and sprite modes
 - Models C64 bitmap memory, screen attributes at `$0400`, sprite pointers, sprite data, and colour RAM
 - Verifies the expected C64 palette colours appear on the HDMI RGB output
+- Checks `$D01E/$D01F` sprite collision latches and verifies collision status stays masked from `$D019`/`irq_n`
 - Included in `make test-c64-vic`
 
 **tb_c64_keyboard_matrix_joystick.vhd**
