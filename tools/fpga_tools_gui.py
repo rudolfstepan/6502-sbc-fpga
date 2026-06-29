@@ -332,10 +332,11 @@ class App(tk.Tk):
 
     # ── SID Tunes tab ──────────────────────────────────────────────────────
     def _tab_sid(self):
-        page = tk.Frame(self.nb, bg=BG)
+        page = ScrollableTab(self.nb)
         self.nb.add(page, text="  SID Tunes  ")
+        p = page.inner
 
-        s = Section(page, "Native SID Tune ROMs")
+        s = Section(p, "Native SID Tune ROMs")
         s.pack(fill=tk.X, padx=8)
         s.add_note("Pick a tune from roms/sound_*.rom and upload it to the SID core.\n"
                    "Press KEY0 on the board to enter monitor mode first.")
@@ -372,14 +373,60 @@ class App(tk.Tk):
         s.add_note("Double-click a tune to upload it directly. ROMs auto-run at $A000.")
 
         self._sid_paths: list[Path] = []
+
+        c = Section(p, "C64 UART SID PRGs")
+        c.pack(fill=tk.X, padx=8)
+        c.add_note("Pick a RUN-loadable C64 SID PRG from roms/c64_uart_sid.\n"
+                   "The C64 monitor is woken automatically; after upload type RUN on the C64.")
+
+        crow = tk.Frame(c.body, bg=SURFACE)
+        crow.pack(fill=tk.X, pady=(4, 4))
+        _lbl(crow, "Filter:", bg=SURFACE, fg=FG2).pack(side=tk.LEFT, padx=(0, 4))
+        self._c64_sid_filter = tk.StringVar()
+        ttk.Entry(crow, textvariable=self._c64_sid_filter).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self._c64_sid_filter.trace_add("write", lambda *a: self._c64_sid_refresh())
+        tk.Button(crow, text="↻ Refresh", bg=BG3, fg=FG, relief=tk.FLAT,
+                  padx=8, cursor="hand2", command=self._c64_sid_refresh).pack(side=tk.LEFT)
+
+        cwrap = tk.Frame(c.body, bg=SURFACE)
+        cwrap.pack(fill=tk.X, pady=(2, 6))
+        self._c64_sid_list = tk.Listbox(
+            cwrap, bg="#11111b", fg=FG, selectbackground=ACCENT,
+            selectforeground="#1e1e2e", font=("Consolas", 10), height=14,
+            relief=tk.FLAT, activestyle="none", highlightthickness=0,
+        )
+        csb = ttk.Scrollbar(cwrap, orient=tk.VERTICAL, command=self._c64_sid_list.yview)
+        self._c64_sid_list.configure(yscrollcommand=csb.set)
+        csb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._c64_sid_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._c64_sid_list.bind("<Double-Button-1>", lambda e: self._do_upload_c64_sid())
+
+        (self._c64_sid_port,
+         self._c64_sid_baud,
+         self._c64_sid_line_delay) = c.add_field_row(
+            ("Port", "COM15", 10), ("Baud", "115200", 10), ("Line delay", "0.001", 10)
+        )
+        (self._c64_sid_wake_byte,
+         self._c64_sid_bytes_per_line) = c.add_field_row(
+            ("Wake byte", "0xA5", 10), ("Bytes/line", "1", 10)
+        )
+        self._c64_sid_verbose = c.add_check("Verbose — print monitor responses")
+        self._c64_sid_stay = c.add_check("Stay in FPGA monitor after upload")
+        c.add_button("▶  Upload Selected C64 SID PRG", self._do_upload_c64_sid, MAUVE)
+        c.add_button("↻  Rebuild C64 SID PRGs", self._do_build_c64_sid_prgs, ACCENT)
+        c.add_note("Generated PRGs are sound-only: they blank the VIC display to keep SID playback steady.")
+
+        self._c64_sid_paths: list[Path] = []
         self._sid_refresh()
+        self._c64_sid_refresh()
 
     def _sid_refresh(self):
         flt = self._sid_filter.get().strip().lower()
         self._sid_paths = []
         self._sid_list.delete(0, tk.END)
         for p in sorted(ROMS.glob("sound_*.rom")):
-            title = p.stem[len("sound_"):].replace("_", " ").title()
+            title = self._tune_title(p, "sound_")
             if flt and flt not in title.lower() and flt not in p.name.lower():
                 continue
             self._sid_paths.append(p)
@@ -388,6 +435,28 @@ class App(tk.Tk):
             self._sid_list.selection_set(0)
         if hasattr(self, "_status"):       # status bar is built after the tabs
             self._status.set(f"{len(self._sid_paths)} SID ROM(s) listed")
+
+    def _c64_sid_refresh(self):
+        flt = self._c64_sid_filter.get().strip().lower()
+        self._c64_sid_paths = []
+        self._c64_sid_list.delete(0, tk.END)
+        for p in sorted((ROMS / "c64_uart_sid").glob("*.prg")):
+            title = self._tune_title(p)
+            if flt and flt not in title.lower() and flt not in p.name.lower():
+                continue
+            self._c64_sid_paths.append(p)
+            self._c64_sid_list.insert(tk.END, f"  {title:<34} {p.stat().st_size:5d} B")
+        if self._c64_sid_paths:
+            self._c64_sid_list.selection_set(0)
+        if hasattr(self, "_status"):
+            self._status.set(f"{len(self._c64_sid_paths)} C64 SID PRG(s) listed")
+
+    @staticmethod
+    def _tune_title(path: Path, prefix: str = "") -> str:
+        stem = path.stem
+        if prefix and stem.startswith(prefix):
+            stem = stem[len(prefix):]
+        return stem.replace("_", " ").title()
 
     # ── SD Card tab ────────────────────────────────────────────────────────
     def _tab_sdcard(self):
@@ -556,6 +625,32 @@ class App(tk.Tk):
         if self._sid_verbose.get():
             cmd.append("--verbose")
         self._run(cmd, f"Upload SID — {title}")
+
+    def _do_build_c64_sid_prgs(self):
+        self._run(["make", "c64-sid-prgs"], "Build C64 SID PRGs")
+
+    def _do_upload_c64_sid(self):
+        sel = self._c64_sid_list.curselection()
+        if not sel:
+            self.console.writeln("ERROR: select a C64 SID PRG from the list first.", "err")
+            return
+        prg = self._c64_sid_paths[sel[0]]
+        title = self._tune_title(prg)
+        cmd = [
+            sys.executable,
+            TOOLS / "c64_uart_prg_loader.py",
+            str(prg),
+            "--port", self._c64_sid_port.get(),
+            "--baud", self._c64_sid_baud.get(),
+            "--wake-byte", self._c64_sid_wake_byte.get(),
+            "--bytes-per-line", self._c64_sid_bytes_per_line.get(),
+            "--line-delay", self._c64_sid_line_delay.get(),
+        ]
+        if self._c64_sid_verbose.get():
+            cmd.append("--verbose")
+        if self._c64_sid_stay.get():
+            cmd.append("--stay")
+        self._run(cmd, f"Upload C64 SID PRG — {title}")
 
     def _do_make_sd(self):
         rom = self._sd_rom.get().strip()
