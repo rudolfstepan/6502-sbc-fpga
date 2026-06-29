@@ -64,7 +64,7 @@ failure while the CPU remains held.
 | $883A | 1 B | Millisecond counter | Timing source retained for native SID playback |
 | $88B0-$88BF | 16 B | Math coprocessor (FPU) | Signed 32×32 fixed-point multiply (8.24); see [Math Coprocessor](./FPU.md) |
 | $A000-$CFFF | 12 KB | Shadow ROM application window | EhBASIC or standalone application |
-| $D000-$EFFF | 8 KB | I/O / reserved | VIC-II regs $D000-$D03F (border/background + $D011/$D012 raster read-back); SID at $D400-$D41C (incl. OSC3/ENV3 reads); not shadow ROM |
+| $D000-$EFFF | 8 KB | I/O / reserved | VIC-II regs $D000-$D03F (border/background + $D011/$D012 raster read-back); SID at $D400-$D41C (incl. OSC3/ENV3 reads); C64 host UART at $DE00/$DE01; math coprocessor at $DF00-$DF0F; not shadow ROM |
 | $F000-$FFFF | 4 KB | Shadow ROM kernel window | Kernel and hardware vectors |
 
 The two ROM windows share one physical 16 KB `boot_shadow_rom`. Image offsets

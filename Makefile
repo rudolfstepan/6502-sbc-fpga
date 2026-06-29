@@ -35,6 +35,7 @@ RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/audio/sid/sid6581.vhd rtl/core/peripherals/cia6526.vhd \
       rtl/core/boot/boot_debug_uart.vhd rtl/core/boot/boot_vga_debug.vhd \
       rtl/core/boot/boot_sdram_test.vhd rtl/core/boot/uart_debug_monitor.vhd \
+      rtl/core/peripherals/math_copro.vhd \
       rtl/core/cpu/t65_adapter.vhd rtl/core/cpu6502_slot.vhd rtl/core/sbc_top.vhd \
       rtl/core/sbc_t65_top.vhd rtl/core/sbc_t65_boot_top.vhd \
       rtl/core/sbc_t65_sdram_boot_top.vhd \
@@ -64,6 +65,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
         sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
         c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
         c64-graphics-test-prg c64-sprite-test-prg c64-d016-scroll-test-prg \
+        c64-math-copro-test-prg c64-mandelbrot-copro-prg \
         c64-v1541-ping-prg \
         c64-spin-diag-prg c64-hang-diag-prg c64-hang-loop-diag-prg \
         c64-cli-noirq-diag-prg c64-rti-diag-prg c64-hang-raw-irq-diag-prg \
@@ -118,6 +120,18 @@ c64-d016-scroll-test-prg:
 	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/d016_scroll_test.prg roms/d016_scroll_test.o
 	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/d016_scroll_test.o').unlink(missing_ok=True)"
 	@echo "Built roms/d016_scroll_test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
+
+c64-math-copro-test-prg:
+	$(CA65) --cpu 6502 -o roms/math_copro_test.o sw/c64_math_copro_test.s
+	$(LD65) -C sw/c64_vic_graphics_test.cfg -o roms/math_copro_test.prg roms/math_copro_test.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/math_copro_test.o').unlink(missing_ok=True)"
+	@echo "Built roms/math_copro_test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
+
+c64-mandelbrot-copro-prg:
+	$(CA65) --cpu 6502 -o roms/mandelbrot_copro_c64.o sw/c64_mandelbrot_copro.s
+	$(LD65) -C sw/c64_mandelbrot_copro.cfg -o roms/mandelbrot_copro_c64.prg roms/mandelbrot_copro_c64.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/mandelbrot_copro_c64.o').unlink(missing_ok=True)"
+	@echo "Built roms/mandelbrot_copro_c64.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
 
 c64-hang-diag-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"

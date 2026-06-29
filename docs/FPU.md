@@ -14,10 +14,11 @@ Files:
 
 - RTL: [`rtl/core/peripherals/math_copro.vhd`](../rtl/core/peripherals/math_copro.vhd) — the unit
 - Bus decode: [`rtl/core/bus_decode.vhd`](../rtl/core/bus_decode.vhd) (`DEV_MATH`), addresses in [`rtl/core/sbc_pkg.vhd`](../rtl/core/sbc_pkg.vhd) (`ADDR_MATH_BASE`)
-- Wiring: [`rtl/core/sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc_t65_boot_monitor_top.vhd) (`math_i`)
+- Wiring: [`rtl/core/sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc_t65_boot_monitor_top.vhd) (`math_i`) and [`rtl/c64/c64_core.vhd`](../rtl/c64/c64_core.vhd) (`$DF00-$DF0F`)
 - Testbench: [`sim/tb/tb_math_copro.vhd`](../sim/tb/tb_math_copro.vhd)
 - Self-test ROM: [`sw/copro_selftest.s`](../sw/copro_selftest.s)
 - Demo ROM: [`sw/mandelbrot_copro.s`](../sw/mandelbrot_copro.s)
+- C64 demo PRG: [`sw/c64_mandelbrot_copro.s`](../sw/c64_mandelbrot_copro.s)
 
 ## Overview
 
@@ -27,7 +28,7 @@ Files:
 | Output | the 64-bit product **and** an arithmetic-right-shifted result |
 | Default format | **8.24** signed fixed-point (`SHIFT = 24`), range ≈ −128.0 … +127.999999 |
 | Shift | writable register (0…63), so the same unit serves any Q-format (e.g. 4.12 with `SHIFT = 12`) |
-| Address window | `$88B0–$88BF` (16 bytes), device `DEV_MATH` |
+| Address window | SBC: `$88B0–$88BF` (16 bytes), device `DEV_MATH`; C64: `$DF00-$DF0F` in I/O2 |
 | Latency | 2 clocks (registered multiply + registered shift); no CPU wait states |
 | FPGA cost | ~4 DSP18 macros (of 48 on the GW2A-18) + a 64-bit shifter and a few registers |
 
@@ -75,23 +76,27 @@ The product of two 8.24 numbers is a 16.48 value (64-bit); shifting right by 24
 brings it back to 8.24. That shift is exactly what the `SHIFT` register controls,
 so other formats work by changing one register (e.g. `SHIFT = 12` gives 4.12).
 
-## Register map (`$88B0`)
+## Register map
 
-| Offset | Addr | Write | Read |
-| --- | --- | --- | --- |
-| 0 | `$88B0` | operand A, byte 0 (LSB) | raw product byte 0 (LSB) |
-| 1 | `$88B1` | operand A, byte 1 | raw product byte 1 |
-| 2 | `$88B2` | operand A, byte 2 | raw product byte 2 |
-| 3 | `$88B3` | operand A, byte 3 (MSB) | raw product byte 3 |
-| 4 | `$88B4` | operand B, byte 0 (LSB) | raw product byte 4 |
-| 5 | `$88B5` | operand B, byte 1 | raw product byte 5 |
-| 6 | `$88B6` | operand B, byte 2 | raw product byte 6 |
-| 7 | `$88B7` | operand B, byte 3 (MSB) | raw product byte 7 (MSB) |
-| 8 | `$88B8` | — | result `(A*B) >> SHIFT`, byte 0 (LSB) |
-| 9 | `$88B9` | — | result byte 1 |
-| 10 | `$88BA` | — | result byte 2 |
-| 11 | `$88BB` | — | result byte 3 (MSB) |
-| 12 | `$88BC` | `SHIFT` amount (0…63) | `SHIFT` amount |
+The SBC build maps the 16-byte window at `$88B0`. The C64 core maps the same
+register layout at `$DF00`, using the otherwise-free I/O2 expansion area while
+leaving `$DE00/$DE01` for the virtual-1541 UART.
+
+| Offset | SBC addr | C64 addr | Write | Read |
+| --- | --- | --- | --- | --- |
+| 0 | `$88B0` | `$DF00` | operand A, byte 0 (LSB) | raw product byte 0 (LSB) |
+| 1 | `$88B1` | `$DF01` | operand A, byte 1 | raw product byte 1 |
+| 2 | `$88B2` | `$DF02` | operand A, byte 2 | raw product byte 2 |
+| 3 | `$88B3` | `$DF03` | operand A, byte 3 (MSB) | raw product byte 3 |
+| 4 | `$88B4` | `$DF04` | operand B, byte 0 (LSB) | raw product byte 4 |
+| 5 | `$88B5` | `$DF05` | operand B, byte 1 | raw product byte 5 |
+| 6 | `$88B6` | `$DF06` | operand B, byte 2 | raw product byte 6 |
+| 7 | `$88B7` | `$DF07` | operand B, byte 3 (MSB) | raw product byte 7 (MSB) |
+| 8 | `$88B8` | `$DF08` | — | result `(A*B) >> SHIFT`, byte 0 (LSB) |
+| 9 | `$88B9` | `$DF09` | — | result byte 1 |
+| 10 | `$88BA` | `$DF0A` | — | result byte 2 |
+| 11 | `$88BB` | `$DF0B` | — | result byte 3 (MSB) |
+| 12 | `$88BC` | `$DF0C` | `SHIFT` amount (0…63) | `SHIFT` amount |
 
 All values are **little-endian** (byte 0 = least-significant), matching how the
 6502 stores multi-byte words. Operands and the scaled result are 32-bit; the raw
@@ -120,7 +125,8 @@ Pattern: write the 4 bytes of A, the 4 bytes of B, then read the 4 result bytes.
 With `SHIFT = 24` the result is already scaled to 8.24 — no normalisation needed.
 
 ```asm
-MUL       = $88B0
+MUL       = $88B0          ; SBC
+; MUL     = $DF00          ; C64 core
 MUL_A     = MUL+0          ; operand A (4 bytes)
 MUL_B     = MUL+4          ; operand B (4 bytes)
 MUL_RES   = MUL+8          ; result    (4 bytes)
@@ -160,12 +166,20 @@ MUL_SHIFT = MUL+12
 macro and uses it for the three products per Mandelbrot iteration
 (`zr²`, `zi²`, `zr·zi`).
 
-The current standalone image is linked for the split ROM map: code starts at
-`$A000`, vectors remain at `$FFFA-$FFFF`, and it renders directly into the
-180×120 packed RGB222 framebuffer. Four 6-bit pixels occupy three bytes. The
-`$6000-$7FFF` CPU window switches from bank 0 to bank 1 after byte 8191; every
-pixel therefore receives its own colour rather than sharing a colour attribute
-with an 8×8 cell. Build and upload it with:
+There are now two Mandelbrot assembly demos using the same coprocessor access
+pattern:
+
+- [`sw/mandelbrot_copro.s`](../sw/mandelbrot_copro.s) is the SBC split-ROM demo.
+  Code starts at `$A000`, vectors remain at `$FFFA-$FFFF`, and it renders into
+  the 180x120 packed RGB222 framebuffer. Four 6-bit pixels occupy three bytes.
+  The `$6000-$7FFF` CPU window switches from bank 0 to bank 1 after byte 8191,
+  so every pixel receives its own colour rather than sharing a colour attribute
+  with an 8x8 cell.
+- [`sw/c64_mandelbrot_copro.s`](../sw/c64_mandelbrot_copro.s) is a native C64
+  PRG. It loads at `$0801`, uses the C64 coprocessor window at `$DF00-$DF0F`,
+  and renders a 160x200 VIC-II multicolour bitmap at `$2000`.
+
+Build and upload the SBC image with:
 
 ```powershell
 make -C sw mandelbrot-copro
@@ -174,6 +188,16 @@ python tools\upload_monitor_hex.py roms\mandelbrot_copro.bin --split-rom `
 ```
 
 For direct Windows uploads, use `roms\upload\mandelbrot_copro.bat`.
+
+Build and upload the C64 PRG with:
+
+```powershell
+make c64-mandelbrot-copro-prg
+python tools\c64_uart_prg_loader.py roms\mandelbrot_copro_c64.prg --port COM15
+```
+
+Then type `RUN` on the C64. The demo stays in bitmap mode after rendering; reset
+when done viewing it.
 
 The software-multiply comparison image uses the same ROM and bitmap layout:
 

@@ -227,7 +227,7 @@ architecture rtl of c64_core is
   signal s_g      : std_logic_vector(5 downto 0);
 
   -- chip selects
-  signal cs_vic, cs_sid, cs_cia1, cs_cia2, cs_col : std_logic;
+  signal cs_vic, cs_sid, cs_cia1, cs_cia2, cs_col, cs_math : std_logic;
   signal col_we : std_logic;
 
   -- ---- Host disk UART ($DE00) ----
@@ -250,6 +250,9 @@ architecture rtl of c64_core is
   signal uart_data_dout  : std_logic_vector(7 downto 0);
   signal utx_busy    : std_logic;
   signal utx_send  : std_logic;
+
+  -- ---- Math coprocessor ($DF00-$DF0F, I/O area 2) ----
+  signal math_dout : std_logic_vector(7 downto 0);
 
   -- Packed for the board debug UART:
   -- 15 phi2_en, 14 VIC cs, 13 CIA1 cs, 12 cwq full, 11 wq full,
@@ -662,6 +665,21 @@ begin
       din => cpu_dout, dout => sid_dout, sample_out => audio
     );
 
+  -- ---- Math coprocessor (I/O area 2, $DF00-$DF0F) ----
+  -- Keep $DE00/$DE01 for the virtual 1541 UART. $DF00-$DFFF is the C64 I/O2
+  -- expansion window and is otherwise unused in this unexpanded core.
+  cs_math <= '1' when io = IO_EXP2 and cpu_addr(7 downto 4) = x"0" else '0';
+  math_i : entity work.math_copro
+    port map (
+      clk     => clk,
+      reset_n => core_reset_n,
+      cs      => cs_math,
+      we      => io_we,
+      addr    => cpu_addr(3 downto 0),
+      din     => cpu_dout,
+      dout    => math_dout
+    );
+
   -- ---- Host disk UART (I/O area 1, $DE00-$DE01) ----
   -- A PC runs a "1541 server" on this serial link and LOAD is done over UART.
   --   $DE00 DATA   : write -> transmit a byte; read -> pop one received byte
@@ -770,7 +788,8 @@ begin
   -- mux tree. Everything else (ROM/CIA/VIC/SID/UART) has the full CPU cycle and is
   -- multicycled, so its extra depth is harmless.
   process(sel, io, basic_dout, kernal_dout, cg_cpu_dout,
-          vic_dout, sid_dout, col_a_dout, cia1_dout, cia2_dout, uart_dout)
+          vic_dout, sid_dout, col_a_dout, cia1_dout, cia2_dout,
+          uart_dout, math_dout, cpu_addr)
   begin
     case sel is
       when SEL_BASIC   => other_din <= basic_dout;
@@ -784,6 +803,12 @@ begin
           when IO_CIA1  => other_din <= cia1_dout;
           when IO_CIA2  => other_din <= cia2_dout;
           when IO_EXP1  => other_din <= uart_dout;   -- $DE00 host disk UART
+          when IO_EXP2  =>
+            if cpu_addr(7 downto 4) = x"0" then
+              other_din <= math_dout;                -- $DF00-$DF0F math copro
+            else
+              other_din <= x"FF";
+            end if;
           when others   => other_din <= x"FF";
         end case;
       when others => other_din <= x"FF";

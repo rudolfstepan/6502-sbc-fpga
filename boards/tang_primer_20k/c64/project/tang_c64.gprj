@@ -29,6 +29,7 @@
         <File path="../../../../rtl/c64/c64_keyboard_matrix.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/vic_ii.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/audio/sid/sid6581.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/math_copro.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
 
         <!-- Host disk UART (PC runs a 1541 server over the CH340 link) -->

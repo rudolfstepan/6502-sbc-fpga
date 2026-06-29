@@ -85,7 +85,7 @@ begin
       elsif test_mode = 6 and
             a >= 16#0840# and a < 16#0880# and ((a - 16#0840#) mod 3) = 0 then
         vic_data <= x"80";  -- hires sprite 1 first pixel set
-      elsif a >= 16#0000# and a < 16#0140# and (a mod 40) = 0 then
+      elsif a >= 16#0000# and a < 16#0008# then
         if test_mode = 0 or test_mode = 6 then
           vic_data <= x"80";  -- first hires bitmap pixel set, rest clear
         else

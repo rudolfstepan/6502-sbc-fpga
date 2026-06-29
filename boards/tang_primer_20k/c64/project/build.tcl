@@ -24,6 +24,7 @@ add_file -type verilog {../../../../rtl/c64/mos6526_mist.v}
 add_file -type vhdl {../../../../rtl/c64/c64_keyboard_matrix.vhd}
 add_file -type vhdl {../../../../rtl/c64/vic_ii.vhd}
 add_file -type vhdl {../../../../rtl/core/audio/sid/sid6581.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/math_copro.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
 
 # Host disk UART (PC runs a 1541 server over the CH340 link)

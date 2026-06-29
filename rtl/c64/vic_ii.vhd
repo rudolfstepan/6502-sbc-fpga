@@ -457,7 +457,7 @@ begin
                   when fetch_phase = 2 else
                   sprite_fetch_offset
                   when fetch_phase = 3 else
-                  bitmap_base + to_unsigned(fetch_y * 40 + fetch_col, 16)
+                  bitmap_base + to_unsigned((fetch_y / 8) * 320 + fetch_col * 8 + (fetch_y mod 8), 16)
                   when fetch_bmm = '1' and fetch_phase = 0 else
                   char_fetch_offset
                   when fetch_bmm = '0' and fetch_phase = 1 else
