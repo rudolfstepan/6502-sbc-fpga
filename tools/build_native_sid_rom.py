@@ -61,6 +61,7 @@ def parse_payload(data: bytes, name: str | None = None) -> dict:
     init  = int.from_bytes(data[10:12], "big")
     play  = int.from_bytes(data[12:14], "big")
     start = int.from_bytes(data[16:18], "big")    # start song, 1-based
+    speed_flags = int.from_bytes(data[18:22], "big") if len(data) >= 22 else 0
     body  = data[off:]
     if load == 0:                       # load address taken from first 2 bytes
         load = int.from_bytes(body[:2], "little")
@@ -92,9 +93,12 @@ def parse_payload(data: bytes, name: str | None = None) -> dict:
         song = ov.get("song", song)
         if ov.get("play"):
             mode = "low" if top <= RAM_TOP else mode
+    speed_bit = min(song, 31)
+    cia_speed = (speed_flags & (1 << speed_bit)) != 0
     body = body + bytes(padded - payload_len)
     return dict(load=load, init=init, play=play, body=body,
-                payload_len=payload_len, pages=pages, song=song, mode=mode)
+                payload_len=payload_len, pages=pages, song=song, mode=mode,
+                speed_flags=speed_flags, cia_speed=cia_speed)
 
 
 def render_asm(name: str, info: dict) -> str:

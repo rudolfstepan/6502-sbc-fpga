@@ -3,8 +3,9 @@
 -- a cycle-accurate ADSR (reSID rate-counter periods with the exponential
 -- decay/release divider), a 2-pole state-variable filter (LP/BP/HP with
 -- cutoff/resonance/routing and a non-linear "dark 6581" cutoff curve), hard
--- oscillator sync, ring modulation and AND-combined waveforms. The 6581's DAC
--- non-linearity and sample-ROM-exact combined waveforms are not modelled yet.
+-- oscillator sync, ring modulation, AND-combined waveforms and a $D418 volume
+-- DAC high-pass path for sample digis. The 6581's analog DAC non-linearity and
+-- sample-ROM-exact combined waveforms are not modelled yet.
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -60,10 +61,13 @@ architecture rtl of sid6581 is
   -- output) so no multiply+add chain sits in one 54 MHz path.  ~54 system
   -- clocks are available per SID tick, far more than the 5 stages used.
   constant FLT_BND : integer := 2097152;          -- state saturation (+/-2^21)
+  constant D418_DAC_STEP : integer := 512;        -- final-sample units per volume LSB
+  constant D418_DC_SHIFT : natural := 12;         -- ~4 ms DC blocker at SID rate
   signal lp_s, bp_s : signed(23 downto 0) := (others => '0');
   signal hp_s       : signed(25 downto 0) := (others => '0');
   signal fcoef_s    : signed(14 downto 0) := (others => '0');
   signal dcoef_s    : signed(17 downto 0) := (others => '0');
+  signal d418_lp_s   : signed(17 downto 0) := (others => '0');
   signal dir_lat    : signed(21 downto 0) := (others => '0');
   signal flt_lat    : signed(21 downto 0) := (others => '0');
   signal total_lat  : signed(27 downto 0) := (others => '0');
@@ -279,12 +283,14 @@ begin
     variable bp_sum, lp_sum : signed(26 downto 0);
     variable lp_new : signed(23 downto 0);
     variable filt_out, total : signed(27 downto 0);
-    variable scaled : signed(33 downto 0);
+    variable scaled, scaled_mix : signed(33 downto 0);
+    variable digi_in, digi_hp : signed(17 downto 0);
     variable master : unsigned(4 downto 0);
   begin
     if rising_edge(clk) then
       if reset_n = '0' then
         lp_s <= (others => '0'); bp_s <= (others => '0'); hp_s <= (others => '0');
+        d418_lp_s <= (others => '0');
         sample_out <= (others => '0');
         fstage <= 0;
       else
@@ -403,15 +409,22 @@ begin
             fstage <= 5;
 
           when 5 =>
-            -- ---- scale by master volume, clip to 16-bit ----
+            -- ---- scale by master volume, add $D418 digi DAC, clip to 16-bit ----
             master := '0' & unsigned(modev_lat(3 downto 0));
             scaled := resize(total_lat * signed('0' & std_logic_vector(master)), scaled'length);
-            if scaled > to_signed(32767*16, scaled'length) then
+            -- Real 6581 volume changes move the output DC bias; after the audio
+            -- coupling cap this becomes the classic 4-bit sample/Digi path.
+            digi_in := to_signed(to_integer(master) * D418_DAC_STEP, digi_in'length);
+            digi_hp := digi_in - d418_lp_s;
+            d418_lp_s <= d418_lp_s + resize(shift_right(digi_hp, D418_DC_SHIFT),
+                                            d418_lp_s'length);
+            scaled_mix := scaled + shift_left(resize(digi_hp, scaled_mix'length), 4);
+            if scaled_mix > to_signed(32767*16, scaled_mix'length) then
               sample_out <= std_logic_vector(to_signed(32767, 16));
-            elsif scaled < to_signed(-32768*16, scaled'length) then
+            elsif scaled_mix < to_signed(-32768*16, scaled_mix'length) then
               sample_out <= std_logic_vector(to_signed(-32768, 16));
             else
-              sample_out <= std_logic_vector(resize(shift_right(scaled, 4), 16));
+              sample_out <= std_logic_vector(resize(shift_right(scaled_mix, 4), 16));
             end if;
             fstage <= 0;
         end case;

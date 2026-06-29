@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Soldier_of_Light.prg",
+  "sid": "Soldier_of_Light.sid",
+  "load_address": 2049,
+  "entry": 9472,
+  "basic_end": 15970,
+  "prg_size": 13923,
+  "upload_size": 6510,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 12
+    },
+    {
+      "name": "SID player/payload",
+      "address": 9472,
+      "offset": 7425,
+      "size": 6498
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

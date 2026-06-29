@@ -124,6 +124,30 @@ SID-Kern. Ruft `upload_monitor_hex.py … --split-rom --run` auf (dasselbe wie d
 | Verbose | Monitor-Antworten anzeigen (`--verbose`) |
 | ▶ Upload Selected SID | Lädt die markierte Tune hoch und startet sie bei `$A000` |
 
+### C64 UART SID PRGs
+
+Wählt eine RUN-loadbare C64-SID-PRG aus `roms/c64_uart_sid/` und lädt sie über
+den nativen C64-UART-Monitor. Ruft intern `c64_uart_prg_loader.py` auf; nach dem
+Upload wird die C64-Umgebung freigegeben, danach am C64-Prompt `RUN` eingeben.
+
+Wenn zur PRG eine `*.prg.segments.json`-Sidecar-Datei existiert, nutzt der
+Loader diese automatisch und überspringt große Null-Lücken zwischen BASIC-Stub
+und SID-Player/Payload. Die Liste zeigt dann beide Größen an, z. B.
+`22529 B -> 4237 B`.
+
+| Feld / Option | Beschreibung |
+|---|---|
+| Filter | Filtert die C64-SID-PRG-Liste nach Titel oder Dateiname |
+| ↻ Refresh | Liest `roms/c64_uart_sid/*.prg` neu ein |
+| C64 SID PRG-Liste | Alle gefundenen RUN-PRGs; **Doppelklick lädt direkt hoch** |
+| Port / Baud | Serieller Port und Baudrate für den C64-UART-Monitor |
+| Wake byte | Monitor-Magic-Byte, Standard `0xA5` |
+| Bytes/line / Line delay | Pacing für den monitorseitigen Hex-Upload |
+| Verbose | Monitor-Antworten anzeigen (`--verbose`) |
+| Stay in FPGA monitor | Nach Upload nicht mit `G` zurück zur C64-Umgebung springen |
+| ▶ Upload Selected C64 SID PRG | Lädt die markierte C64-SID-PRG hoch |
+| ↻ Rebuild C64 SID PRGs | Ruft `make c64-sid-prgs` auf und erzeugt PRGs plus Segment-Sidecars neu |
+
 ---
 
 ## Tab: SD Card
@@ -204,6 +228,9 @@ Es läuft immer nur **ein Prozess** gleichzeitig.  Wird ein zweiter gestartet, b
 | `make_sd_boot_image.py` | SD-Boot-Image mit Header und CRC erzeugen |
 | `build_native_sid_rom.py` | Eine `.sid`-Tune in eine Player-ROM wrappen |
 | `build_all_sid_roms.py` | Alle Tunes in `sid_orig/` zu `sound_*.rom` + Upload-Bats bauen |
+| `build_sid_prg.py` | Eine `.sid`-Tune als C64-PRG mit BASIC-Header und Segment-Sidecar erzeugen |
+| `build_c64_sid_prgs.py` | Alle passenden `.sid`-Tunes als C64-UART-SID-PRGs bauen |
+| `c64_uart_prg_loader.py` | C64-PRGs über den nativen C64-UART-Monitor laden; nutzt Segment-Sidecars automatisch |
 | `news_to_uart.py` | RSS-Feed an UART senden |
 
 Alle Skripte lassen sich weiterhin direkt auf der Kommandozeile aufrufen; das GUI ist nur ein bequemer Wrapper.

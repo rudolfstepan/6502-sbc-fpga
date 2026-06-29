@@ -282,14 +282,15 @@ model. What it now reproduces:
 | Resonance | mapped to a deliberately **weak** Q (~0.7 … 2), matching the 6581 and avoiding output-limiter clipping |
 | Hard sync | voice *v* oscillator resets when the previous voice's MSB rises (`CONTROL` bit 1) |
 | Ring modulation | triangle fold bit XORed with the previous voice's MSB (`CONTROL` bit 2) |
-| Master volume | `$D418` low nibble; voice-3 disconnect (`$D418` bit 7) honoured |
+| Master volume / digis | `$D418` low nibble scales voices and feeds a high-pass volume-DAC path for 4-bit sample digis; voice-3 disconnect (`$D418` bit 7) honoured |
 
-The filter runs once per SID tick over a 3-step internal pipeline (one multiply
+The filter runs once per SID tick over a 5-step internal pipeline (one multiply
 per clock) so the two serial coefficient multiplies never share a single 54 MHz
 path, and the filter states saturate to keep the SVF from blowing up.
 
-**Not yet modelled:** the 6581's analog DAC non-linearity / DC "warmth", and the
-sample-ROM-exact combined-waveform tables (the wire-AND is an approximation).
+**Not yet modelled:** the 6581's full analog DAC non-linearity / chip-specific
+bias "warmth", and the sample-ROM-exact combined-waveform tables (the wire-AND
+is an approximation).
 The cutoff and resonance mappings are tunable in `sid6581.vhd` (`cutoff_coeff`
 and the `dcoef_i` formula) if a brighter/darker or more/less resonant voicing is
 wanted.
@@ -364,10 +365,22 @@ make c64-sid-prgs
 python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
 ```
 
+The builder also emits `*.prg.segments.json` files. The UART loader detects
+those sidecars automatically and uploads only the real BASIC stub plus
+SID-player/payload ranges, skipping the zero-filled gap that many high-load
+tunes need in a standard PRG image. Add `--no-segments` when you want to force a
+contiguous PRG upload for debugging.
+
+The default C64 wrapper tick is 50 Hz. If a SID needs a different CIA-driven
+rate, rebuild that tune with `tools/build_sid_prg.py --target c64 --play-hz N`
+(for example `--play-hz 100`). The generated segment map records the selected
+rate and the original PSID speed flags.
+
 The C64 PRG wrapper is **sound-only**. It runs the tune's native `init`, masks
 CIA IRQ sources, disables VIC raster IRQs, clears `$D011.DEN`, and then polls CIA
-Timer A for a PAL-like 50 Hz player tick. The C64 VIC implementation treats
-`DEN=0` as "no display fetch", so the VIC stops asserting BA/RDY while the tune
+Timer A for the selected player tick, 50 Hz by default. The C64 VIC
+implementation treats `DEN=0` as "no display fetch", so the VIC stops asserting
+BA/RDY while the tune
 plays. That removes audible stalls from the single-port RAM sharing path; the
 HDMI output is intentionally blank while these PRGs play.
 
@@ -383,9 +396,9 @@ once, emitting `roms/sound_<name>.rom` and a matching
 `sw/sid_page.cfg` automatically), and reporting the tunes it has to skip.
 
 By default it also runs each tune through the bare-6502 SID emulator
-(`tools/sid_dump_full.exe`) and **skips tunes that produce no sound here** — a
-player that never sets master volume or never gates a voice is silent on this
-hardware.
+(`tools/sid_dump_full.exe`) and **skips tunes that produce no sound here**. A
+player must either gate audible voices or drive the `$D418` volume-DAC path to
+produce output.
 
 **Curated ROMs are protected.** `roms/sound_commando.rom` is a bespoke,
 hand-made demo that the generic wrapper does **not** reproduce. Its base name is

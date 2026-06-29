@@ -5,6 +5,7 @@ Run with: python fpga/tools/fpga_tools_gui.py
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import threading
@@ -377,7 +378,8 @@ class App(tk.Tk):
         c = Section(p, "C64 UART SID PRGs")
         c.pack(fill=tk.X, padx=8)
         c.add_note("Pick a RUN-loadable C64 SID PRG from roms/c64_uart_sid.\n"
-                   "The C64 monitor is woken automatically; after upload type RUN on the C64.")
+                   "The loader uses sidecar segment maps automatically when present; "
+                   "after upload type RUN on the C64.")
 
         crow = tk.Frame(c.body, bg=SURFACE)
         crow.pack(fill=tk.X, pady=(4, 4))
@@ -445,11 +447,26 @@ class App(tk.Tk):
             if flt and flt not in title.lower() and flt not in p.name.lower():
                 continue
             self._c64_sid_paths.append(p)
-            self._c64_sid_list.insert(tk.END, f"  {title:<34} {p.stat().st_size:5d} B")
+            self._c64_sid_list.insert(tk.END, f"  {title:<34} {self._c64_sid_size_text(p)}")
         if self._c64_sid_paths:
             self._c64_sid_list.selection_set(0)
         if hasattr(self, "_status"):
             self._status.set(f"{len(self._c64_sid_paths)} C64 SID PRG(s) listed")
+
+    @staticmethod
+    def _c64_sid_size_text(path: Path) -> str:
+        size = path.stat().st_size
+        segment_path = path.with_suffix(path.suffix + ".segments.json")
+        if not segment_path.exists():
+            return f"{size:5d} B"
+        try:
+            meta = json.loads(segment_path.read_text())
+            upload_size = int(meta.get("upload_size", 0))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return f"{size:5d} B"
+        if 0 < upload_size < size:
+            return f"{size:5d} B -> {upload_size:5d} B"
+        return f"{size:5d} B"
 
     @staticmethod
     def _tune_title(path: Path, prefix: str = "") -> str:

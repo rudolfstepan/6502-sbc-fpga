@@ -8,6 +8,10 @@ payload to the load address stored in the first two bytes, fixes BASIC pointers
 for normal $0801 programs, then sends "G" without an address so the C64 resumes
 at READY.
 
+If a generated <file>.prg.segments.json sidecar exists, only the listed memory
+segments are uploaded. This keeps normal PRGs compatible while avoiding large
+zero-filled gaps between a BASIC header and high SID payloads.
+
 The monitor has no per-line ACK and no deep UART receive FIFO while it writes
 C64 RAM, so the default pacing is deliberately conservative.
 
@@ -19,6 +23,7 @@ After upload of a BASIC PRG, type RUN on the C64.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -37,6 +42,7 @@ MONITOR_BANNER = b"FPGA MONITOR"
 MONITOR_HELP = b"H for help"
 MONITOR_USB_DIAG = b"USB CON="
 MONITOR_ERROR_PROMPT = b"\r\n?\r\n. "
+SEGMENT_FORMAT = "c64-uart-prg-segments-v1"
 
 
 def require_pyserial():
@@ -206,7 +212,7 @@ def basic_pointer_patch(load_addr: int, end_addr: int) -> bytes:
     )
 
 
-def load_prg(path: Path) -> tuple[int, bytes]:
+def load_prg(path: Path) -> tuple[int, bytes, bytes]:
     raw = path.read_bytes()
     if len(raw) < 3:
         raise SystemExit(f"ERROR: PRG is too small: {path}")
@@ -217,14 +223,97 @@ def load_prg(path: Path) -> tuple[int, bytes]:
         raise SystemExit(
             f"ERROR: PRG does not fit in 64K: load ${load_addr:04X}, {len(data)} bytes"
         )
-    return load_addr, data
+    return load_addr, data, raw
+
+
+def default_segment_paths(path: Path) -> list[Path]:
+    return [
+        path.with_suffix(path.suffix + ".segments.json"),
+        path.with_suffix(".segments.json"),
+    ]
+
+
+def find_segment_path(path: Path, args: argparse.Namespace) -> Path | None:
+    if args.no_segments:
+        return None
+    if args.segments:
+        seg = Path(args.segments)
+        if not seg.exists():
+            raise SystemExit(f"ERROR: segment map not found: {seg}")
+        return seg
+    for seg in default_segment_paths(path):
+        if seg.exists():
+            return seg
+    return None
+
+
+def load_segment_map(path: Path, raw: bytes, args: argparse.Namespace):
+    seg_path = find_segment_path(path, args)
+    if seg_path is None:
+        return None
+
+    try:
+        meta = json.loads(seg_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"ERROR: cannot read segment map {seg_path}: {exc}") from exc
+
+    if meta.get("format") != SEGMENT_FORMAT:
+        raise SystemExit(f"ERROR: unsupported segment map format in {seg_path}")
+    try:
+        expected_size = int(meta.get("prg_size", len(raw)))
+        expected_load = int(meta.get("load_address", raw[0] | (raw[1] << 8)))
+    except (TypeError, ValueError) as exc:
+        raise SystemExit(f"ERROR: invalid segment map metadata in {seg_path}") from exc
+    if expected_size != len(raw):
+        raise SystemExit(
+            f"ERROR: segment map {seg_path.name} was built for {expected_size} bytes, "
+            f"but {path.name} has {len(raw)} bytes"
+        )
+    actual_load = raw[0] | (raw[1] << 8)
+    if expected_load != actual_load:
+        raise SystemExit(
+            f"ERROR: segment map {seg_path.name} load address ${expected_load:04X} "
+            f"does not match {path.name} load address ${actual_load:04X}"
+        )
+
+    segments = []
+    for index, item in enumerate(meta.get("segments", []), start=1):
+        try:
+            address = int(item["address"])
+            offset = int(item["offset"])
+            size = int(item["size"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"ERROR: invalid segment {index} in {seg_path}") from exc
+        if address < 0 or address > 0xFFFF or size < 0 or address + size > 0x10000:
+            raise SystemExit(f"ERROR: segment {index} address/size out of C64 RAM range")
+        if offset < 0 or offset + size > len(raw):
+            raise SystemExit(f"ERROR: segment {index} points outside {path.name}")
+        if size == 0:
+            continue
+        label = str(item.get("name", f"segment {index}"))
+        segments.append((address, raw[offset:offset + size], label))
+
+    if not segments:
+        raise SystemExit(f"ERROR: segment map {seg_path} has no uploadable segments")
+
+    return {
+        "path": seg_path,
+        "segments": segments,
+        "basic_end": meta.get("basic_end"),
+    }
 
 
 def upload(args: argparse.Namespace) -> None:
     serial = require_pyserial()
     image = Path(args.prg)
-    load_addr, data = load_prg(image)
+    load_addr, data, raw = load_prg(image)
     end_addr = load_addr + len(data)
+    segment_map = load_segment_map(image, raw, args)
+    if segment_map and segment_map["basic_end"] is not None:
+        try:
+            end_addr = int(segment_map["basic_end"])
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"ERROR: invalid basic_end in {segment_map['path']}") from exc
 
     print(f"Opening {args.port} @ {args.baud} baud")
     with serial.Serial(args.port, args.baud, timeout=0.05, write_timeout=2) as port:
@@ -241,7 +330,16 @@ def upload(args: argparse.Namespace) -> None:
             raise SystemExit("ERROR: no monitor prompt received after wake-up" + detail)
         port.reset_input_buffer()
 
-        upload_bytes(port, load_addr, data, args, image.name)
+        if segment_map:
+            total = sum(len(seg_data) for _, seg_data, _ in segment_map["segments"])
+            print(
+                f"Using segment map {segment_map['path'].name}: "
+                f"{total} uploaded bytes instead of {len(data)}"
+            )
+            for address, seg_data, label in segment_map["segments"]:
+                upload_bytes(port, address, seg_data, args, f"{image.name} {label}")
+        else:
+            upload_bytes(port, load_addr, data, args, image.name)
 
         if args.basic or (args.auto_basic and load_addr == 0x0801):
             patch = basic_pointer_patch(load_addr, end_addr)
@@ -302,6 +400,15 @@ def parse_args() -> argparse.Namespace:
         help="do not patch BASIC pointers automatically for load address $0801",
     )
     parser.add_argument("--stay", action="store_true", help="leave the FPGA monitor active after upload")
+    parser.add_argument(
+        "--segments",
+        help="explicit JSON segment map; default auto-detects <file>.prg.segments.json",
+    )
+    parser.add_argument(
+        "--no-segments",
+        action="store_true",
+        help="ignore sidecar segment maps and upload the contiguous PRG image",
+    )
     parser.add_argument("--verbose", action="store_true", help="print monitor responses")
     parser.set_defaults(auto_basic=True)
     return parser.parse_args()

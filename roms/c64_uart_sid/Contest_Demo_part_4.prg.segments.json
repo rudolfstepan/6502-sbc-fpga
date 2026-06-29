@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Contest_Demo_part_4.prg",
+  "sid": "Contest_Demo_part_4.sid",
+  "load_address": 2049,
+  "entry": 10496,
+  "basic_end": 14946,
+  "prg_size": 12899,
+  "upload_size": 4463,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 13
+    },
+    {
+      "name": "SID player/payload",
+      "address": 10496,
+      "offset": 8449,
+      "size": 4450
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

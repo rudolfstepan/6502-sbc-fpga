@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Ocean_Loader_3.prg",
+  "sid": "Ocean_Loader_3.sid",
+  "load_address": 2049,
+  "entry": 8192,
+  "basic_end": 15202,
+  "prg_size": 13155,
+  "upload_size": 7022,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 12
+    },
+    {
+      "name": "SID player/payload",
+      "address": 8192,
+      "offset": 6145,
+      "size": 7010
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 1,
+  "sid_cia_speed": true
+}

@@ -85,6 +85,10 @@ make c64-sid-prgs
 python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
 ```
 
+Generated SID PRGs include `*.prg.segments.json` sidecars. The UART loader uses
+them automatically to skip large zero-filled gaps in the PRG image; pass
+`--no-segments` only when testing the old contiguous upload path.
+
 After upload, type:
 
 ```text

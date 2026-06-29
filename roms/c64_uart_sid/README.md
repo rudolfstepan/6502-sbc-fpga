@@ -12,12 +12,19 @@ make c64-sid-prgs
 ```
 
 The bulk build writes the generated files to this directory and prints a
-summary of converted and skipped SID files. A SID can also be converted
-individually:
+summary of converted and skipped SID files. It also writes a small
+`*.prg.segments.json` sidecar next to each PRG. The sidecar keeps the PRG itself
+standard, but lets the UART loader skip zero-filled gaps between the BASIC stub
+and the SID player/payload.
+
+A SID can also be converted individually:
 
 ```text
 python tools/build_sid_prg.py sid_orig/Erebus.sid roms/c64_uart_sid/Erebus.prg --target c64
 ```
+
+The default player tick is 50 Hz. For tunes that need a different CIA-driven
+rate, rebuild that tune with `--play-hz`, for example `--play-hz 100`.
 
 ## Upload and Start
 
@@ -26,6 +33,9 @@ Upload one tune through the UART monitor:
 ```text
 python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Erebus.prg --port COM15
 ```
+
+When the sidecar exists, the loader uses it automatically and prints the reduced
+upload byte count. Use `--no-segments` to force the old contiguous PRG upload.
 
 Then start it from the C64 BASIC prompt:
 

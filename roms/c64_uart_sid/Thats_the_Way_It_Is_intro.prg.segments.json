@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Thats_the_Way_It_Is_intro.prg",
+  "sid": "Thats_the_Way_It_Is_intro.sid",
+  "load_address": 2049,
+  "entry": 11008,
+  "basic_end": 16738,
+  "prg_size": 14691,
+  "upload_size": 5743,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 13
+    },
+    {
+      "name": "SID player/payload",
+      "address": 11008,
+      "offset": 8961,
+      "size": 5730
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

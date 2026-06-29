@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Enlightenment_Druid_II.prg",
+  "sid": "Enlightenment_Druid_II.sid",
+  "load_address": 2049,
+  "entry": 10496,
+  "basic_end": 17250,
+  "prg_size": 15203,
+  "upload_size": 6767,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 13
+    },
+    {
+      "name": "SID player/payload",
+      "address": 10496,
+      "offset": 8449,
+      "size": 6754
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

@@ -15,12 +15,15 @@ This trades a tiny startup copy for a single, predictable entry address.
 
 The C64 target adds a normal BASIC `10 SYS <entry>` stub at $0801 by default and
 uses CIA Timer A for a PAL-like 50 Hz player tick, so the resulting PRG can be
-loaded through the C64 UART monitor and started with `RUN`.
+loaded through the C64 UART monitor and started with `RUN`. A matching
+`*.prg.segments.json` sidecar is written next to the PRG so the UART loader can
+skip zero-filled gaps during upload.
 """
 from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import json
 import subprocess
 import tempfile
 
@@ -32,7 +35,9 @@ VIC_BITMAP = 0x6000
 RAM_FLOOR = 0x2000      # lowest safe PRG load addr (BASIC/loader live below this)
 PLAYER_RESERVE = 0x80   # bytes reserved below the payload for the in-place player
 BASIC_LOAD = 0x0801
-C64_PAL_FRAME_PERIOD = 19999  # 1 MHz PHI2 / 50 Hz, minus one for CIA underflow
+C64_PHI2_HZ = 1_000_000
+C64_DEFAULT_PLAY_HZ = 50.0
+SEGMENT_FORMAT = "c64-uart-prg-segments-v1"
 
 
 def target_symbols(target: str) -> list[str]:
@@ -46,13 +51,23 @@ def target_symbols(target: str) -> list[str]:
             "SRC = $F0", "DST = $F2", ""]
 
 
-def target_timer_init(target: str) -> list[str]:
+def cia_timer_period(phi2_hz: int, play_hz: float) -> int:
+    if play_hz <= 0:
+        raise SystemExit("--play-hz must be greater than zero")
+    period = int(round(phi2_hz / play_hz)) - 1
+    if period < 1 or period > 0xFFFF:
+        raise SystemExit(
+            f"CIA Timer A period {period} for {play_hz:g} Hz is outside 16-bit range")
+    return period
+
+
+def target_timer_init(target: str, play_hz: float, phi2_hz: int) -> list[str]:
     if target != "c64":
         return []
-    period = C64_PAL_FRAME_PERIOD
+    period = cia_timer_period(phi2_hz, play_hz)
     return [
-        # Drive PAL SID updates from CIA Timer A (~50 Hz). Polling ICR keeps the
-        # wrapper independent of KERNAL IRQ vectors and avoids 60 Hz video timing.
+        # Drive SID updates from CIA Timer A. Polling ICR keeps the wrapper
+        # independent of KERNAL IRQ vectors and avoids video-frame jitter.
         "    lda #0", "    sta CIA_CRA",
         "    lda #$7F", "    sta CIA_ICR",  # mask all CIA IRQ sources
         f"    lda #${period & 0xFF:02X}", "    sta CIA_TALO",
@@ -90,8 +105,8 @@ def target_wait_loop(target: str, play: int) -> list[str]:
     ]
 
 
-def render_asm(name: str, base: int, load: int, init: int, play: int,
-               pages: int, target: str) -> str:
+def render_asm(name: str, base: int, load: int, init: int, play: int, pages: int,
+               target: str, play_hz: float, phi2_hz: int) -> str:
     """Player linked at `base`: copy `pages` pages to `load`, init, play."""
     lines = [
         f"; {target.upper()} PRG player for PSID: {name}",
@@ -108,7 +123,8 @@ def render_asm(name: str, base: int, load: int, init: int, play: int,
         "    lda #0", "    tax", "    tay",
         f"    jsr ${init:04X}",
         "    sei",
-    ] + target_video_quiet(target) + target_timer_init(target) + target_wait_loop(target, play) + [
+    ] + target_video_quiet(target) + target_timer_init(target, play_hz, phi2_hz) \
+        + target_wait_loop(target, play) + [
         "", '.segment "RODATA"', "sid_data:",
     ]
     return "\n".join(lines)
@@ -135,25 +151,65 @@ def basic_stub(entry: int) -> bytes:
     ) + sys_text + b"\x00\x00\x00"
 
 
-def make_prg(entry: int, payload: bytes, basic_run: bool) -> bytes:
+def make_prg(entry: int, payload: bytes, basic_run: bool) -> tuple[bytes, list[dict]]:
     if not basic_run:
-        return bytes([entry & 0xFF, (entry >> 8) & 0xFF]) + payload
+        prg = bytes([entry & 0xFF, (entry >> 8) & 0xFF]) + payload
+        segments = [
+            {"name": "player/payload", "address": entry, "offset": 2, "size": len(payload)}
+        ]
+        return prg, segments
 
     stub = basic_stub(entry)
     payload_offset = entry - BASIC_LOAD
     if payload_offset < len(stub):
         raise SystemExit(
             f"cannot add BASIC RUN stub: entry ${entry:04X} overlaps the BASIC line")
-    return (
+    prg = (
         bytes([BASIC_LOAD & 0xFF, BASIC_LOAD >> 8])
         + stub
         + bytes(payload_offset - len(stub))
         + payload
     )
+    segments = [
+        {"name": "BASIC RUN stub", "address": BASIC_LOAD, "offset": 2, "size": len(stub)},
+        {
+            "name": "SID player/payload",
+            "address": entry,
+            "offset": 2 + payload_offset,
+            "size": len(payload),
+        },
+    ]
+    return prg, segments
+
+
+def write_segment_map(output: Path, sid_name: str, prg: bytes, entry: int,
+                      segments: list[dict], play_hz: float | None = None,
+                      sid_info: dict | None = None) -> None:
+    load_addr = prg[0] | (prg[1] << 8)
+    basic_end = load_addr + len(prg) - 2
+    meta = {
+        "format": SEGMENT_FORMAT,
+        "source": output.name,
+        "sid": sid_name,
+        "load_address": load_addr,
+        "entry": entry,
+        "basic_end": basic_end,
+        "prg_size": len(prg),
+        "upload_size": sum(int(s["size"]) for s in segments),
+        "segments": segments,
+    }
+    if play_hz is not None:
+        meta["play_hz"] = play_hz
+    if sid_info is not None:
+        meta["sid_speed_flags"] = sid_info.get("speed_flags", 0)
+        meta["sid_cia_speed"] = bool(sid_info.get("cia_speed", False))
+    segment_path = output.with_suffix(output.suffix + ".segments.json")
+    segment_path.write_text(json.dumps(meta, indent=2) + "\n", newline="\n")
 
 
 def render_inplace_asm(name: str, entry: int, load: int, init: int,
-                       play: int, song: int, target: str) -> str:
+                       play: int, song: int, target: str, play_hz: float,
+                       phi2_hz: int) -> str:
     """Player linked at `entry`, payload sitting in place at its native `load`.
 
     No startup copy: the D64 loader drops the payload straight at `load` (which
@@ -173,7 +229,8 @@ def render_inplace_asm(name: str, entry: int, load: int, init: int,
     ] + [
         f"    lda #{song}", "    tax", "    tay", f"    jsr ${init:04X}",
         "    sei",        # re-mask: some inits CLI (no $0314 bridge in a RAM PRG)
-    ] + target_video_quiet(target) + target_timer_init(target) + target_wait_loop(target, play) + [
+    ] + target_video_quiet(target) + target_timer_init(target, play_hz, phi2_hz) \
+        + target_wait_loop(target, play) + [
         "", '.segment "PAYLOAD"', "sid_data:",
     ]
     return "\n".join(lines)
@@ -215,7 +272,8 @@ def build_inplace(a, info: dict, load: int, body: bytes, top: int,
                   entry: int) -> int:
     """Assemble + link the in-place PRG and write it out."""
     asm = render_inplace_asm(a.sid.name, entry, load, info["init"],
-                             info["play"], info["song"], a.target) + "\n" + render_data(body)
+                             info["play"], info["song"], a.target, a.play_hz,
+                             a.c64_phi2_hz) + "\n" + render_data(body)
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
         (t / "p.s").write_text(asm, newline="\n")
@@ -226,11 +284,14 @@ def build_inplace(a, info: dict, load: int, body: bytes, top: int,
                         "-o", str(t / "p.bin"), str(t / "p.o")], check=True)
         payload = (t / "p.bin").read_bytes()
 
-    prg = make_prg(entry, payload, a.basic_run)
+    prg, segments = make_prg(entry, payload, a.basic_run)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(prg)
+    write_segment_map(a.output, a.sid.name, prg, entry, segments, a.play_hz, info)
     print(f"{a.sid.name}: {a.target} in-place native ${load:04X}-${top:04X}; "
           f"player @ ${entry:04X} ({len(prg)} bytes); "
+          f"timer {a.play_hz:g} Hz; "
+          f"sparse upload {sum(s['size'] for s in segments)} bytes; "
           f"{'RUN' if a.basic_run else f'SYS {entry} (${entry:04X})'} "
           f"to play -> {a.output}")
     return 0
@@ -247,6 +308,10 @@ def main() -> int:
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65")
     ap.add_argument("--target", choices=("sbc", "c64"), default="sbc",
                     help="player timing target: sbc uses $883A, c64 uses CIA Timer A")
+    ap.add_argument("--play-hz", type=float,
+                    help="C64 CIA Timer A play rate, default 50 Hz")
+    ap.add_argument("--c64-phi2-hz", type=int, default=C64_PHI2_HZ,
+                    help=f"C64 PHI2 clock used for CIA timer math, default {C64_PHI2_HZ}")
     ap.add_argument("--basic-run", dest="basic_run", action="store_true",
                     help="prepend BASIC 10 SYS <entry> at $0801 so RUN starts the PRG")
     ap.add_argument("--no-basic-run", dest="basic_run", action="store_false",
@@ -255,6 +320,8 @@ def main() -> int:
     a = ap.parse_args()
     if a.basic_run is None:
         a.basic_run = a.target == "c64"
+    if a.play_hz is None:
+        a.play_hz = C64_DEFAULT_PLAY_HZ
 
     try:
         info = parse_payload(a.sid.read_bytes(), a.sid.name)
@@ -302,7 +369,8 @@ def main() -> int:
     a.base = base
 
     asm = render_asm(a.sid.name, a.base, load, info["init"], info["play"],
-                     info["pages"], a.target) + "\n" + render_data(body)
+                     info["pages"], a.target, a.play_hz,
+                     a.c64_phi2_hz) + "\n" + render_data(body)
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
         (t / "p.s").write_text(asm, newline="\n")
@@ -318,11 +386,14 @@ def main() -> int:
 
     # PRG = either 2-byte LE entry/load address + binary, or a $0801 BASIC
     # wrapper that SYSes to the entry and leaves the machine-code payload at it.
-    prg = make_prg(a.base, payload, a.basic_run)
+    prg, segments = make_prg(a.base, payload, a.basic_run)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(prg)
+    write_segment_map(a.output, a.sid.name, prg, a.base, segments, a.play_hz, info)
     print(f"{a.sid.name}: {a.target} native ${load:04X}-${pad_end:04X}; "
           f"player @ ${a.base:04X} ({len(prg)} bytes); "
+          f"timer {a.play_hz:g} Hz; "
+          f"sparse upload {sum(s['size'] for s in segments)} bytes; "
           f"{'RUN' if a.basic_run else f'SYS {a.base} (${a.base:04X})'} "
           f"to play -> {a.output}")
     return 0

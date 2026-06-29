@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Double_Dragon.prg",
+  "sid": "Double_Dragon.sid",
+  "load_address": 2049,
+  "entry": 9728,
+  "basic_end": 14434,
+  "prg_size": 12387,
+  "upload_size": 4718,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 12
+    },
+    {
+      "name": "SID player/payload",
+      "address": 9728,
+      "offset": 7681,
+      "size": 4706
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

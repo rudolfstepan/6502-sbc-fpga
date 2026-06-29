@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Cybernoid.prg",
+  "sid": "Cybernoid.sid",
+  "load_address": 2049,
+  "entry": 8192,
+  "basic_end": 12898,
+  "prg_size": 10851,
+  "upload_size": 4718,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 12
+    },
+    {
+      "name": "SID player/payload",
+      "address": 8192,
+      "offset": 6145,
+      "size": 4706
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

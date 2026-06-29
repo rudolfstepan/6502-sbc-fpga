@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Take_Over.prg",
+  "sid": "Take_Over.sid",
+  "load_address": 2049,
+  "entry": 8192,
+  "basic_end": 11874,
+  "prg_size": 9827,
+  "upload_size": 3694,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 12
+    },
+    {
+      "name": "SID player/payload",
+      "address": 8192,
+      "offset": 6145,
+      "size": 3682
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

@@ -1,0 +1,27 @@
+{
+  "format": "c64-uart-prg-segments-v1",
+  "source": "Footballer_of_the_Year.prg",
+  "sid": "Footballer_of_the_Year.sid",
+  "load_address": 2049,
+  "entry": 8192,
+  "basic_end": 12642,
+  "prg_size": 10595,
+  "upload_size": 4462,
+  "segments": [
+    {
+      "name": "BASIC RUN stub",
+      "address": 2049,
+      "offset": 2,
+      "size": 12
+    },
+    {
+      "name": "SID player/payload",
+      "address": 8192,
+      "offset": 6145,
+      "size": 4450
+    }
+  ],
+  "play_hz": 50.0,
+  "sid_speed_flags": 0,
+  "sid_cia_speed": false
+}

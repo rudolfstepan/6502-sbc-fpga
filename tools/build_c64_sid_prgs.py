@@ -22,6 +22,8 @@ def main() -> int:
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--ca65", default="C:/tools/cc65/bin/ca65")
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65")
+    ap.add_argument("--play-hz", type=float, help="override C64 SID PRG play rate")
+    ap.add_argument("--c64-phi2-hz", type=int, help="override C64 PHI2 clock for CIA timer math")
     ap.add_argument("--quiet", action="store_true", help="only print summary and failures")
     args = ap.parse_args()
 
@@ -36,19 +38,24 @@ def main() -> int:
 
     for sid in sids:
         out = args.out_dir / f"{sid.stem}.prg"
+        cmd = [
+            args.python,
+            str(builder),
+            str(sid),
+            str(out),
+            "--target",
+            "c64",
+            "--ca65",
+            args.ca65,
+            "--ld65",
+            args.ld65,
+        ]
+        if args.play_hz is not None:
+            cmd += ["--play-hz", str(args.play_hz)]
+        if args.c64_phi2_hz is not None:
+            cmd += ["--c64-phi2-hz", str(args.c64_phi2_hz)]
         result = subprocess.run(
-            [
-                args.python,
-                str(builder),
-                str(sid),
-                str(out),
-                "--target",
-                "c64",
-                "--ca65",
-                args.ca65,
-                "--ld65",
-                args.ld65,
-            ],
+            cmd,
             capture_output=True,
             text=True,
         )
