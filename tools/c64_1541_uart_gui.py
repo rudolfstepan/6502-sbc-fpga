@@ -137,7 +137,7 @@ def decode_c64_name(raw: bytes) -> str:
     name = raw.strip(b"\x00 \xa0").strip(b'"')
     chars: list[str] = []
     for byte in name:
-        if 0x41 <= byte <= 0x5A or 0x30 <= byte <= 0x39 or byte in b"$*?_-.!+":
+        if 0x20 <= byte < 0x7F:
             chars.append(chr(byte))
         elif 0x61 <= byte <= 0x7A:
             chars.append(chr(byte).upper())
