@@ -2,10 +2,10 @@
   "format": "c64-uart-prg-segments-v1",
   "source": "v1541_hook_dummy_diag.prg",
   "load_address": 2049,
-  "entry": 49152,
+  "entry": 50944,
   "basic_end": 2065,
-  "prg_size": 1282,
-  "upload_size": 1280,
+  "prg_size": 2175,
+  "upload_size": 2173,
   "segments": [
     {
       "name": "BASIC RUN stub",
@@ -15,9 +15,9 @@
     },
     {
       "name": "V1541 loader",
-      "address": 49152,
+      "address": 50944,
       "offset": 18,
-      "size": 1264
+      "size": 2157
     }
   ]
 }

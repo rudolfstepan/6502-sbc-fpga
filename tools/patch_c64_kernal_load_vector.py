@@ -2,13 +2,13 @@
 """Patch the C64 KERNAL LOAD entry at $FFD5 to use the virtual-1541 hook.
 
 Stock C64 KERNAL ROMs jump directly from $FFD5 into the ROM LOAD routine.
-The FPGA virtual-1541 hook lives in RAM at $C000 after upload.  A direct
-`JMP $C02C` would be unsafe before the hook is resident, and the regular
+The FPGA virtual-1541 hook lives in RAM at $C700 after upload.  A direct
+`JMP $C703` would be unsafe before the hook is resident, and the regular
 $0330 LOAD vector can be restored by KERNAL/BASIC vector initialization.  The
 patched KERNAL therefore jumps to a tiny guard stub in unused KERNAL space:
 
     $FFD5: JMP $ECB9
-    $ECB9: if $C000 == $78 then JMP $C02C else JMP $F49E
+    $ECB9: if $C700 == $4C then JMP $C703 else JMP $F49E
 
 The script patches roms/c64/KERNAL.ROM in-place by default and creates a
 KERNAL.ROM.orig backup before the first modification.
@@ -28,18 +28,19 @@ KERNAL_BASE = 0xE000
 PATCH_OFFSET = LOAD_ENTRY - KERNAL_BASE
 STUB_ADDR = 0xECB9
 STUB_OFFSET = STUB_ADDR - KERNAL_BASE
-HOOK_ENTRY = 0xC02C
-HOOK_GUARD_ADDR = 0xC000
-HOOK_GUARD_VALUE = 0x78  # SEI at the start of c64_v1541_kernal_hook.s
+HOOK_BASE = 0xC700
+HOOK_ENTRY = HOOK_BASE + 0x0003
+HOOK_GUARD_ADDR = HOOK_BASE
+HOOK_GUARD_VALUE = 0x4C  # JMP opcode at the start of c64_v1541_kernal_hook.s
 PATCH_BYTES = bytes((0x4C, STUB_ADDR & 0xFF, STUB_ADDR >> 8))  # JMP $ECB9
 LEGACY_PATCH_BYTES = bytes((0x6C, 0x30, 0x03))  # JMP ($0330)
 STOCK_BYTES = bytes((0x4C, 0x9E, 0xF4))  # JMP $F49E
 STUB_BYTES = bytes(
     (
-        0xAD, HOOK_GUARD_ADDR & 0xFF, HOOK_GUARD_ADDR >> 8,  # LDA $C000
+        0xAD, HOOK_GUARD_ADDR & 0xFF, HOOK_GUARD_ADDR >> 8,  # LDA hook base
         0xC9, HOOK_GUARD_VALUE,                              # CMP #$78
         0xD0, 0x03,                                          # BNE stock
-        0x4C, HOOK_ENTRY & 0xFF, HOOK_ENTRY >> 8,             # JMP $C02C
+        0x4C, HOOK_ENTRY & 0xFF, HOOK_ENTRY >> 8,             # JMP hook LOAD entry
         0x4C, 0x9E, 0xF4,                                    # JMP $F49E
     )
 )

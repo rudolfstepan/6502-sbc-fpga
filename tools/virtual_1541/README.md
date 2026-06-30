@@ -27,13 +27,32 @@ python tools\c64_1541_uart_gui.py
 ## Settings
 
 The GUI remembers the last folder, COM port, baud rate, mounted disk, pacing
-settings, and window geometry in:
+settings, drive-sound setting, and window geometry in:
 
 ```text
 %APPDATA%\c64_virtual_1541_uart\settings.json
 ```
 
 Command-line arguments override saved settings for that launch.
+
+`DRIVE SOUND` enables synthetic 1541-style motor/head clicks during `OPEN`,
+`READ`, and load activity. On Windows this uses the standard-library
+`winsound` module; on systems without `winsound` the switch is harmless.
+
+`SPEED` controls UART response pacing:
+
+- `SAFE`: old conservative pacing, useful if a setup drops bytes
+- `BALANCED`: moderate pacing
+- `FAST`: default; much faster while still leaving FIFO breathing room
+- `TURBO`: no artificial delay between chunks
+
+Keep the baud rate at `115200` for the current Tang C64 core unless the FPGA
+UART divisor is changed as well. The speed presets optimize host pacing, not the
+hardware baud rate.
+
+During loads, the GUI shows one progress bar with percentage and bytes
+transferred. Repetitive per-`READ` packet log lines are intentionally suppressed
+because updating the text widget for every block slows down transfers.
 
 ## KERNAL LOAD Hook Benutzen
 
@@ -105,12 +124,16 @@ werden. Erst den PRG-Loader beenden, dann die virtuelle 1541 verbinden.
 
 - Nach Reset oder Power-Cycle ist der RAM-Hook weg und muss erneut hochgeladen
   und mit `RUN` gestartet werden.
-- Programme, die den Bereich ab `$C000` ueberschreiben, koennen den Hook
+- Programme, die den Bereich ab `$C700` ueberschreiben, koennen den Hook
   zerstoeren. Danach ebenfalls neu hochladen/starten.
 - `LOAD"name",8,1` benutzt die Ladeadresse aus dem PRG.
 - `LOAD"name",8` laedt an die vom KERNAL angefragte Adresse.
 - Intern nutzt der Hook Kanal 2: `OPEN 2,<name>`, wiederholtes `READ 2,128`,
   danach `CLOSE 2`.
+- Standard-Multiloads funktionieren, solange sie weitere Teile ueber den
+  KERNAL-`LOAD`-Pfad laden. Die PC-Seite akzeptiert dabei `PRG`, `SEQ` und
+  `USR`, Drive-Prefixe wie `0:NAME`, Dateitypen wie `,P,R`/`,S,R`/`,U,R` und
+  Wildcards wie `PART*` oder `PART?`.
 - Das PC-Laufwerk ist aktuell eine 1541-kompatible Datei-/Kanal-Abstraktion.
   Fastloader und echte IEC-Timing-Tricks werden damit noch nicht emuliert.
 

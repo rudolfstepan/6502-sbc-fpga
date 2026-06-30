@@ -9,7 +9,7 @@ The stable hardware flow is:
 
 1. Build and flash a C64 bitstream whose KERNAL has the guarded `$FFD5` patch.
 2. Upload `roms/v1541_hook.prg` through the FPGA UART monitor.
-3. Type `RUN` once on the C64 to install the RAM hook at `$C000`.
+3. Type `RUN` once on the C64 to install the RAM hook at `$C700`.
 4. Start the PC virtual drive:
 
    ```powershell
@@ -33,6 +33,18 @@ channel layer. A KERNAL load on device 8 opens channel 2 with the requested
 filename, reads 128-byte blocks until a short block or EOF, and closes the
 channel again. The older offset-based `LOAD_CHUNK` shortcut remains available in
 the PC server for tests, but is no longer the production hook path.
+
+The hook also intercepts the common KERNAL channel-read path for device 8:
+`OPEN`, `CLOSE`, `CHKIN`, `CHRIN`, and `CLRCHN`. Each open logical file number
+is mirrored as a PC-side channel, and `CHRIN` reads one byte at a time through
+the UART `READ` command. This covers simple part-loaders that use KERNAL file
+channels instead of `LOAD`.
+
+Standard KERNAL-multiloads are supported as long as the program keeps using the
+KERNAL `LOAD` path and does not overwrite the hook at `$C700`. The PC-side file
+matcher accepts `PRG`, `SEQ`, and `USR` entries, `0:`/`:` drive prefixes,
+`,P`/`,S`/`,U` type suffixes, and `*`/`?` wildcards. Fastloaders that bit-bang
+the IEC bus still need a deeper implementation.
 
 ## UART/Monitor Split
 
@@ -91,10 +103,10 @@ point. `$FFD5` now jumps to a small guard stub in unused KERNAL space:
 ```asm
 $FFD5: JMP $ECB9
 
-$ECB9: LDA $C000
-       CMP #$78       ; SEI, first byte of the RAM hook
+$ECB9: LDA $C700
+       CMP #$4C       ; JMP, first byte of the RAM hook header
        BNE stock
-       JMP $C02C      ; hook LOAD entry
+       JMP $C703      ; fixed hook LOAD trampoline
 stock: JMP $F49E      ; original KERNAL LOAD routine
 ```
 
@@ -132,7 +144,7 @@ The probe records:
 - vectors `$0300-$033F`
 - screen RAM `$0400-$07FF`
 - BASIC program area `$0800-$08FF`
-- hook RAM `$C000-$C4FF`
+- hook RAM `$C700-$CFFF`
 
 The monitor `R` command snapshots the CPU debug taps at monitor entry, before
 the monitor hold state can distort RDY/status.
@@ -142,5 +154,22 @@ the monitor hold state can distort RDY/status.
 The virtual 1541 is not a cycle-accurate IEC/1541 implementation. It supports
 host-side D64 directory and PRG chain handling over a simple UART protocol. It is
 good enough for KERNAL `LOAD` users and some part-loader cases. Custom
-fastloaders, copy protection, and software that overwrites `$C000` still need
-deeper support.
+fastloaders, copy protection, and software that overwrites the hook at `$C700`
+still need deeper support. KERNAL output-channel writes and direct IEC/CIA2
+bit-banging are not covered by the current channel hook.
+
+## Ultima II Loader Notes
+
+`ULT2-1.D64` starts with `ULTIMA II`, a PRG at `$0801-$46D9` whose BASIC line is
+only `65535 SYS2061`. Static inspection shows a mixed loader:
+
+- it uses KERNAL `SETLFS`/`SETNAM`/`LOAD` and loads one overlay to `$C000`, then
+  jumps there;
+- it also contains KERNAL serial-bus calls (`LISTEN`, `SECOND`, `CIOUT`,
+  `UNLSN`) and direct CIA2/IEC accesses around `$DD00`.
+
+The resident hook therefore moved from `$C000` to `$C700` so the `$C000`
+overlay load cannot overwrite the hook while it is receiving data. The first
+KERNAL channel-read hooks were added for later `OPEN`/`CHKIN`/`CHRIN` loaders,
+but full compatibility still needs either output-channel hooks or a real
+IEC/1541 path for the direct `$DD00` loader code.

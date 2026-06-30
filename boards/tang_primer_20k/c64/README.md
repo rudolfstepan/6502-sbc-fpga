@@ -230,8 +230,8 @@ make c64-roms
 ```
 
 The patch changes `$FFD5` from `JMP $F49E` to `JMP $ECB9`. The `$ECB9` guard
-stub checks whether the RAM hook is installed at `$C000` and only then jumps to
-the hook entry at `$C02C`; otherwise it falls back to `$F49E`. This avoids the
+stub checks whether the RAM hook is installed at `$C700` and only then jumps to
+the hook load trampoline at `$C703`; otherwise it falls back to `$F49E`. This avoids the
 earlier READY hang caused by KERNAL/BASIC restoring `$0330/$0331` to `$F4A5`
 after a directory load. After rebuilding and flashing the FPGA bitstream,
 install the RAM hook on the real C64 core. Start with the diagnostic variant:
@@ -256,7 +256,7 @@ the requested PRG in 128-byte `LOADCHUNK` blocks, honours the file's embedded
 load address for `,8,1`, and returns the end address in X/Y like KERNAL `LOAD`.
 This is enough for programs that later call KERNAL `LOAD` for additional parts.
 It will not catch games that replace the KERNAL path with a custom fastloader,
-and the current hook lives at `$C000`, so software that overwrites that area can
+and the current hook lives at `$C700`, so software that overwrites that area can
 still destroy it.
 
 See `docs/C64_V1541_UART_TECHNOTE.md` for the READY hang analysis and monitor

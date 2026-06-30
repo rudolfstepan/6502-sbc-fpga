@@ -208,6 +208,7 @@ architecture rtl of c64_core is
   signal cia1_irq_n, cia2_irq_n : std_logic;
   signal cia1_pa_out, cia1_pb_out : std_logic_vector(7 downto 0);
   signal cia2_pa_out, cia2_pb_out : std_logic_vector(7 downto 0);
+  signal cia2_pa_in : std_logic_vector(7 downto 0);
   signal cia1_pa_oe, cia1_pb_oe : std_logic_vector(7 downto 0);
   signal cia2_pa_oe, cia2_pb_oe : std_logic_vector(7 downto 0);
   signal cia1_cs_n, cia2_cs_n, cia_rw : std_logic;
@@ -217,6 +218,11 @@ architecture rtl of c64_core is
   signal cia1_dbg_state, cia2_dbg_state : std_logic_vector(31 downto 0);
   signal kb_col, kb_row : std_logic_vector(7 downto 0);
   signal restore_n : std_logic;
+  signal iec_atn_n  : std_logic;
+  signal iec_clk_n  : std_logic;
+  signal iec_data_n : std_logic;
+  signal iec_drive_clk_pull_n  : std_logic := '1';
+  signal iec_drive_data_pull_n : std_logic := '1';
 
   -- ---- SID ----
   signal sid_dout : std_logic_vector(7 downto 0);
@@ -607,8 +613,34 @@ begin
       dbg_state => cia1_dbg_state
     );
 
-  -- ---- CIA-2 (VIC bank + NMI + IEC; serial bus is a stub for now) ----
+  -- ---- CIA-2 (VIC bank + NMI + IEC) ----
   cs_cia2 <= '1' when io = IO_CIA2 else '0';
+
+  -- C64 CIA2 port A:
+  --   PA0/PA1: VIC bank select (outputs, inverted by the board wiring)
+  --   PA3:     IEC ATN out
+  --   PA4/PA5: IEC CLK/DATA out, open-collector style
+  --   PA6/PA7: IEC CLK/DATA in
+  --
+  -- Earlier bring-up looped PA input straight back from PA output. That is fine
+  -- for the VIC bank bits, but it makes fastloaders read their own serial-bus
+  -- writes instead of the bus. Keep the bus pulled up for now; a drive
+  -- responder can pull CLK/DATA low through iec_drive_*_pull_n.
+  iec_atn_n  <= '0' when (cia2_pa_oe(3) = '1' and cia2_pa_out(3) = '0') else '1';
+  iec_clk_n  <= '0' when (cia2_pa_oe(4) = '1' and cia2_pa_out(4) = '0') or
+                         (iec_drive_clk_pull_n = '0') else '1';
+  iec_data_n <= '0' when (cia2_pa_oe(5) = '1' and cia2_pa_out(5) = '0') or
+                         (iec_drive_data_pull_n = '0') else '1';
+
+  cia2_pa_in(0) <= cia2_pa_out(0);
+  cia2_pa_in(1) <= cia2_pa_out(1);
+  cia2_pa_in(2) <= cia2_pa_out(2);
+  cia2_pa_in(3) <= iec_atn_n;
+  cia2_pa_in(4) <= iec_clk_n;
+  cia2_pa_in(5) <= iec_data_n;
+  cia2_pa_in(6) <= iec_clk_n;
+  cia2_pa_in(7) <= iec_data_n;
+
   cia2_i : mos6526
     port map (
       mode    => '0',
@@ -621,7 +653,7 @@ begin
       rs      => cpu_addr(3 downto 0),
       db_in   => cpu_dout,
       db_out  => cia2_dout,
-      pa_in   => cia2_pa_out,
+      pa_in   => cia2_pa_in,
       pa_out  => cia2_pa_out,
       pa_oe   => cia2_pa_oe,
       pb_in   => cia2_pb_out,

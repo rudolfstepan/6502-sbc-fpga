@@ -64,5 +64,5 @@ python tools/c64_uart_monitor_probe.py --port COM15 --verbose
 ```
 
 The probe logs CPU/debug state, zero page, stack, BASIC input buffer, screen RAM,
-vectors, and the hook area at `$C000`. See `docs/C64_V1541_UART_TECHNOTE.md` for
+vectors, and the hook area at `$C700`. See `docs/C64_V1541_UART_TECHNOTE.md` for
 the root-cause notes behind the guarded KERNAL `LOAD` patch.

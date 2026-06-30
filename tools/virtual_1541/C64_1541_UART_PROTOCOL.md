@@ -61,7 +61,9 @@ WRITE 15 I
 Implemented read-only behaviour:
 
 - `OPEN <channel> "$"` opens the directory as a BASIC PRG.
-- `OPEN <channel> "<name>,P,R"` opens a PRG from the mounted D64.
+- `OPEN <channel> "<name>,P,R"` opens a file from the mounted D64. KERNAL-load
+  matching accepts `PRG`, `SEQ`, and `USR`, including `0:`/`:` drive prefixes,
+  `,P`/`,S`/`,U` type suffixes, and `*`/`?` wildcards.
 - `OPEN <channel> "#"` opens a direct-access buffer channel.
 - `READ` advances the current channel position.
 - Channel 15 returns the current DOS status string.

@@ -12,7 +12,9 @@
 .setcpu "6502"
 
 LOAD_ADDR  = $0801
-CODE_START = $C000
+; Keep the resident hook away from $C000. Some multiload games, including
+; Ultima II, use $C000 for their own loader overlays.
+CODE_START = $C700
 
 UART_DATA   = $DE00
 UART_STATUS = $DE01
@@ -20,6 +22,11 @@ SCREEN_DIAG = $0400 + 22 * 40
 
 CHROUT = $FFD2
 IMAIN  = $0302
+IOPEN  = $031A
+ICLOSE = $031C
+ICHKIN = $031E
+ICLRCH = $0322
+IBASIN = $0324
 ILOAD  = $0330
 
 STATUS_REG = $90
@@ -30,6 +37,7 @@ VARTAB     = $2D
 ARYTAB     = $2F
 STREND     = $31
 FNLEN      = $B7
+LA         = $B8
 SA         = $B9
 FA         = $BA
 FNADR      = $BB
@@ -61,7 +69,7 @@ basic:
 basic_line_10:
         .word basic_line_20
         .word 10
-        .byte $9E, "49152", 0     ; 10 SYS 49152 ($C000)
+        .byte $9E, "50944", 0     ; 10 SYS 50944 ($C700)
 basic_line_20:
         .word basic_line_30
         .word 20
@@ -75,7 +83,7 @@ basic_end:
 .else
         .word basic_end
         .word 10
-        .byte $9E, "49152", 0     ; 10 SYS 49152 ($C000)
+        .byte $9E, "50944", 0     ; 10 SYS 50944 ($C700)
 basic_end:
         .word 0
 .endif
@@ -86,6 +94,11 @@ basic_end:
         jmp target
 :
 .endmacro
+
+hook_header:
+        jmp install
+hook_load_entry:
+        jmp vload
 
 install:
 .ifdef DUMMY_STATUS
@@ -99,10 +112,35 @@ install:
         sta old_load
         lda ILOAD+1
         sta old_load+1
-        lda #<vload
-        sta ILOAD
-        lda #>vload
-        sta ILOAD+1
+        lda IOPEN
+        sta old_open
+        lda IOPEN+1
+        sta old_open+1
+        lda ICLOSE
+        sta old_close
+        lda ICLOSE+1
+        sta old_close+1
+        lda ICHKIN
+        sta old_chkin
+        lda ICHKIN+1
+        sta old_chkin+1
+        lda ICLRCH
+        sta old_clrch
+        lda ICLRCH+1
+        sta old_clrch+1
+        lda IBASIN
+        sta old_chrin
+        lda IBASIN+1
+        sta old_chrin+1
+        jsr install_vector_targets
+        ldx #$0F
+        lda #$00
+clear_open_loop:
+        sta OPEN_DEV8,x
+        dex
+        bpl clear_open_loop
+        lda #$FF
+        sta ACTIVE_IN
 .ifdef DUMMY_STATUS
         lda #$02
         sta TEST_STATUS
@@ -122,10 +160,8 @@ install:
         cli
         rts
 .else
-        ldx #$FB
-        txs
         cli
-        jmp (IMAIN)
+        rts
 .endif
 
 vload:
@@ -149,6 +185,7 @@ vload_device8:
         sei
         cld
         jsr save_zp
+        jsr install_vector_targets
         lda #$00
         sta STATUS_REG
         sta OFF
@@ -353,6 +390,237 @@ load_failed:
         sec
         rts
 
+install_vector_targets:
+        lda #<vload
+        sta ILOAD
+        lda #>vload
+        sta ILOAD+1
+        lda #<vopen
+        sta IOPEN
+        lda #>vopen
+        sta IOPEN+1
+        lda #<vclose
+        sta ICLOSE
+        lda #>vclose
+        sta ICLOSE+1
+        lda #<vchkin
+        sta ICHKIN
+        lda #>vchkin
+        sta ICHKIN+1
+        lda #<vclrch
+        sta ICLRCH
+        lda #>vclrch
+        sta ICLRCH+1
+        lda #<vchrin
+        sta IBASIN
+        lda #>vchrin
+        sta IBASIN+1
+        rts
+
+vopen:
+        lda FA
+        cmp #$08
+        beq vopen_device8
+        jmp (old_open)
+
+vopen_device8:
+        sei
+        cld
+        jsr save_zp_plain
+        lda #$00
+        sta SUM
+        sta CHECK
+        sta BAD
+        jsr send_open_lfn_request
+        lda #CMD_OPEN
+        sta EXPECTED_CMD
+        jsr recv_status_response
+        bcs vopen_fail
+        lda LA
+        and #$0F
+        tax
+        lda #$01
+        sta OPEN_DEV8,x
+        jsr restore_zp
+.ifndef HOLD_IRQ_ON_RETURN
+        cli
+.endif
+        clc
+        rts
+vopen_fail:
+        jsr restore_zp
+.ifndef HOLD_IRQ_ON_RETURN
+        cli
+.endif
+        sec
+        rts
+
+vclose:
+        sta LFN_TMP
+        and #$0F
+        tax
+        lda OPEN_DEV8,x
+        bne vclose_device8
+        lda LFN_TMP
+        jmp (old_close)
+
+vclose_device8:
+        sei
+        cld
+        jsr save_zp_plain
+        lda LFN_TMP
+        and #$0F
+        tax
+        lda #$00
+        sta OPEN_DEV8,x
+        cpx ACTIVE_IN
+        bne :+
+        lda #$FF
+        sta ACTIVE_IN
+:
+        lda #$00
+        sta SUM
+        sta CHECK
+        sta BAD
+        jsr send_close_lfn_request
+        lda #CMD_CLOSE
+        sta EXPECTED_CMD
+        jsr recv_status_response
+        jsr restore_zp
+.ifndef HOLD_IRQ_ON_RETURN
+        cli
+.endif
+        clc
+        rts
+
+vchkin:
+        txa
+        and #$0F
+        tax
+        lda OPEN_DEV8,x
+        bne vchkin_device8
+        jmp (old_chkin)
+vchkin_device8:
+        stx ACTIVE_IN
+        lda #$00
+        sta STATUS_REG
+        clc
+        rts
+
+vclrch:
+        lda #$FF
+        sta ACTIVE_IN
+        jmp (old_clrch)
+
+vchrin:
+        lda ACTIVE_IN
+        cmp #$FF
+        bne vchrin_device8
+        jmp (old_chrin)
+
+vchrin_device8:
+        sei
+        cld
+        jsr save_zp_plain
+        lda #$00
+        sta SUM
+        sta CHECK
+        sta BAD
+        jsr send_read_active_request
+        jsr recv_response_magic
+        bcc :+
+        jmp vchrin_fail
+:
+        jsr uart_get_timeout          ; command
+        bcc :+
+        jmp vchrin_fail
+:
+        cmp #CMD_READ
+        beq :+
+        jmp vchrin_fail
+:
+        sta SUM
+        jsr uart_get_timeout          ; status
+        bcc :+
+        jmp vchrin_fail
+:
+        sta STATUS_CODE
+        clc
+        adc SUM
+        sta SUM
+        jsr uart_get_timeout          ; payload length low
+        bcs vchrin_fail
+        sta LEN
+        clc
+        adc SUM
+        sta SUM
+        jsr uart_get_timeout          ; payload length high
+        bcs vchrin_fail
+        sta LEN+1
+        clc
+        adc SUM
+        sta SUM
+        lda LEN
+        ora LEN+1
+        beq vchrin_eof_payload
+        jsr read_payload_byte
+        bcs vchrin_fail
+        sta CHR_TMP
+        jsr dec_len
+vchrin_drain:
+        lda LEN
+        ora LEN+1
+        beq vchrin_checksum
+        jsr read_payload_byte
+        bcs vchrin_fail
+        jsr dec_len
+        jmp vchrin_drain
+vchrin_eof_payload:
+        lda #$0D
+        sta CHR_TMP
+vchrin_checksum:
+        jsr uart_get_timeout
+        bcs vchrin_fail
+        sta CHECK
+        lda CHECK
+        cmp SUM
+        bne vchrin_fail
+        lda STATUS_CODE
+        beq vchrin_ok
+        cmp #STATUS_EOF
+        beq vchrin_eof
+        jmp vchrin_fail
+vchrin_ok:
+        lda #$00
+        sta STATUS_REG
+        jsr restore_zp
+.ifndef HOLD_IRQ_ON_RETURN
+        cli
+.endif
+        lda CHR_TMP
+        clc
+        rts
+vchrin_eof:
+        lda #$40
+        sta STATUS_REG
+        jsr restore_zp
+.ifndef HOLD_IRQ_ON_RETURN
+        cli
+.endif
+        lda CHR_TMP
+        clc
+        rts
+vchrin_fail:
+        lda #$40
+        sta STATUS_REG
+        jsr restore_zp
+.ifndef HOLD_IRQ_ON_RETURN
+        cli
+.endif
+        lda #$0D
+        sec
+        rts
+
 .ifdef DUMMY_DRIVE
 dummy_load:
         lda FNLEN
@@ -451,6 +719,32 @@ send_request_sum:
         lda SUM
         jmp uart_put
 
+send_open_lfn_request:
+        lda #REQ_MAGIC
+        jsr uart_put
+        lda #CMD_OPEN
+        jsr uart_put_sum
+        lda FNLEN
+        clc
+        adc #$01
+        jsr uart_put_sum
+        lda #$00
+        jsr uart_put_sum
+        lda LA
+        and #$0F
+        jsr uart_put_sum
+        ldy #$00
+send_lfn_name_loop:
+        cpy FNLEN
+        beq send_lfn_request_sum
+        lda (FNADR),y
+        jsr uart_put_sum
+        iny
+        bne send_lfn_name_loop
+send_lfn_request_sum:
+        lda SUM
+        jmp uart_put
+
 send_read_request:
         lda #REQ_MAGIC
         jsr uart_put
@@ -469,6 +763,25 @@ send_read_request:
         lda SUM
         jmp uart_put
 
+send_read_active_request:
+        lda #REQ_MAGIC
+        jsr uart_put
+        lda #CMD_READ
+        jsr uart_put_sum
+        lda #$03
+        jsr uart_put_sum
+        lda #$00
+        jsr uart_put_sum
+        lda ACTIVE_IN
+        and #$0F
+        jsr uart_put_sum
+        lda #$01
+        jsr uart_put_sum
+        lda #$00
+        jsr uart_put_sum
+        lda SUM
+        jmp uart_put
+
 send_close_request:
         lda #REQ_MAGIC
         jsr uart_put
@@ -479,6 +792,21 @@ send_close_request:
         lda #$00
         jsr uart_put_sum
         lda #FILE_CHANNEL
+        jsr uart_put_sum
+        lda SUM
+        jmp uart_put
+
+send_close_lfn_request:
+        lda #REQ_MAGIC
+        jsr uart_put
+        lda #CMD_CLOSE
+        jsr uart_put_sum
+        lda #$01
+        jsr uart_put_sum
+        lda #$00
+        jsr uart_put_sum
+        lda LFN_TMP
+        and #$0F
         jsr uart_put_sum
         lda SUM
         jmp uart_put
@@ -928,6 +1256,11 @@ queue_keys_done:
 
 .segment "RODATA"
 old_load:   .word $F4A5
+old_open:   .word $F34A
+old_close:  .word $F291
+old_chkin:  .word $F20E
+old_clrch:  .word $F333
+old_chrin:  .word $F157
 
 .segment "BSS"
 req_addr:   .res 2
@@ -948,6 +1281,10 @@ FIRST:      .res 1
 STATUS_CODE:.res 1
 EXPECTED_CMD:.res 1
 OPENED:     .res 1
+ACTIVE_IN:  .res 1
+LFN_TMP:    .res 1
+CHR_TMP:    .res 1
+OPEN_DEV8:  .res 16
 zp_save:    .res 2
 diag_pos:   .res 1
 

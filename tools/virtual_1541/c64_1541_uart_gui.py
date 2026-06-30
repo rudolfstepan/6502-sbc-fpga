@@ -22,6 +22,7 @@ also implements a small read-only 1541-like DOS/channel layer: DOS commands
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import queue
@@ -115,14 +116,30 @@ INK = "#26231d"
 UI_FONT = ("Consolas", 11)
 UI_FONT_BOLD = ("Consolas", 11, "bold")
 LOG_FONT = ("Consolas", 10)
+LOADABLE_TYPES = {"PRG", "SEQ", "USR"}
+TYPE_ALIASES = {
+    "P": "PRG",
+    "PRG": "PRG",
+    "S": "SEQ",
+    "SEQ": "SEQ",
+    "U": "USR",
+    "USR": "USR",
+}
+SPEED_PRESETS = {
+    "SAFE": (8, 0.005),
+    "BALANCED": (32, 0.002),
+    "FAST": (64, 0.001),
+    "TURBO": (128, 0.0),
+}
 
 
 DEFAULT_SETTINGS = {
     "folder": str(ROOT / "roms" / "test_d64"),
     "port": "COM12",
     "baud": 115200,
-    "tx_chunk_size": 8,
-    "tx_chunk_delay": 0.005,
+    "tx_chunk_size": 64,
+    "tx_chunk_delay": 0.001,
+    "sound_enabled": True,
     "mounted_image": "",
     "window_geometry": "1040x760",
 }
@@ -325,12 +342,15 @@ class D64Drive:
         return self.last_status
 
     def load_first_prg(self) -> bytes:
-        return self.load_entry(self.first_prg_entry())
+        return self.load_entry(self.first_load_entry())
 
     def load_prg(self, name: str) -> bytes:
+        return self.load_file(name)
+
+    def load_file(self, name: str, file_type: str = "") -> bytes:
         if name.strip().startswith("$"):
             return self.directory_prg_payload()
-        return self.load_entry(self.find_prg_entry(name))
+        return self.load_entry(self.find_load_entry(name, file_type))
 
     def dos_command(self, command: str | bytes) -> bytes:
         if isinstance(command, bytes):
@@ -397,13 +417,13 @@ class D64Drive:
             self._set_status(0, "OK")
             return self.status_payload()
 
-        file_name, mode = self._split_file_spec(spec)
+        file_name, file_type, mode = self._split_file_spec(spec)
         if "W" in mode or "A" in mode:
             self._set_status(26, "WRITE PROTECT ON")
             return self.status_payload()
 
         try:
-            data = self.load_prg(file_name)
+            data = self.load_file(file_name, file_type)
         except FileNotFoundError:
             self._set_status(62, "FILE NOT FOUND")
             raise
@@ -447,29 +467,39 @@ class D64Drive:
             data = self.directory_prg_payload()
             entry = DirEntry("$", "PRG", 0, 18, 0)
             return entry, data[offset : offset + size]
-        entry = self.find_prg_entry(name)
+        entry = self.find_load_entry(name)
         data = self.load_entry(entry)
         return entry, data[offset : offset + size]
 
     def first_prg_entry(self) -> DirEntry:
+        return self.first_load_entry({"PRG"})
+
+    def first_load_entry(self, allowed_types: set[str] | None = None) -> DirEntry:
         self._require_disk()
+        allowed = allowed_types or LOADABLE_TYPES
         for entry in self.entries:
-            if entry.type == "PRG":
+            if entry.type in allowed:
                 return entry
-        raise FileNotFoundError("no PRG file on mounted image")
+        raise FileNotFoundError("no loadable file on mounted image")
 
     def find_prg_entry(self, name: str) -> DirEntry:
+        return self.find_load_entry(name, "PRG")
+
+    def find_load_entry(self, name: str, file_type: str = "") -> DirEntry:
         self._require_disk()
-        target = name.strip().strip('"').upper()
+        target = self._normalize_file_name(name).upper()
+        requested_type = TYPE_ALIASES.get(file_type.upper(), "")
+        allowed = {requested_type} if requested_type else LOADABLE_TYPES
         if target in ("*", ""):
-            return self.first_prg_entry()
-        for entry in self.entries:
-            if entry.type == "PRG" and entry.name.upper() == target:
+            return self.first_load_entry(allowed)
+
+        candidates = [entry for entry in self.entries if entry.type in allowed]
+        for entry in candidates:
+            if entry.name.upper() == target:
                 return entry
         if "*" in target or "?" in target:
-            prefix = target.split("*", 1)[0].split("?", 1)[0]
-            for entry in self.entries:
-                if entry.type == "PRG" and entry.name.upper().startswith(prefix):
+            for entry in candidates:
+                if fnmatch.fnmatchcase(entry.name.upper(), target):
                     return entry
         raise FileNotFoundError(name)
 
@@ -492,11 +522,26 @@ class D64Drive:
             raise RuntimeError("no disk mounted")
 
     @staticmethod
-    def _split_file_spec(spec: str) -> tuple[str, str]:
+    def _split_file_spec(spec: str) -> tuple[str, str, str]:
         parts = [part.strip() for part in spec.split(",")]
-        file_name = parts[0] if parts else ""
-        mode = "".join(parts[1:]).upper()
-        return file_name, mode
+        file_name = D64Drive._normalize_file_name(parts[0] if parts else "")
+        file_type = ""
+        mode_parts: list[str] = []
+        for part in parts[1:]:
+            upper = part.upper()
+            if upper in TYPE_ALIASES:
+                file_type = TYPE_ALIASES[upper]
+            else:
+                mode_parts.append(upper)
+        mode = "".join(mode_parts)
+        return file_name, file_type, mode
+
+    @staticmethod
+    def _normalize_file_name(name: str) -> str:
+        out = name.strip().strip('"')
+        if ":" in out:
+            _drive, out = out.split(":", 1)
+        return out.strip().strip('"')
 
     @staticmethod
     def _numbers(command: str) -> list[int]:
@@ -532,14 +577,27 @@ class D64Drive:
 
 
 class Protocol:
-    def __init__(self, drive: D64Drive, log: Callable[[str], None], mounted: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        drive: D64Drive,
+        log: Callable[[str], None],
+        mounted: Callable[[], None],
+        progress: Callable[[dict[str, object]], None] | None = None,
+    ) -> None:
         self.drive = drive
         self.log = log
         self.mounted = mounted
+        self.progress = progress
+
+    def _progress(self, phase: str, channel: int, name: str, pos: int, total: int) -> None:
+        if self.progress is None:
+            return
+        self.progress({"phase": phase, "channel": channel, "name": name, "pos": pos, "total": total})
 
     def handle_binary(self, cmd: int, payload: bytes) -> tuple[int, bytes]:
         name = CMD_NAMES.get(cmd, f"${cmd:02X}")
-        self.log(f"< {name} {len(payload)} bytes")
+        if cmd != CMD_READ:
+            self.log(f"< {name} {len(payload)} bytes")
         try:
             if cmd == CMD_PING:
                 return STATUS_OK, b"V1541 UART READY"
@@ -553,8 +611,8 @@ class Protocol:
             if cmd == CMD_DIR:
                 return STATUS_OK, self.drive.directory_payload()
             if cmd == CMD_LOAD_FIRST:
-                entry = self.drive.first_prg_entry()
-                self.log(f"  loading \"{entry.name}\" T{entry.first_track}/S{entry.first_sector}")
+                entry = self.drive.first_load_entry()
+                self.log(f"  loading \"{entry.name}\" {entry.type} T{entry.first_track}/S{entry.first_sector}")
                 data = self.drive.load_entry(entry)
                 self.log(f"  loaded {len(data)} bytes")
                 return STATUS_OK, data
@@ -563,10 +621,10 @@ class Protocol:
                     return STATUS_BAD_REQUEST, b"LOADFIRSTCHUNK expects offset,length"
                 offset = payload[0] | (payload[1] << 8)
                 size = payload[2] | (payload[3] << 8)
-                entry = self.drive.first_prg_entry()
+                entry = self.drive.first_load_entry()
                 data = self.drive.load_entry(entry)
                 chunk = data[offset : offset + size]
-                self.log(f"  chunk \"{entry.name}\" +{offset} {len(chunk)}/{size}")
+                self.log(f"  chunk \"{entry.name}\" {entry.type} +{offset} {len(chunk)}/{size}")
                 return STATUS_OK, chunk
             if cmd == CMD_LOAD_CHUNK:
                 if len(payload) < 4:
@@ -584,8 +642,8 @@ class Protocol:
                     data = self.drive.load_prg(req_name)
                     self.log(f"  loaded {len(data)} bytes")
                     return STATUS_OK, data
-                entry = self.drive.find_prg_entry(req_name)
-                self.log(f"  loading \"{entry.name}\" T{entry.first_track}/S{entry.first_sector}")
+                entry = self.drive.find_load_entry(req_name)
+                self.log(f"  loading \"{entry.name}\" {entry.type} T{entry.first_track}/S{entry.first_sector}")
                 data = self.drive.load_entry(entry)
                 self.log(f"  loaded {len(data)} bytes")
                 return STATUS_OK, data
@@ -600,17 +658,32 @@ class Protocol:
             if cmd == CMD_OPEN:
                 if len(payload) < 1:
                     return STATUS_BAD_REQUEST, b"OPEN expects channel,name"
-                return STATUS_OK, self.drive.open_channel(payload[0], payload[1:])
+                channel = payload[0] & 0x0F
+                req_name = decode_c64_name(payload[1:])
+                self.log(f'  open channel {channel} "{req_name}"')
+                response = self.drive.open_channel(payload[0], payload[1:])
+                opened = self.drive.channels.get(channel)
+                if opened is not None and channel != 15:
+                    self._progress("start", channel, opened.name, 0, len(opened.data))
+                return STATUS_OK, response
             if cmd == CMD_CLOSE:
                 if len(payload) != 1:
                     return STATUS_BAD_REQUEST, b"CLOSE expects channel"
+                channel = payload[0] & 0x0F
+                closing = self.drive.channels.get(channel)
+                if closing is not None and channel != 15:
+                    self._progress("done", channel, closing.name, len(closing.data), len(closing.data))
                 return STATUS_OK, self.drive.close_channel(payload[0])
             if cmd == CMD_READ:
                 if len(payload) != 3:
                     return STATUS_BAD_REQUEST, b"READ expects channel,length"
+                channel = payload[0] & 0x0F
                 size = payload[1] | (payload[2] << 8)
                 data = self.drive.read_channel(payload[0], size)
-                if not data and payload[0] != 15:
+                opened = self.drive.channels.get(channel)
+                if opened is not None and channel != 15:
+                    self._progress("progress", channel, opened.name, opened.pos, len(opened.data))
+                if not data and channel != 15:
                     return STATUS_EOF, data
                 return STATUS_OK, data
             if cmd == CMD_WRITE:
@@ -788,9 +861,9 @@ class SerialWorker:
                     continue
                 status, response = self.protocol.handle_binary(cmd, payload)
                 frame = make_response(cmd, status, response)
-                self.log(f"> {CMD_NAMES.get(cmd, f'${cmd:02X}')} status={status} {len(response)} bytes")
+                if cmd != CMD_READ:
+                    self.log(f"> {CMD_NAMES.get(cmd, f'${cmd:02X}')} status={status} {len(response)} bytes")
                 self._write_response(frame)
-                self.log(f"  sent {len(frame)} bytes")
                 continue
 
             newline = find_newline(buf)
@@ -832,6 +905,70 @@ def find_newline(buf: bytearray) -> int:
     return min(positions) if positions else -1
 
 
+class DriveSound:
+    def __init__(self) -> None:
+        self.enabled = True
+        self.stop_event = threading.Event()
+        self.events: queue.Queue[str] = queue.Queue(maxsize=12)
+        try:
+            import winsound  # type: ignore
+        except ImportError:
+            self.winsound = None
+        else:
+            self.winsound = winsound
+        self.thread: threading.Thread | None = None
+        if self.winsound is not None:
+            self.thread = threading.Thread(target=self._run, name="v1541-drive-sound", daemon=True)
+            self.thread.start()
+
+    @property
+    def available(self) -> bool:
+        return self.winsound is not None
+
+    def play(self, kind: str) -> None:
+        if not self.enabled or self.winsound is None:
+            return
+        try:
+            self.events.put_nowait(kind)
+        except queue.Full:
+            pass
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=0.5)
+
+    def _run(self) -> None:
+        last_head = 0.0
+        while not self.stop_event.is_set():
+            try:
+                kind = self.events.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            now = time.monotonic()
+            if kind == "head" and now - last_head < 0.045:
+                continue
+            if kind == "head":
+                last_head = now
+            self._play_pattern(kind)
+
+    def _play_pattern(self, kind: str) -> None:
+        if self.winsound is None:
+            return
+        patterns = {
+            "motor": ((92, 28), (118, 22), (84, 24)),
+            "head": ((820, 7), (115, 15)),
+            "seek": ((650, 7), (105, 18), (760, 7), (120, 14)),
+        }
+        for freq, duration in patterns.get(kind, patterns["head"]):
+            if self.stop_event.is_set():
+                return
+            try:
+                self.winsound.Beep(freq, duration)
+            except RuntimeError:
+                return
+
+
 class App(tk.Tk):
     def __init__(
         self,
@@ -840,6 +977,7 @@ class App(tk.Tk):
         baud: int,
         tx_chunk_size: int,
         tx_chunk_delay: float,
+        sound_enabled: bool = True,
         mounted_image: str = "",
         window_geometry: str = "",
     ) -> None:
@@ -861,6 +999,8 @@ class App(tk.Tk):
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker: SerialWorker | None = None
         self.hook_thread: threading.Thread | None = None
+        self.drive_sound = DriveSound()
+        self.drive_sound.enabled = bool(sound_enabled)
         self.serial_mod, self.list_ports = require_pyserial()
         self.power_on = False
         self.activity_after: str | None = None
@@ -871,8 +1011,12 @@ class App(tk.Tk):
         self.folder_var = tk.StringVar(value=str(self.drive.folder))
         self.port_var = tk.StringVar(value=port)
         self.baud_var = tk.StringVar(value=str(baud))
+        self.speed_var = tk.StringVar(value=self._speed_preset_from_values(tx_chunk_size, tx_chunk_delay))
         self.status_var = tk.StringVar(value="DISCONNECTED")
         self.mount_var = tk.StringVar(value="No disk mounted")
+        self.sound_enabled_var = tk.BooleanVar(value=bool(sound_enabled))
+        self.transfer_var = tk.StringVar(value="IDLE")
+        self.transfer_progress_var = tk.DoubleVar(value=0.0)
 
         self._build()
         self._refresh_ports()
@@ -911,11 +1055,29 @@ class App(tk.Tk):
         ttk.Combobox(serial, textvariable=self.baud_var, width=10, values=("115200", "230400", "460800", "921600"), style="C64.TCombobox").grid(
             row=0, column=4, sticky="w", padx=(0, 8)
         )
+        ttk.Label(serial, text="SPEED", style="C64.TLabel").grid(row=0, column=5, sticky="w", padx=(8, 8))
+        self.speed_combo = ttk.Combobox(
+            serial,
+            textvariable=self.speed_var,
+            width=10,
+            values=tuple(SPEED_PRESETS.keys()),
+            state="readonly",
+            style="C64.TCombobox",
+        )
+        self.speed_combo.grid(row=0, column=6, sticky="w", padx=(0, 8))
+        self.speed_combo.bind("<<ComboboxSelected>>", lambda _event: self._apply_speed_preset())
         self.connect_btn = ttk.Button(serial, text="CONNECT", command=self._toggle_connection, style="C64.TButton", width=12)
-        self.connect_btn.grid(row=0, column=5, padx=(8, 0))
+        self.connect_btn.grid(row=0, column=7, padx=(8, 0))
         self.hook_btn = ttk.Button(serial, text="SEND HOOK", command=self._send_hook, style="C64.TButton", width=12)
-        self.hook_btn.grid(row=0, column=6, padx=(8, 0))
-        ttk.Label(serial, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=7, sticky="w", padx=14)
+        self.hook_btn.grid(row=0, column=8, padx=(8, 0))
+        ttk.Checkbutton(
+            serial,
+            text="DRIVE SOUND",
+            variable=self.sound_enabled_var,
+            command=self._toggle_drive_sound,
+            style="C64.TCheckbutton",
+        ).grid(row=0, column=9, padx=(12, 0))
+        ttk.Label(serial, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=10, sticky="w", padx=14)
 
         panes = ttk.PanedWindow(self, orient=tk.HORIZONTAL, style="C64.TPanedwindow")
         panes.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 12))
@@ -964,10 +1126,21 @@ class App(tk.Tk):
 
         right = ttk.Frame(panes, style="App.TFrame")
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=1)
+        right.rowconfigure(2, weight=1)
         panes.add(right, weight=2)
 
         ttk.Label(right, text="UART LOG", style="Header.TLabel").grid(row=0, column=0, sticky="w")
+        transfer = ttk.Frame(right, style="App.TFrame")
+        transfer.grid(row=1, column=0, sticky="ew", pady=(5, 2))
+        transfer.columnconfigure(0, weight=1)
+        self.transfer_bar = ttk.Progressbar(
+            transfer,
+            variable=self.transfer_progress_var,
+            maximum=100.0,
+            style="C64.Horizontal.TProgressbar",
+        )
+        self.transfer_bar.grid(row=0, column=0, sticky="ew")
+        ttk.Label(transfer, textvariable=self.transfer_var, style="Transfer.TLabel").grid(row=1, column=0, sticky="w", pady=(3, 0))
         self.log_text = tk.Text(
             right,
             height=20,
@@ -984,8 +1157,8 @@ class App(tk.Tk):
             highlightbackground=C64_BORDER,
             font=LOG_FONT,
         )
-        self.log_text.grid(row=1, column=0, sticky="nsew", pady=(5, 6))
-        ttk.Button(right, text="CLEAR LOG", command=self._clear_log, style="C64.TButton").grid(row=2, column=0, sticky="ew")
+        self.log_text.grid(row=2, column=0, sticky="nsew", pady=(5, 6))
+        ttk.Button(right, text="CLEAR LOG", command=self._clear_log, style="C64.TButton").grid(row=3, column=0, sticky="ew")
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self)
@@ -1005,6 +1178,16 @@ class App(tk.Tk):
         style.configure("Header.TLabel", background=APP_BG, foreground="#f4ecd2", font=("Consolas", 12, "bold"))
         style.configure("Status.TLabel", background=APP_BG, foreground=C64_MUTED, font=UI_FONT_BOLD)
         style.configure("Mount.TLabel", background=APP_BG, foreground="#f4ecd2", font=UI_FONT)
+        style.configure("Transfer.TLabel", background=APP_BG, foreground="#65ff6a", font=LOG_FONT)
+        style.configure(
+            "C64.Horizontal.TProgressbar",
+            troughcolor="#101010",
+            background=LED_GREEN,
+            bordercolor=C64_BORDER,
+            lightcolor=LED_GREEN,
+            darkcolor="#1d6d2a",
+            thickness=14,
+        )
 
         style.configure(
             "C64.TButton",
@@ -1022,6 +1205,21 @@ class App(tk.Tk):
             background=[("pressed", "#bcb397"), ("active", C64_BUTTON_ACTIVE), ("disabled", "#766f60")],
             foreground=[("disabled", "#464136")],
             relief=[("pressed", "sunken"), ("!pressed", "raised")],
+        )
+        style.configure(
+            "C64.TCheckbutton",
+            background=APP_BG,
+            foreground="#e8e0ca",
+            indicatorcolor=C64_FIELD,
+            indicatorbackground=C64_FIELD,
+            font=UI_FONT_BOLD,
+            padding=(6, 4),
+        )
+        style.map(
+            "C64.TCheckbutton",
+            background=[("active", APP_BG), ("disabled", APP_BG)],
+            foreground=[("active", "#ffffff"), ("disabled", "#766f60")],
+            indicatorcolor=[("selected", LED_GREEN), ("!selected", "#3b352d")],
         )
 
         style.configure(
@@ -1266,7 +1464,7 @@ class App(tk.Tk):
         self._connect_worker()
 
     def _connect_worker(self) -> bool:
-        protocol = Protocol(self.drive, self._thread_log, self._thread_mounted)
+        protocol = Protocol(self.drive, self._thread_log, self._thread_mounted, self._thread_progress)
         try:
             worker = SerialWorker(
                 self.port_var.get(),
@@ -1376,6 +1574,9 @@ class App(tk.Tk):
     def _thread_mounted(self) -> None:
         self.events.put(("mounted", None))
 
+    def _thread_progress(self, progress: dict[str, object]) -> None:
+        self.events.put(("progress", progress))
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -1384,6 +1585,8 @@ class App(tk.Tk):
                     self._log(str(payload))
                 elif kind == "mounted":
                     self._refresh_directory()
+                elif kind == "progress":
+                    self._update_transfer_progress(payload)
                 elif kind == "hook_done":
                     self._hook_upload_done(payload)
         except queue.Empty:
@@ -1415,6 +1618,46 @@ class App(tk.Tk):
             self.status_var.set("HOOK UPLOAD FAILED")
             messagebox.showerror("Hook upload failed", stderr or stdout or f"Loader returned {returncode}")
 
+    @staticmethod
+    def _format_bytes(value: int) -> str:
+        if value >= 1024 * 1024:
+            return f"{value / (1024 * 1024):.1f} MB"
+        if value >= 1024:
+            return f"{value / 1024:.1f} KB"
+        return f"{value} B"
+
+    def _update_transfer_progress(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+        phase = str(payload.get("phase", "progress"))
+        name = str(payload.get("name", ""))
+        try:
+            pos = int(payload.get("pos", 0))
+            total = int(payload.get("total", 0))
+        except (TypeError, ValueError):
+            return
+        if total <= 0:
+            percent = 0.0
+        else:
+            percent = max(0.0, min(100.0, pos * 100.0 / total))
+        self.transfer_progress_var.set(percent)
+
+        shown_name = name or "TRANSFER"
+        if len(shown_name) > 32:
+            shown_name = shown_name[:29] + "..."
+        byte_text = f"{self._format_bytes(pos)} / {self._format_bytes(total)}" if total else self._format_bytes(pos)
+        if phase == "start":
+            self.drive_sound.play("motor")
+            self.transfer_var.set(f"LOADING {shown_name}  0%  {byte_text}")
+            self._log(f"loading {name}: {self._format_bytes(total)}")
+        elif phase == "done":
+            self.transfer_progress_var.set(100.0)
+            self.transfer_var.set(f"DONE {shown_name}  100%  {byte_text}")
+            self._log(f"loaded {name}: {self._format_bytes(total)}")
+        else:
+            self.drive_sound.play("head")
+            self.transfer_var.set(f"LOADING {shown_name}  {percent:5.1f}%  {byte_text}")
+
     def _log(self, text: str) -> None:
         stamp = time.strftime("%H:%M:%S")
         self.log_text.configure(state="normal")
@@ -1423,11 +1666,43 @@ class App(tk.Tk):
         self.log_text.configure(state="disabled")
         if text.startswith("<") or text.startswith(">") or text.startswith("mounted"):
             self._pulse_activity()
+            self._play_drive_sound_for_log(text)
 
     def _clear_log(self) -> None:
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state="disabled")
+
+    def _toggle_drive_sound(self) -> None:
+        self.drive_sound.enabled = bool(self.sound_enabled_var.get())
+        self._save_settings()
+
+    @staticmethod
+    def _speed_preset_from_values(chunk_size: int, chunk_delay: float) -> str:
+        for name, (preset_size, preset_delay) in SPEED_PRESETS.items():
+            if int(chunk_size) == preset_size and abs(float(chunk_delay) - preset_delay) < 0.0005:
+                return name
+        return "CUSTOM"
+
+    def _apply_speed_preset(self) -> None:
+        preset = self.speed_var.get().upper()
+        if preset not in SPEED_PRESETS:
+            return
+        self.tx_chunk_size, self.tx_chunk_delay = SPEED_PRESETS[preset]
+        self._log(f"speed preset {preset}: {self.tx_chunk_size} bytes / {self.tx_chunk_delay * 1000:.1f} ms")
+        if self.worker is not None:
+            self._log("speed change applies on next reconnect")
+        self._save_settings()
+
+    def _play_drive_sound_for_log(self, text: str) -> None:
+        if text.startswith("mounted"):
+            self.drive_sound.play("motor")
+        elif text.startswith("< OPEN") or text.startswith("< MOUNT"):
+            self.drive_sound.play("motor")
+        elif text.startswith("< LOADFIRST") or text.startswith("< LOAD "):
+            self.drive_sound.play("seek")
+        elif text.startswith("< READ") or text.startswith("< LOADCHUNK") or text.startswith("< LOADFIRSTCHUNK"):
+            self.drive_sound.play("head")
 
     def _current_baud(self) -> int:
         try:
@@ -1443,6 +1718,7 @@ class App(tk.Tk):
             "baud": self._current_baud(),
             "tx_chunk_size": self.tx_chunk_size,
             "tx_chunk_delay": self.tx_chunk_delay,
+            "sound_enabled": bool(self.sound_enabled_var.get()),
             "mounted_image": mounted,
             "window_geometry": self.geometry(),
         }
@@ -1461,6 +1737,7 @@ class App(tk.Tk):
         if self.worker is not None:
             self.worker.stop()
             self.worker = None
+        self.drive_sound.stop()
         super().destroy()
 
 
@@ -1493,6 +1770,15 @@ def setting_float(settings: dict[str, object], key: str) -> float:
         return float(DEFAULT_SETTINGS[key])
 
 
+def setting_bool(settings: dict[str, object], key: str) -> bool:
+    value = settings.get(key, DEFAULT_SETTINGS[key])
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off")
+    return bool(value)
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     settings = load_settings()
@@ -1501,9 +1787,10 @@ def main(argv: list[str]) -> int:
     baud = args.baud if args.baud is not None else setting_int(settings, "baud")
     tx_chunk_size = args.tx_chunk_size if args.tx_chunk_size is not None else setting_int(settings, "tx_chunk_size")
     tx_chunk_delay = args.tx_chunk_delay if args.tx_chunk_delay is not None else setting_float(settings, "tx_chunk_delay")
+    sound_enabled = setting_bool(settings, "sound_enabled")
     mounted_image = "" if args.folder is not None else setting_str(settings, "mounted_image")
     window_geometry = setting_str(settings, "window_geometry")
-    app = App(folder, port, baud, tx_chunk_size, tx_chunk_delay, mounted_image, window_geometry)
+    app = App(folder, port, baud, tx_chunk_size, tx_chunk_delay, sound_enabled, mounted_image, window_geometry)
     app.mainloop()
     return 0
 

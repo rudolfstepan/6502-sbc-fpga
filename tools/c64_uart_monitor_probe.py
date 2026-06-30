@@ -37,7 +37,7 @@ DEFAULT_RANGES = [
     ("vectors", 0x0300, 0x033F),
     ("screen", 0x0400, 0x07FF),
     ("basic-program", 0x0800, 0x08FF),
-    ("hook-code", 0xC000, 0xC4FF),
+    ("hook-code", 0xC700, 0xCFFF),
     ("kernal-load", 0xF480, 0xF4BF),
     ("patched-ffd0", 0xFFD0, 0xFFFF),
 ]

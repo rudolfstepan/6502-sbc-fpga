@@ -202,24 +202,24 @@ c64-v1541-loadfirst-prg:
 
 c64-v1541-hook-prg:
 	$(CA65) --cpu 6502 -o roms/v1541_hook.o sw/c64_v1541_kernal_hook.s
-	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o roms/v1541_hook.prg roms/v1541_hook.o
-	$(PYTHON) tools/build_c64_v1541_segment_map.py roms/v1541_hook.prg
+	$(LD65) -C sw/c64_v1541_hook.cfg -o roms/v1541_hook.prg roms/v1541_hook.o
+	$(PYTHON) tools/build_c64_v1541_segment_map.py roms/v1541_hook.prg --code-address 0xC700
 	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/v1541_hook.o').unlink(missing_ok=True)"
 	@echo "Built roms/v1541_hook.prg (upload, RUN once, then use LOAD\"*\",8,1)"
 
 c64-v1541-hook-diag-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
 	$(CA65) --cpu 6502 -D DIAG_LOAD_RETURN -o $(C64_DIAG_DIR)/v1541_hook_diag.o sw/c64_v1541_kernal_hook.s
-	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o $(C64_DIAG_DIR)/v1541_hook_diag.prg $(C64_DIAG_DIR)/v1541_hook_diag.o
-	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_hook_diag.prg
+	$(LD65) -C sw/c64_v1541_hook.cfg -o $(C64_DIAG_DIR)/v1541_hook_diag.prg $(C64_DIAG_DIR)/v1541_hook_diag.o
+	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_hook_diag.prg --code-address 0xC700
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_hook_diag.o').unlink(missing_ok=True)"
 	@echo "Built $(C64_DIAG_DIR)/v1541_hook_diag.prg (prints LOAD return diagnostics)"
 
 c64-v1541-hook-dummy-diag-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
 	$(CA65) --cpu 6502 -D DUMMY_DRIVE -D DIAG_LOAD_RETURN -o $(C64_DIAG_DIR)/v1541_hook_dummy_diag.o sw/c64_v1541_kernal_hook.s
-	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg $(C64_DIAG_DIR)/v1541_hook_dummy_diag.o
-	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg
+	$(LD65) -C sw/c64_v1541_hook.cfg -o $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg $(C64_DIAG_DIR)/v1541_hook_dummy_diag.o
+	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg --code-address 0xC700
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_hook_dummy_diag.o').unlink(missing_ok=True)"
 	@echo "Built $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg (hardware dummy LOAD hook, no UART)"
 
