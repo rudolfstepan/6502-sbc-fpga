@@ -1,4 +1,4 @@
-; Native C64 Mandelbrot demo using the FPGA math coprocessor.
+; Native C64 Mandelbrot demo using software fixed-point multiply.
 ;
 ; Build:
 ;   make c64-mandelbrot-copro-prg
@@ -7,10 +7,10 @@
 ;   python tools/c64_uart_prg_loader.py roms/mandelbrot_copro_c64.prg --port COM15
 ;   RUN
 ;
-; The existing SBC Mandelbrot demo uses a custom RGB222 framebuffer and the
-; coprocessor at $88B0.  This C64 variant keeps the same 8.24 fixed-point inner
-; loop, maps the coprocessor to $DF00, and renders into a real VIC-II
-; multicolour bitmap at $2000.
+; The existing SBC Mandelbrot demo uses a custom RGB222 framebuffer. This C64
+; variant keeps the same 8.24 fixed-point view but renders into a real VIC-II
+; multicolour bitmap at $2000 and does not require the experimental $DF00
+; coprocessor window.
 
 .setcpu "6502"
 
@@ -40,13 +40,6 @@ CIA1_ICR  = $DC0D
 CIA2_PRA  = $DD00
 CIA2_DDRA = $DD02
 CIA2_ICR  = $DD0D
-
-; Math coprocessor ($DF00..$DF0F, C64 I/O2 expansion area).
-MUL       = $DF00
-MUL_A     = MUL+0
-MUL_B     = MUL+4
-MUL_RES   = MUL+8
-MUL_SHIFT = MUL+12
 
 ; 160x200 C64 multicolour bitmap.  Four 2-bit pixels are packed per byte.
 WIDTH_PIXELS = 160
@@ -85,6 +78,12 @@ GROUP:    .res 1
 PY:       .res 1
 PTRLO:    .res 1
 PTRHI:    .res 1
+MULA:     .res 4
+MULB:     .res 4
+MCAND:    .res 8
+ACC64:    .res 8
+MSIGN:    .res 1
+MCOUNT:   .res 1
 
 .segment "STARTUP"
 basic:
@@ -126,28 +125,29 @@ basic_end:
 
 .macro MUL32 opA, opB, dst
         lda opA+0
-        sta MUL_A+0
+        sta MULA+0
         lda opA+1
-        sta MUL_A+1
+        sta MULA+1
         lda opA+2
-        sta MUL_A+2
+        sta MULA+2
         lda opA+3
-        sta MUL_A+3
+        sta MULA+3
         lda opB+0
-        sta MUL_B+0
+        sta MULB+0
         lda opB+1
-        sta MUL_B+1
+        sta MULB+1
         lda opB+2
-        sta MUL_B+2
+        sta MULB+2
         lda opB+3
-        sta MUL_B+3
-        lda MUL_RES+0
+        sta MULB+3
+        jsr mul32_sw
+        lda PROD+0
         sta dst+0
-        lda MUL_RES+1
+        lda PROD+1
         sta dst+1
-        lda MUL_RES+2
+        lda PROD+2
         sta dst+2
-        lda MUL_RES+3
+        lda PROD+3
         sta dst+3
 .endmacro
 
@@ -188,9 +188,6 @@ start:
         sta VIC_D018
         lda #$2B                  ; bitmap mode, DEN off while rendering
         sta VIC_D011
-
-        lda #24
-        sta MUL_SHIFT
 
         LD32I CI, CI_START
         lda #<BITMAP
@@ -358,6 +355,149 @@ escaped:
         tax
         lda colour_table,x
         sta PIXEL
+        rts
+
+; Signed 8.24 multiply:
+;   MULA = operand A, MULB = operand B
+;   PROD = (MULA * MULB) >> 24
+; Uses unsigned shift/add on absolute values, then negates the full 64-bit
+; product before extracting bytes 3..6 when the result should be negative.
+mul32_sw:
+        lda MULA+3
+        eor MULB+3
+        and #$80
+        sta MSIGN
+
+        lda MULA+3
+        bpl :+
+        jsr neg_mula
+:
+        lda MULB+3
+        bpl :+
+        jsr neg_mulb
+:
+        lda #0
+        ldx #7
+@clr:
+        sta ACC64,x
+        sta MCAND,x
+        dex
+        bpl @clr
+
+        lda MULB+0
+        sta MCAND+0
+        lda MULB+1
+        sta MCAND+1
+        lda MULB+2
+        sta MCAND+2
+        lda MULB+3
+        sta MCAND+3
+
+        lda #32
+        sta MCOUNT
+@loop:
+        lda MULA+0
+        and #1
+        beq @skip_add
+        clc
+        ldx #0
+@add:
+        lda ACC64,x
+        adc MCAND,x
+        sta ACC64,x
+        inx
+        cpx #8
+        bne @add
+@skip_add:
+        lsr MULA+3
+        ror MULA+2
+        ror MULA+1
+        ror MULA+0
+
+        asl MCAND+0
+        rol MCAND+1
+        rol MCAND+2
+        rol MCAND+3
+        rol MCAND+4
+        rol MCAND+5
+        rol MCAND+6
+        rol MCAND+7
+
+        dec MCOUNT
+        bne @loop
+
+        lda MSIGN
+        beq @positive
+        jsr neg_acc64
+@positive:
+        lda ACC64+3
+        sta PROD+0
+        lda ACC64+4
+        sta PROD+1
+        lda ACC64+5
+        sta PROD+2
+        lda ACC64+6
+        sta PROD+3
+        rts
+
+neg_mula:
+        sec
+        lda #0
+        sbc MULA+0
+        sta MULA+0
+        lda #0
+        sbc MULA+1
+        sta MULA+1
+        lda #0
+        sbc MULA+2
+        sta MULA+2
+        lda #0
+        sbc MULA+3
+        sta MULA+3
+        rts
+
+neg_mulb:
+        sec
+        lda #0
+        sbc MULB+0
+        sta MULB+0
+        lda #0
+        sbc MULB+1
+        sta MULB+1
+        lda #0
+        sbc MULB+2
+        sta MULB+2
+        lda #0
+        sbc MULB+3
+        sta MULB+3
+        rts
+
+neg_acc64:
+        sec
+        lda #0
+        sbc ACC64+0
+        sta ACC64+0
+        lda #0
+        sbc ACC64+1
+        sta ACC64+1
+        lda #0
+        sbc ACC64+2
+        sta ACC64+2
+        lda #0
+        sbc ACC64+3
+        sta ACC64+3
+        lda #0
+        sbc ACC64+4
+        sta ACC64+4
+        lda #0
+        sbc ACC64+5
+        sta ACC64+5
+        lda #0
+        sbc ACC64+6
+        sta ACC64+6
+        lda #0
+        sbc ACC64+7
+        sta ACC64+7
         rts
 
 store_bitmap_byte:

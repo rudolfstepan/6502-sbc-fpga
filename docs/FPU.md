@@ -14,7 +14,7 @@ Files:
 
 - RTL: [`rtl/core/peripherals/math_copro.vhd`](../rtl/core/peripherals/math_copro.vhd) — the unit
 - Bus decode: [`rtl/core/bus_decode.vhd`](../rtl/core/bus_decode.vhd) (`DEV_MATH`), addresses in [`rtl/core/sbc_pkg.vhd`](../rtl/core/sbc_pkg.vhd) (`ADDR_MATH_BASE`)
-- Wiring: [`rtl/core/sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc_t65_boot_monitor_top.vhd) (`math_i`) and [`rtl/c64/c64_core.vhd`](../rtl/c64/c64_core.vhd) (`$DF00-$DF0F`)
+- Wiring: [`rtl/core/sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc_t65_boot_monitor_top.vhd) (`math_i`); the C64 `$DF00-$DF0F` mapping is disabled in the stable bitstream
 - Testbench: [`sim/tb/tb_math_copro.vhd`](../sim/tb/tb_math_copro.vhd)
 - Self-test ROM: [`sw/copro_selftest.s`](../sw/copro_selftest.s)
 - Demo ROM: [`sw/mandelbrot_copro.s`](../sw/mandelbrot_copro.s)
@@ -172,8 +172,7 @@ MUL_SHIFT = MUL+12
 macro and uses it for the three products per Mandelbrot iteration
 (`zr²`, `zi²`, `zr·zi`).
 
-There are now two Mandelbrot assembly demos using the same coprocessor access
-pattern:
+There are now two Mandelbrot assembly demos:
 
 - [`sw/mandelbrot_copro.s`](../sw/mandelbrot_copro.s) is the SBC split-ROM demo.
   Code starts at `$A000`, vectors remain at `$FFFA-$FFFF`, and it renders into
@@ -182,8 +181,8 @@ pattern:
   so every pixel receives its own colour rather than sharing a colour attribute
   with an 8x8 cell.
 - [`sw/c64_mandelbrot_copro.s`](../sw/c64_mandelbrot_copro.s) is a native C64
-  PRG. It loads at `$0801`, uses the C64 coprocessor window at `$DF00-$DF0F`,
-  and renders a 160x200 VIC-II multicolour bitmap at `$2000`.
+  PRG. It loads at `$0801`, uses a pure 6502 software 8.24 multiply in the stable
+  bitstream, and renders a 160x200 VIC-II multicolour bitmap at `$2000`.
 
 Build and upload the SBC image with:
 
@@ -198,7 +197,7 @@ For direct Windows uploads, use `roms\upload\mandelbrot_copro.bat`.
 Build and upload the C64 PRG with:
 
 ```powershell
-make c64-mandelbrot-copro-prg
+make c64-mandelbrot-prg
 python tools\c64_uart_prg_loader.py roms\mandelbrot_copro_c64.prg --port COM15
 ```
 
