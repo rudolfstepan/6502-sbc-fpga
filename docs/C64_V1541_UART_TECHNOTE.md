@@ -13,7 +13,7 @@ The stable hardware flow is:
 4. Start the PC virtual drive:
 
    ```powershell
-   python tools/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
+   python tools/virtual_1541/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
    ```
 
 5. Use normal KERNAL-style C64 commands:
@@ -27,6 +27,12 @@ The stable hardware flow is:
 
 This has been verified stable for directory loading and a normal named game PRG
 load from a mounted D64.
+
+The current RAM hook talks to the PC virtual drive through the 1541-like UART
+channel layer. A KERNAL load on device 8 opens channel 2 with the requested
+filename, reads 128-byte blocks until a short block or EOF, and closes the
+channel again. The older offset-based `LOAD_CHUNK` shortcut remains available in
+the PC server for tests, but is no longer the production hook path.
 
 ## UART/Monitor Split
 

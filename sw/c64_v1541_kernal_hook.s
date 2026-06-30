@@ -6,7 +6,7 @@
 ; Workflow:
 ;   1. Upload roms/v1541_hook.prg with tools/c64_uart_prg_loader.py.
 ;   2. RUN it once.  It installs a RAM vector hook at $0330 (KERNAL LOAD).
-;   3. Start tools/c64_1541_uart_gui.py, mount a D64, then use normal C64
+;   3. Start tools/virtual_1541/c64_1541_uart_gui.py, mount a D64, then use normal C64
 ;      KERNAL loads such as LOAD"*",8,1.
 
 .setcpu "6502"
@@ -39,8 +39,12 @@ KEYD   = $0277
 
 REQ_MAGIC  = $C6
 RESP_MAGIC = $64
-CMD_LOAD_CHUNK = $23
+CMD_OPEN   = $41
+CMD_CLOSE  = $42
+CMD_READ   = $43
 CHUNK_SIZE = $80
+FILE_CHANNEL = $02
+STATUS_EOF = $05
 TEST_STATUS = $C4F0
 
 .ifdef DUMMY_SELFTEST
@@ -149,6 +153,7 @@ vload_device8:
         sta STATUS_REG
         sta OFF
         sta OFF+1
+        sta OPENED
         sta FIRST
         inc FIRST
         lda req_addr
@@ -162,12 +167,25 @@ vload_device8:
         jmp dummy_load
 .endif
 
+        lda #$00
+        sta SUM
+        sta CHECK
+        sta BAD
+        jsr send_open_request
+        lda #CMD_OPEN
+        sta EXPECTED_CMD
+        jsr recv_status_response
+        bcc :+
+        jmp load_failed
+:
+        inc OPENED
+
 load_next_chunk:
         lda #$00
         sta SUM
         sta CHECK
         sta BAD
-        jsr send_chunk_request
+        jsr send_read_request
         jsr recv_response_magic
         bcc :+
         jmp load_failed
@@ -176,7 +194,7 @@ load_next_chunk:
         bcc :+
         jmp load_failed
 :
-        cmp #CMD_LOAD_CHUNK
+        cmp #CMD_READ
         beq :+
         jmp load_failed
 :
@@ -191,6 +209,8 @@ load_next_chunk:
         adc SUM
         sta SUM
         lda STATUS_CODE
+        beq :+
+        cmp #STATUS_EOF
         beq :+
         jmp load_failed
 :
@@ -287,6 +307,7 @@ recv_checksum:
         jmp load_next_chunk
 
 load_done:
+        jsr close_file_channel
         lda #$00
         sta STATUS_REG
 .ifdef DUMMY_STATUS
@@ -318,6 +339,7 @@ load_done:
 .endif
 
 load_failed:
+        jsr close_file_channel
         lda #$05
         sta STATUS_REG
 .ifdef DUMMY_STATUS
@@ -404,24 +426,18 @@ dummy_directory_loop:
         jmp load_done
 .endif
 
-send_chunk_request:
+send_open_request:
         lda #REQ_MAGIC
         jsr uart_put
-        lda #CMD_LOAD_CHUNK
+        lda #CMD_OPEN
         jsr uart_put_sum
         lda FNLEN
         clc
-        adc #$04
+        adc #$01
         jsr uart_put_sum
         lda #$00
         jsr uart_put_sum
-        lda OFF
-        jsr uart_put_sum
-        lda OFF+1
-        jsr uart_put_sum
-        lda #CHUNK_SIZE
-        jsr uart_put_sum
-        lda #$00
+        lda #FILE_CHANNEL
         jsr uart_put_sum
         ldy #$00
 send_name_loop:
@@ -434,6 +450,110 @@ send_name_loop:
 send_request_sum:
         lda SUM
         jmp uart_put
+
+send_read_request:
+        lda #REQ_MAGIC
+        jsr uart_put
+        lda #CMD_READ
+        jsr uart_put_sum
+        lda #$03
+        jsr uart_put_sum
+        lda #$00
+        jsr uart_put_sum
+        lda #FILE_CHANNEL
+        jsr uart_put_sum
+        lda #CHUNK_SIZE
+        jsr uart_put_sum
+        lda #$00
+        jsr uart_put_sum
+        lda SUM
+        jmp uart_put
+
+send_close_request:
+        lda #REQ_MAGIC
+        jsr uart_put
+        lda #CMD_CLOSE
+        jsr uart_put_sum
+        lda #$01
+        jsr uart_put_sum
+        lda #$00
+        jsr uart_put_sum
+        lda #FILE_CHANNEL
+        jsr uart_put_sum
+        lda SUM
+        jmp uart_put
+
+close_file_channel:
+        lda OPENED
+        bne :+
+        clc
+        rts
+:
+        lda #$00
+        sta OPENED
+        sta SUM
+        sta CHECK
+        sta BAD
+        jsr send_close_request
+        lda #CMD_CLOSE
+        sta EXPECTED_CMD
+        jsr recv_status_response
+        clc
+        rts
+
+recv_status_response:
+        lda #$00
+        sta SUM
+        sta CHECK
+        sta BAD
+        jsr recv_response_magic
+        bcs recv_status_fail
+        jsr uart_get_timeout          ; command
+        bcs recv_status_fail
+        cmp EXPECTED_CMD
+        bne recv_status_fail
+        sta SUM
+        jsr uart_get_timeout          ; status
+        bcs recv_status_fail
+        sta STATUS_CODE
+        clc
+        adc SUM
+        sta SUM
+        jsr uart_get_timeout          ; payload length low
+        bcs recv_status_fail
+        sta LEN
+        clc
+        adc SUM
+        sta SUM
+        jsr uart_get_timeout          ; payload length high
+        bcs recv_status_fail
+        sta LEN+1
+        clc
+        adc SUM
+        sta SUM
+recv_status_payload:
+        lda LEN
+        ora LEN+1
+        beq recv_status_checksum
+        jsr read_payload_byte
+        bcs recv_status_fail
+        jsr dec_len
+        jmp recv_status_payload
+recv_status_checksum:
+        jsr uart_get_timeout
+        bcs recv_status_fail
+        sta CHECK
+        lda CHECK
+        cmp SUM
+        bne recv_status_fail
+        lda STATUS_CODE
+        beq recv_status_ok
+recv_status_fail:
+        sec
+        rts
+recv_status_ok:
+        clc
+        rts
 
 recv_response_magic:
         lda #$10
@@ -826,6 +946,8 @@ RESYNC:     .res 1
 RETRIES:    .res 1
 FIRST:      .res 1
 STATUS_CODE:.res 1
+EXPECTED_CMD:.res 1
+OPENED:     .res 1
 zp_save:    .res 2
 diag_pos:   .res 1
 

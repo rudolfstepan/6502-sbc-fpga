@@ -190,7 +190,7 @@ c64-v1541-ping-prg:
 	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/v1541_ping.o sw/c64_v1541_ping.s
 	$(LD65) -C sw/c64_vic_graphics_test.cfg -o $(C64_DIAG_DIR)/v1541_ping.prg $(C64_DIAG_DIR)/v1541_ping.o
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_ping.o').unlink(missing_ok=True)"
-	@echo "Built $(C64_DIAG_DIR)/v1541_ping.prg (upload, start tools/c64_1541_uart_gui.py, then RUN)"
+	@echo "Built $(C64_DIAG_DIR)/v1541_ping.prg (upload, start tools/virtual_1541/c64_1541_uart_gui.py, then RUN)"
 
 c64-v1541-loadfirst-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
@@ -198,7 +198,7 @@ c64-v1541-loadfirst-prg:
 	$(LD65) -C sw/c64_v1541_loadfirst.cfg -o $(C64_DIAG_DIR)/v1541_loadfirst.prg $(C64_DIAG_DIR)/v1541_loadfirst.o
 	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_loadfirst.prg
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_loadfirst.o').unlink(missing_ok=True)"
-	@echo "Built $(C64_DIAG_DIR)/v1541_loadfirst.prg (upload, start tools/c64_1541_uart_gui.py, then RUN)"
+	@echo "Built $(C64_DIAG_DIR)/v1541_loadfirst.prg (upload, start tools/virtual_1541/c64_1541_uart_gui.py, then RUN)"
 
 c64-v1541-hook-prg:
 	$(CA65) --cpu 6502 -o roms/v1541_hook.o sw/c64_v1541_kernal_hook.s

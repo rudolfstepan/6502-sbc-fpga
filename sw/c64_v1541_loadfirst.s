@@ -5,7 +5,7 @@
 ;
 ; Workflow:
 ;   1. Upload roms/v1541_loadfirst.prg with tools/c64_uart_prg_loader.py.
-;   2. Start tools/c64_1541_uart_gui.py on the same COM port and mount a D64.
+;   2. Start tools/virtual_1541/c64_1541_uart_gui.py on the same COM port and mount a D64.
 ;   3. Type RUN on the C64.
 ;   4. On success the selected PRG is loaded to its own load address. Type RUN
 ;      manually if the PRG is a BASIC-style loader.

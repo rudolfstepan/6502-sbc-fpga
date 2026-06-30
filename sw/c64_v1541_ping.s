@@ -5,7 +5,7 @@
 ;
 ; Workflow:
 ;   1. Upload roms/v1541_ping.prg with tools/c64_uart_prg_loader.py.
-;   2. Start tools/c64_1541_uart_gui.py on the same COM port.
+;   2. Start tools/virtual_1541/c64_1541_uart_gui.py on the same COM port.
 ;   3. Type RUN on the C64.
 
 .setcpu "6502"

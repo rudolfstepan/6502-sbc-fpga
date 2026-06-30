@@ -192,7 +192,7 @@ oder gecrackte Onefile-D64s. Multi-load-Spiele, Fastloader und echte
 IEC/1541-Kompatibilität brauchen später den KERNAL/IEC/1541-Ladepfad.
 
 Für Nachlade-Tests mit normalen KERNAL-`LOAD`-Aufrufen gibt es zusätzlich den
-virtuellen 1541-UART-Server `tools/c64_1541_uart_gui.py`. Den RAM-Hook mit
+virtuellen 1541-UART-Server `tools/virtual_1541/c64_1541_uart_gui.py`. Den RAM-Hook mit
 `make c64-v1541-hook-prg` bauen, `roms/v1541_hook.prg` hochladen und einmal
 `RUN` ausführen. Danach beantwortet der Server `LOAD"*",8,1` und spätere
 KERNAL-basierte Nachladezugriffe über benannte `LOADCHUNK`-Blöcke. Eigene

@@ -4,8 +4,8 @@
   "load_address": 2049,
   "entry": 49152,
   "basic_end": 2065,
-  "prg_size": 1065,
-  "upload_size": 1063,
+  "prg_size": 1315,
+  "upload_size": 1313,
   "segments": [
     {
       "name": "BASIC RUN stub",
@@ -17,7 +17,7 @@
       "name": "V1541 loader",
       "address": 49152,
       "offset": 18,
-      "size": 1047
+      "size": 1297
     }
   ]
 }

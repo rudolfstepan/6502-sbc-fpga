@@ -253,7 +253,7 @@ the FPGA monitor is inactive. The C64-side registers are:
 Run the PC-side virtual drive server with a D64 folder:
 
 ```powershell
-python tools/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
+python tools/virtual_1541/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
 ```
 
 The server already supports D64 mount/list/load/sector commands plus named
@@ -271,7 +271,7 @@ make c64-v1541-ping-prg
 python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_ping.prg --port COM15
 ```
 
-Close the upload tool, start `tools/c64_1541_uart_gui.py` on the same COM port,
+Close the upload tool, start `tools/virtual_1541/c64_1541_uart_gui.py` on the same COM port,
 then type `RUN` on the C64. The PRG sends a binary `PING` over `$DE00/$DE01` and
 prints the virtual-drive reply.
 

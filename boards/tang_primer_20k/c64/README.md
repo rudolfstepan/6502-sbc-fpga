@@ -161,7 +161,7 @@ the monitor is inactive. The C64 sees this transport at:
 The PC-side companion is:
 
 ```powershell
-python tools/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
+python tools/virtual_1541/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games
 ```
 
 That tool already implements the host-heavy side of the virtual drive: D64
@@ -189,7 +189,7 @@ make c64-v1541-ping-prg
 python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_ping.prg --port COM15
 ```
 
-Then close the upload tool, start `tools/c64_1541_uart_gui.py` on the same COM
+Then close the upload tool, start `tools/virtual_1541/c64_1541_uart_gui.py` on the same COM
 port, and type `RUN` on the C64 keyboard. The PRG sends a binary `PING` frame
 through `$DE00/$DE01` and prints the server reply.
 

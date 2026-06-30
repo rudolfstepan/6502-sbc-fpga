@@ -32,7 +32,7 @@ These PRGs exercise the `$DE00/$DE01` host-disk UART and the KERNAL `LOAD` hook:
 
 | PRG | Purpose |
 | --- | --- |
-| `v1541_ping.prg` | Sends a binary `PING` request to `tools/c64_1541_uart_gui.py`. |
+| `v1541_ping.prg` | Sends a binary `PING` request to `tools/virtual_1541/c64_1541_uart_gui.py`. |
 | `v1541_loadfirst.prg` | Loads the first PRG from the mounted D64 without patching KERNAL `LOAD`. |
 | `v1541_hook_diag.prg` | Installs the RAM hook and prints KERNAL `LOAD` return diagnostics. |
 | `v1541_hook_dummy_diag.prg` | Uses an embedded dummy drive; no PC server required after upload. |
