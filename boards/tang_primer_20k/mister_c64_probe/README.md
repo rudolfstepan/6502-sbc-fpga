@@ -54,6 +54,9 @@ Build status:
   `HELLO` PRG through the 1541 DOS sector chain. The image bytes are separated
   into `c1541_static_d64_image.sv` as a `track/sector/offset -> byte` layer for
   later UART/SDRAM/D64 replacement.
+- Next static-image test: directory now contains `HELLO` and `SECOND`, allowing
+  one hardware build to verify `LOAD"*",8`, `LOAD"HELLO",8` and
+  `LOAD"SECOND",8` through the same 1541 DOS path.
 - Fits without SID/1541: about 45/46 BSRAM and 23% logic.
 - Fits with minimal 1541 responder and SID stub: 12523/20736 logic (61%),
   7560/10368 CLS (73%), 46/46 BSRAM (100%).
