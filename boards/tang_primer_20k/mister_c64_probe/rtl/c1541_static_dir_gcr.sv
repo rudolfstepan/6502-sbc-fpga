@@ -173,10 +173,10 @@ begin
     v = 8'h00;
 
     if(logical_track == 8'd17 && sec == 5'd0) begin
-        // One-sector PRG file: HELLO.
+        // First sector of a two-sector PRG file: HELLO.
         case(offset)
-            8'h00: v = 8'd0;
-            8'h01: v = 8'h21; // Last used byte in this sector.
+            8'h00: v = 8'd17;
+            8'h01: v = 8'd1;
             default: begin
                 if(offset >= 8'd2 && offset <= 8'd33) begin
                     v = hello_prg_byte(offset[5:0] - 6'd2);
@@ -184,6 +184,14 @@ begin
                     v = 8'h00;
                 end
             end
+        endcase
+    end else if(logical_track == 8'd17 && sec == 5'd1) begin
+        // Final sector. The C64 loads a little padding after the BASIC end
+        // marker, which proves the 1541 followed the sector chain.
+        case(offset)
+            8'h00: v = 8'd0;
+            8'h01: v = 8'h04;
+            default: v = 8'h00;
         endcase
     end else if(logical_track != 8'd18) begin
         case(offset)
@@ -247,7 +255,7 @@ begin
             8'h12: v = file_name_char(4'd13);
             8'h13: v = file_name_char(4'd14);
             8'h14: v = file_name_char(4'd15);
-            8'h20: v = 8'd1;  // File size in blocks, low byte.
+            8'h20: v = 8'd2;  // File size in blocks, low byte.
             8'h21: v = 8'd0;
             default: v = 8'h00;
         endcase
