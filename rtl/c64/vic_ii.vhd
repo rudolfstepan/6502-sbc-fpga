@@ -139,6 +139,7 @@ architecture rtl of vic_ii is
   signal fetch_addr_col : natural range 0 to 39 := 0;
   signal fetch_spr_idx : natural range 0 to 7 := 0;
   signal fetch_spr_byte: natural range 0 to 2 := 0;
+  signal fetch_ecm  : std_logic := '0';
   signal any_sprite_line : std_logic := '0';
 
   -- Register file.
@@ -171,6 +172,10 @@ architecture rtl of vic_ii is
   signal d01e_read_armed : std_logic := '1';
   signal d01f_read_armed : std_logic := '1';
   signal raster_cmp : unsigned(8 downto 0) := (others => '0');
+  signal line_d011 : std_logic_vector(7 downto 0) := x"1B";
+  signal line_d016 : std_logic_vector(7 downto 0) := x"08";
+  signal line_d018 : std_logic_vector(7 downto 0) := x"15";
+  signal line_chargen : std_logic := '1';
 
   -- Display geometry (combinational).
   signal hx   : natural range 0 to H_CONT - 1 := 0;
@@ -234,13 +239,17 @@ architecture rtl of vic_ii is
   signal screen_base : unsigned(15 downto 0);
   signal char_base   : unsigned(15 downto 0);
   signal bitmap_base : unsigned(15 downto 0);
+  signal fetch_screen_base : unsigned(15 downto 0) := (others => '0');
+  signal fetch_char_base   : unsigned(15 downto 0) := (others => '0');
+  signal fetch_bitmap_base : unsigned(15 downto 0) := (others => '0');
   signal fetch_offset : unsigned(15 downto 0);
   signal char_fetch_code : std_logic_vector(7 downto 0);
   signal char_fetch_offset : unsigned(15 downto 0);
   signal sprite_fetch_offset : unsigned(15 downto 0);
   signal char_rom_visible : std_logic;
   signal raster_v    : unsigned(8 downto 0);
-  signal display_en  : std_logic;
+  signal fetch_display_en : std_logic;
+  signal line_display_en  : std_logic;
   signal glyph_byte  : std_logic_vector(7 downto 0);
 
   constant SPR_X_BIAS : natural := 24;  -- C64 left text edge is around sprite X=24.
@@ -284,7 +293,8 @@ begin
   char_rom_visible <= '1' when (vic_bank = "00" or vic_bank = "10") and
                                reg_d018(3 downto 2) = "01" else '0';
   raster_v    <= to_unsigned(((vc / 2) + C64_RASTER_OFFSET) mod C64_RASTER_LINES, 9);
-  display_en  <= reg_d011(4);
+  fetch_display_en <= reg_d011(4);
+  line_display_en  <= line_d011(4);
   fetch_addr_col <= fetch_col when fetch_col < 40 else 39;
   fetch_spr_idx <= fetch_col / 3 when fetch_col < 24 else 7;
   fetch_spr_byte <= fetch_col mod 3 when fetch_col < 24 else 2;
@@ -309,6 +319,7 @@ begin
       if reset_n = '0' then
         fetching <= '0'; fetch_col <= 0; fetch_store <= 0;
         fetch_row <= 0; fetch_y <= 0; fetch_phase <= 0; fetch_bmm <= '0';
+        fetch_ecm <= '0';
         fetch_chargen <= '0';
         fetch_latch_matrix <= '0';
         fetch_valid <= '0';
@@ -333,8 +344,19 @@ begin
             fetch_y     <= sy;
             fetch_row   <= nr;
             fetch_bmm   <= reg_d011(5);
+            fetch_ecm   <= reg_d011(6);
             fetch_chargen <= char_rom_visible;
-            if (sy mod 8) = 0 then
+            line_d011 <= reg_d011;
+            line_d016 <= reg_d016;
+            line_d018 <= reg_d018;
+            line_chargen <= char_rom_visible;
+            fetch_screen_base <= screen_base;
+            fetch_char_base   <= char_base;
+            fetch_bitmap_base <= bitmap_base;
+            -- Text mode normally refreshes the screen matrix once per 8-line
+            -- character row. Bitmap/FLI-style screens can change the matrix
+            -- every raster line for colour data, so keep it live there.
+            if (sy mod 8) = 0 or reg_d011(5) = '1' then
               fetch_latch_matrix <= '1';
             else
               fetch_latch_matrix <= '0';
@@ -362,10 +384,10 @@ begin
             end loop;
             spr_activebuf <= spr_active_next;
             if fetch_needed = '1' and
-               (display_en = '1' or sprite_any = '1') then
+               (fetch_display_en = '1' or sprite_any = '1') then
               fetch_col   <= 0;
               fetch_store <= 0;
-              if display_en = '1' then
+              if fetch_display_en = '1' then
                 fetch_phase <= 0;
               else
                 fetch_phase <= 2;
@@ -449,37 +471,37 @@ begin
 
   -- Steal-bus address: screen/bitmap bytes from DRAM (bank + within-bank offset).
   char_fetch_code <= ("00" & linebuf(fetch_addr_col)(5 downto 0))
-                     when reg_d011(6) = '1' and fetch_bmm = '0'
+                     when fetch_ecm = '1' and fetch_bmm = '0'
                      else linebuf(fetch_addr_col);
-  char_fetch_offset <= char_base + resize(unsigned(char_fetch_code) & to_unsigned(fetch_y mod 8, 3), 16);
+  char_fetch_offset <= fetch_char_base + resize(unsigned(char_fetch_code) & to_unsigned(fetch_y mod 8, 3), 16);
   sprite_fetch_offset <= resize(unsigned(spr_ptrbuf(fetch_spr_idx)) & "000000", 16) +
                          to_unsigned(spr_rowbuf(fetch_spr_idx) * 3 + fetch_spr_byte, 16);
-  fetch_offset <= screen_base + to_unsigned(1016 + fetch_col, 16)
+  fetch_offset <= fetch_screen_base + to_unsigned(1016 + fetch_col, 16)
                   when fetch_phase = 2 else
                   sprite_fetch_offset
                   when fetch_phase = 3 else
-                  bitmap_base + to_unsigned((fetch_y / 8) * 320 + fetch_col * 8 + (fetch_y mod 8), 16)
+                  fetch_bitmap_base + to_unsigned((fetch_y / 8) * 320 + fetch_col * 8 + (fetch_y mod 8), 16)
                   when fetch_bmm = '1' and fetch_phase = 0 else
                   char_fetch_offset
                   when fetch_bmm = '0' and fetch_phase = 1 else
-                  screen_base + to_unsigned(fetch_row * 40 + fetch_col, 16);
+                  fetch_screen_base + to_unsigned(fetch_row * 40 + fetch_col, 16);
   vic_addr <= std_logic_vector(
                 (unsigned(vic_bank) & "00000000000000") + fetch_offset);
   -- Colour RAM is bank-independent: row*40+col within the 1K nibble RAM.
   color_addr <= std_logic_vector(to_unsigned(fetch_row * 40 + fetch_col, 10));
 
   -- ----- display geometry -----
-  xscroll <= to_integer(unsigned(reg_d016_disp(2 downto 0)));
+  xscroll <= to_integer(unsigned(line_d016(2 downto 0)));
   hx     <= hc - H_PILL when hc >= H_PILL and hc < H_CEND else 0;
-  in_text <= '1' when display_en = '1' and
+  in_text <= '1' when line_display_en = '1' and
                       hc >= H_PILL + h_text_left and
                       hc < H_PILL + h_text_right and
                       vc >= V_BORD and vc < TV_END else '0';
   v_off  <= (vc - V_BORD) when vc >= V_BORD else 0;
   src_y  <= (v_off / 2) when v_off < 400 else 0;
 
-  h_text_left  <= 0 when reg_d016_disp(3) = '1' else 16; -- CSEL: 40/38 columns, in 720p pixels.
-  h_text_right <= H_CONT when reg_d016_disp(3) = '1' else H_CONT - 16;
+  h_text_left  <= 0 when line_d016(3) = '1' else 16; -- CSEL: 40/38 columns, in 720p pixels.
+  h_text_right <= H_CONT when line_d016(3) = '1' else H_CONT - 16;
 
   process(hx, xscroll)
     variable sx_base : natural range 0 to 319;
@@ -501,7 +523,7 @@ begin
 
   scr_code <= linebuf(col) when in_text = '1' else x"00";
   glyph_code <= "00" & scr_code(5 downto 0)
-                when reg_d011(6) = '1' and reg_d011(5) = '0' else scr_code;
+                when line_d011(6) = '1' and line_d011(5) = '0' else scr_code;
   fg_index <= to_integer(unsigned(colbuf(col))) when in_text = '1' else 0;
   bg_index <= to_integer(unsigned(reg_d021));
   bg1_index <= to_integer(unsigned(reg_d022));
@@ -511,7 +533,7 @@ begin
 
   -- Glyph pattern from CHARGEN when the VIC's character-ROM window is active.
   -- reg_d018(1) selects the upper/lower 2K half inside the 4K character ROM.
-  char_addr <= reg_d018(1) & glyph_code & std_logic_vector(to_unsigned(cline, 3));
+  char_addr <= line_d018(1) & glyph_code & std_logic_vector(to_unsigned(cline, 3));
 
   in_border <= '1' when hc < H_VIS and vc < V_VIS and in_text = '0' else '0';
   in_sprite_area <= '1' when hc >= H_PILL and hc < H_CEND and
@@ -594,10 +616,10 @@ begin
       bmp_d    <= bmpbuf(col);
       glyph_d  <= glyphbuf(col);
       col_d    <= colbuf(col);
-      bmm_d    <= reg_d011(5);
-      ecm_d    <= reg_d011(6);
-      mcm_d    <= reg_d016_disp(4);
-      chargen_d <= char_rom_visible;
+      bmm_d    <= line_d011(5);
+      ecm_d    <= line_d011(6);
+      mcm_d    <= line_d016(4);
+      chargen_d <= line_chargen;
       inb_d    <= in_border;
       intext_d <= in_text;
       spr_opaque_d <= spr_opaque_c;

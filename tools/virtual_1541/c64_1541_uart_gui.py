@@ -73,6 +73,7 @@ STATUS_EOF = 5
 
 SECTOR_LOG_EVERY = 64
 SECTOR_IDLE_MS = 1200
+MAX_BINARY_REQUEST = 4096
 
 CMD_NAMES = {
     CMD_PING: "PING",
@@ -869,6 +870,10 @@ class SerialWorker:
                     return
                 cmd = buf[1]
                 length = buf[2] | (buf[3] << 8)
+                if length > MAX_BINARY_REQUEST:
+                    self.log(f"! resync: implausible binary request length {length}")
+                    del buf[0]
+                    continue
                 frame_len = 5 + length
                 if len(buf) < frame_len:
                     return
@@ -887,7 +892,13 @@ class SerialWorker:
                 self._write_response(frame, paced=(cmd != CMD_SECTOR))
                 continue
 
+            magic_at = buf.find(bytes([REQ_MAGIC]))
             newline = find_newline(buf)
+            if magic_at >= 0 and (newline < 0 or magic_at < newline):
+                if magic_at > 0:
+                    self.log(f"! resync: discarded {magic_at} stale byte(s) before binary frame")
+                    del buf[:magic_at]
+                continue
             if newline < 0:
                 if len(buf) > 512:
                     del buf[:-128]
