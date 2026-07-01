@@ -114,12 +114,78 @@ begin
 end
 endfunction
 
+function automatic [7:0] file_name_char(input [3:0] index);
+begin
+    case(index)
+        4'd0: file_name_char = "H";
+        4'd1: file_name_char = "E";
+        4'd2: file_name_char = "L";
+        4'd3: file_name_char = "L";
+        4'd4: file_name_char = "O";
+        default: file_name_char = 8'hA0;
+    endcase
+end
+endfunction
+
+function automatic [7:0] hello_prg_byte(input [5:0] index);
+begin
+    case(index)
+        6'd0:  hello_prg_byte = 8'h01; // Load address $0801
+        6'd1:  hello_prg_byte = 8'h08;
+        6'd2:  hello_prg_byte = 8'h19; // Link to line 20 at $0819
+        6'd3:  hello_prg_byte = 8'h08;
+        6'd4:  hello_prg_byte = 8'h0A; // 10
+        6'd5:  hello_prg_byte = 8'h00;
+        6'd6:  hello_prg_byte = 8'h99; // PRINT
+        6'd7:  hello_prg_byte = 8'h20;
+        6'd8:  hello_prg_byte = 8'h22;
+        6'd9:  hello_prg_byte = "H";
+        6'd10: hello_prg_byte = "E";
+        6'd11: hello_prg_byte = "L";
+        6'd12: hello_prg_byte = "L";
+        6'd13: hello_prg_byte = "O";
+        6'd14: hello_prg_byte = " ";
+        6'd15: hello_prg_byte = "F";
+        6'd16: hello_prg_byte = "R";
+        6'd17: hello_prg_byte = "O";
+        6'd18: hello_prg_byte = "M";
+        6'd19: hello_prg_byte = " ";
+        6'd20: hello_prg_byte = "1";
+        6'd21: hello_prg_byte = "5";
+        6'd22: hello_prg_byte = "4";
+        6'd23: hello_prg_byte = "1";
+        6'd24: hello_prg_byte = 8'h22;
+        6'd25: hello_prg_byte = 8'h00;
+        6'd26: hello_prg_byte = 8'h00; // Last line link
+        6'd27: hello_prg_byte = 8'h00;
+        6'd28: hello_prg_byte = 8'h14; // 20
+        6'd29: hello_prg_byte = 8'h00;
+        6'd30: hello_prg_byte = 8'h80; // END
+        6'd31: hello_prg_byte = 8'h00;
+        default: hello_prg_byte = 8'h00;
+    endcase
+end
+endfunction
+
 function automatic [7:0] sector_byte(input [4:0] sec, input [7:0] offset);
     reg [7:0] v;
 begin
     v = 8'h00;
 
-    if(logical_track != 8'd18) begin
+    if(logical_track == 8'd17 && sec == 5'd0) begin
+        // One-sector PRG file: HELLO.
+        case(offset)
+            8'h00: v = 8'd0;
+            8'h01: v = 8'h21; // Last used byte in this sector.
+            default: begin
+                if(offset >= 8'd2 && offset <= 8'd33) begin
+                    v = hello_prg_byte(offset[5:0] - 6'd2);
+                end else begin
+                    v = 8'h00;
+                end
+            end
+        endcase
+    end else if(logical_track != 8'd18) begin
         case(offset)
             8'h00: v = 8'd0;
             8'h01: v = 8'hFF;
@@ -158,10 +224,31 @@ begin
             end
         endcase
     end else if(sec == 5'd1) begin
-        // Track 18 sector 1: empty directory sector.
+        // Track 18 sector 1: directory with one closed PRG file.
         case(offset)
             8'h00: v = 8'd0;
             8'h01: v = 8'hFF;
+            8'h02: v = 8'h82; // Closed PRG
+            8'h03: v = 8'd17;
+            8'h04: v = 8'd0;
+            8'h05: v = file_name_char(4'd0);
+            8'h06: v = file_name_char(4'd1);
+            8'h07: v = file_name_char(4'd2);
+            8'h08: v = file_name_char(4'd3);
+            8'h09: v = file_name_char(4'd4);
+            8'h0A: v = file_name_char(4'd5);
+            8'h0B: v = file_name_char(4'd6);
+            8'h0C: v = file_name_char(4'd7);
+            8'h0D: v = file_name_char(4'd8);
+            8'h0E: v = file_name_char(4'd9);
+            8'h0F: v = file_name_char(4'd10);
+            8'h10: v = file_name_char(4'd11);
+            8'h11: v = file_name_char(4'd12);
+            8'h12: v = file_name_char(4'd13);
+            8'h13: v = file_name_char(4'd14);
+            8'h14: v = file_name_char(4'd15);
+            8'h20: v = 8'd1;  // File size in blocks, low byte.
+            8'h21: v = 8'd0;
             default: v = 8'h00;
         endcase
     end else begin
