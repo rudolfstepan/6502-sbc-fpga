@@ -47,8 +47,13 @@ Build status:
 - Hardware test 2026-07-01: with the minimal MiSTer 1541 IEC responder,
   `LOAD"$",8` no longer hangs at `SEARCHING`; it returns `FILE NOT FOUND`
   because no disk/track backend is connected yet.
+- Hardware test 2026-07-01: static read-only GCR track backend works for
+  `LOAD"$",8` and `LIST`; the 1541 DOS reads the synthetic empty directory
+  from track 18.
 - Fits without SID/1541: about 45/46 BSRAM and 23% logic.
 - Fits with minimal 1541 responder and SID stub: 12523/20736 logic (61%),
   7560/10368 CLS (73%), 46/46 BSRAM (100%).
+- Fits with static directory GCR backend and SID stub: 12829/20736 logic (62%),
+  7740/10368 CLS (75%), 46/46 BSRAM (100%).
 - The full MiSTer platform shell (`emu`) is not used; it depends on MiSTer HPS,
   DDRAM, OSD, SD upload and Altera PLL/scaler blocks.

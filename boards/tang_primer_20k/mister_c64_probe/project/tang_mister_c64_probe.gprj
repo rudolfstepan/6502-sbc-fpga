@@ -30,6 +30,7 @@
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_misc.sv" type="file.verilog" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv" type="file.verilog" enable="1"/>
+        <File path="../rtl/c1541_static_dir_gcr.sv" type="file.verilog" enable="1"/>
         <File path="../../../../rtl/c64/mister_c1541_iec.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/ps2_to_mister_key.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/tang20k_mister_c64_probe_top.vhd" type="file.vhdl" enable="1"/>
