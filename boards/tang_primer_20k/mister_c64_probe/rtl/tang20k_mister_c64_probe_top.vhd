@@ -71,7 +71,6 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal cass_motor, cass_write : std_logic;
 begin
   pa_en <= '1';
-  uart_tx <= '1';
 
   process(clk_pix)
   begin
@@ -218,8 +217,10 @@ begin
 
   drive_i : entity work.mister_c1541_iec
     generic map (
-      CLK_HZ       => 27000000,
-      DRIVE_CPU_HZ => 1000000
+      CLK_HZ       => 27000000,     -- must match clk_pix for correct UART baud
+      DRIVE_CPU_HZ => 1000000,
+      BAUD         => 230400,      -- match the virtual_1541 GUI default baud
+      D64_BACKEND  => 2             -- virtual-1541 sectors over UART
     )
     port map (
       clk     => clk_pix,
@@ -229,6 +230,8 @@ begin
       iec_data_n => iec_data_n,
       drive_clk_pull_n  => drive_clk_pull_n,
       drive_data_pull_n => drive_data_pull_n,
+      uart_rx => uart_rx,
+      uart_tx => uart_tx,
       led => drive_led
     );
 
@@ -276,13 +279,4 @@ begin
       dac_din => dac_din
     );
 
-  -- Keep unused physical inputs visible to synthesis.
-  unused_inputs : process(clk_pix)
-  begin
-    if rising_edge(clk_pix) then
-      if uart_rx = '0' then
-        null;
-      end if;
-    end if;
-  end process;
 end architecture;

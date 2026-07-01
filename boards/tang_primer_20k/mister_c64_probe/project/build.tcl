@@ -25,7 +25,8 @@ add_file -type vhdl {../rtl/fpga64_keyboard_simple.vhd}
 add_file -type vhdl {../rtl/fpga64_buslogic_gowin.vhd}
 add_file -type vhdl {../../../../third_party/mister_c64/rtl/video_vicII_656x.vhd}
 
-add_file -type verilog {../rtl/sid_top_stub.sv}
+add_file -type vhdl {../../../../rtl/core/audio/sid/sid6581.vhd}
+add_file -type vhdl {../rtl/sid_top_native.vhd}
 
 add_file -type vhdl {../rtl/fpga64_sid_iec_gowin.vhd}
 
@@ -34,6 +35,11 @@ add_file -type vhdl {../../../../rtl/c64/c1541_rom.vhd}
 add_file -type vhdl {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd}
 add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_misc.sv}
 add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv}
+add_file -type vhdl {../../../../rtl/core/peripherals/uart_rx_ser.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/uart_tx_ser.vhd}
+add_file -type vhdl {../rtl/c1541_d64_sector_source.vhd}
+add_file -type vhdl {../rtl/mister_c64_sdram_read_adapter.vhd}
+add_file -type vhdl {../rtl/c1541_v1541_uart_sector_source.vhd}
 add_file -type verilog {../rtl/c1541_static_d64_image.sv}
 add_file -type verilog {../rtl/c1541_static_dir_gcr.sv}
 add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}

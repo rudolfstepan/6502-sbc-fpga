@@ -5,7 +5,11 @@ use ieee.numeric_std.all;
 entity mister_c1541_iec is
   generic (
     CLK_HZ       : integer := 27000000;
-    DRIVE_CPU_HZ : integer := 1000000
+    DRIVE_CPU_HZ : integer := 1000000;
+    BAUD         : integer := 230400;
+    -- Disk image backend: 0 = built-in test image, 1 = .d64 in external SDRAM,
+    -- 2 = virtual-1541 sectors over UART (tools/virtual_1541 CMD_SECTOR).
+    D64_BACKEND  : integer := 0
   );
   port (
     clk     : in  std_logic;
@@ -17,6 +21,18 @@ entity mister_c1541_iec is
 
     drive_clk_pull_n  : out std_logic;
     drive_data_pull_n : out std_logic;
+
+    -- SDRAM read port (driven only when D64_BACKEND = 1).  Inputs default so the
+    -- top may omit them for the other backends.
+    sdram_addr  : out std_logic_vector(22 downto 0);
+    sdram_rd    : out std_logic;
+    sdram_q     : in  std_logic_vector(7 downto 0) := (others => '0');
+    sdram_valid : in  std_logic := '0';
+    sdram_ready : in  std_logic := '0';
+
+    -- virtual-1541 UART port (driven only when D64_BACKEND = 2).
+    uart_rx : in  std_logic := '1';
+    uart_tx : out std_logic;
 
     led : out std_logic
   );
@@ -101,9 +117,33 @@ architecture rtl of mister_c1541_iec is
       sync_n : out std_logic;
       byte_n : out std_logic;
       track  : in  std_logic_vector(6 downto 0);
-      we     : out std_logic
+      we     : out std_logic;
+      img_track  : out std_logic_vector(7 downto 0);
+      img_sector : out std_logic_vector(4 downto 0);
+      img_offset : out std_logic_vector(7 downto 0);
+      img_dout   : in  std_logic_vector(7 downto 0);
+      img_valid  : in  std_logic
     );
   end component;
+
+  component c1541_static_d64_image
+    port (
+      track  : in  std_logic_vector(7 downto 0);
+      sector : in  std_logic_vector(4 downto 0);
+      offset : in  std_logic_vector(7 downto 0);
+      dout   : out std_logic_vector(7 downto 0)
+    );
+  end component;
+
+  -- The VHDL image backends (c1541_d64_sector_source, c1541_v1541_uart_sector_
+  -- source) are bound by direct entity instantiation below; only the Verilog
+  -- backend (c1541_static_d64_image) needs a component declaration.
+
+  signal img_track  : std_logic_vector(7 downto 0);
+  signal img_sector : std_logic_vector(4 downto 0);
+  signal img_offset : std_logic_vector(7 downto 0);
+  signal img_dout   : std_logic_vector(7 downto 0);
+  signal img_valid  : std_logic;
 begin
   drive_reset <= not reset_n;
   drive_clk_pull_n  <= '1' when drive_reset = '1' else raw_drive_clk_pull_n;
@@ -223,6 +263,66 @@ begin
       sync_n => gcr_sync_n,
       byte_n => gcr_byte_n,
       track  => std_logic_vector(track_num),
-      we     => gcr_we
+      we     => gcr_we,
+      img_track  => img_track,
+      img_sector => img_sector,
+      img_offset => img_offset,
+      img_dout   => img_dout,
+      img_valid  => img_valid
     );
+
+  -- Disk image backend selected by D64_BACKEND.
+  gen_static : if D64_BACKEND = 0 generate
+    img_i : c1541_static_d64_image
+      port map (
+        track  => img_track,
+        sector => img_sector,
+        offset => img_offset,
+        dout   => img_dout
+      );
+    img_valid  <= '1';
+    uart_tx    <= '1';
+    sdram_addr <= (others => '0');
+    sdram_rd   <= '0';
+  end generate;
+
+  gen_sdram : if D64_BACKEND = 1 generate
+    img_i : entity work.c1541_d64_sector_source
+      port map (
+        clk         => clk,
+        reset       => drive_reset,
+        track       => img_track,
+        sector      => img_sector,
+        offset      => img_offset,
+        dout        => img_dout,
+        valid       => img_valid,
+        sdram_addr  => sdram_addr,
+        sdram_rd    => sdram_rd,
+        sdram_q     => sdram_q,
+        sdram_valid => sdram_valid,
+        sdram_ready => sdram_ready
+      );
+    uart_tx <= '1';
+  end generate;
+
+  gen_uart : if D64_BACKEND = 2 generate
+    img_i : entity work.c1541_v1541_uart_sector_source
+      generic map (
+        CLK_HZ => CLK_HZ,
+        BAUD   => BAUD
+      )
+      port map (
+        clk     => clk,
+        reset   => drive_reset,
+        track   => img_track,
+        sector  => img_sector,
+        offset  => img_offset,
+        dout    => img_dout,
+        valid   => img_valid,
+        uart_rx => uart_rx,
+        uart_tx => uart_tx
+      );
+    sdram_addr <= (others => '0');
+    sdram_rd   <= '0';
+  end generate;
 end architecture;

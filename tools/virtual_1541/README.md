@@ -43,16 +43,22 @@ Command-line arguments override saved settings for that launch.
 
 - `SAFE`: old conservative pacing, useful if a setup drops bytes
 - `BALANCED`: moderate pacing
-- `FAST`: default; much faster while still leaving FIFO breathing room
+- `FAST`: much faster while still leaving FIFO breathing room
 - `TURBO`: no artificial delay between chunks
 
-Keep the baud rate at `115200` for the current Tang C64 core unless the FPGA
-UART divisor is changed as well. The speed presets optimize host pacing, not the
-hardware baud rate.
+`TURBO` is the default for the current IEC sector backend. Raw `CMD_SECTOR`
+responses are always sent without artificial chunk delay because the UART line
+itself paces the FPGA receiver.
 
-During loads, the GUI shows one progress bar with percentage and bytes
-transferred. Repetitive per-`READ` packet log lines are intentionally suppressed
-because updating the text widget for every block slows down transfers.
+Keep the GUI baud rate matched to the FPGA bitstream. The Tang MiSTer C64 probe
+UART sector backend currently uses the faster `230400` baud setting. Use
+`115200` only with a matching FPGA bitstream.
+
+During classic channel loads, the GUI shows a percentage and bytes transferred.
+During raw IEC sector streaming, the bar switches to an activity indicator and
+shows the latest track/sector plus the measured sector rate. Repetitive
+per-packet log lines are intentionally suppressed because updating the text
+widget for every block slows down transfers.
 
 ## KERNAL LOAD Hook Benutzen
 

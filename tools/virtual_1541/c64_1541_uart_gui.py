@@ -71,6 +71,9 @@ STATUS_BAD_REQUEST = 3
 STATUS_IO_ERROR = 4
 STATUS_EOF = 5
 
+SECTOR_LOG_EVERY = 64
+SECTOR_IDLE_MS = 1200
+
 CMD_NAMES = {
     CMD_PING: "PING",
     CMD_IMAGES: "IMAGES",
@@ -136,9 +139,9 @@ SPEED_PRESETS = {
 DEFAULT_SETTINGS = {
     "folder": str(ROOT / "roms" / "test_d64"),
     "port": "COM12",
-    "baud": 115200,
-    "tx_chunk_size": 64,
-    "tx_chunk_delay": 0.001,
+    "baud": 230400,
+    "tx_chunk_size": 128,
+    "tx_chunk_delay": 0.0,
     "sound_enabled": True,
     "mounted_image": "",
     "window_geometry": "1040x760",
@@ -588,15 +591,31 @@ class Protocol:
         self.log = log
         self.mounted = mounted
         self.progress = progress
+        self.sector_count = 0
 
     def _progress(self, phase: str, channel: int, name: str, pos: int, total: int) -> None:
         if self.progress is None:
             return
         self.progress({"phase": phase, "channel": channel, "name": name, "pos": pos, "total": total})
 
+    def _sector_progress(self, track: int, sector: int) -> None:
+        self.sector_count += 1
+        if self.progress is not None:
+            self.progress({
+                "phase": "sector",
+                "channel": 8,
+                "name": f"T{track}/S{sector}",
+                "pos": self.sector_count,
+                "total": 0,
+            })
+        if self.sector_count == 1:
+            self.log("sector stream active")
+        elif self.sector_count % SECTOR_LOG_EVERY == 0:
+            self.log(f"sector stream {self.sector_count} sectors, last T{track}/S{sector}")
+
     def handle_binary(self, cmd: int, payload: bytes) -> tuple[int, bytes]:
         name = CMD_NAMES.get(cmd, f"${cmd:02X}")
-        if cmd != CMD_READ:
+        if cmd not in (CMD_READ, CMD_SECTOR):
             self.log(f"< {name} {len(payload)} bytes")
         try:
             if cmd == CMD_PING:
@@ -649,7 +668,9 @@ class Protocol:
                 return STATUS_OK, data
             if cmd == CMD_SECTOR:
                 if len(payload) != 2:
+                    self.log(f"! bad SECTOR request length {len(payload)}")
                     return STATUS_BAD_REQUEST, b"SECTOR expects track,sector"
+                self._sector_progress(payload[0], payload[1])
                 return STATUS_OK, self.drive.read_sector(payload[0], payload[1])
             if cmd == CMD_STATUS:
                 return STATUS_OK, self.drive.status_payload()
@@ -861,9 +882,9 @@ class SerialWorker:
                     continue
                 status, response = self.protocol.handle_binary(cmd, payload)
                 frame = make_response(cmd, status, response)
-                if cmd != CMD_READ:
+                if cmd not in (CMD_READ, CMD_SECTOR):
                     self.log(f"> {CMD_NAMES.get(cmd, f'${cmd:02X}')} status={status} {len(response)} bytes")
-                self._write_response(frame)
+                self._write_response(frame, paced=(cmd != CMD_SECTOR))
                 continue
 
             newline = find_newline(buf)
@@ -877,9 +898,9 @@ class SerialWorker:
             self._write_response(response)
             self.log(f"> ASCII {len(response)} bytes")
 
-    def _write_response(self, data: bytes) -> None:
+    def _write_response(self, data: bytes, paced: bool = True) -> None:
         assert self.port is not None
-        if self.tx_chunk_delay <= 0.0 or len(data) <= self.tx_chunk_size:
+        if not paced or self.tx_chunk_delay <= 0.0 or len(data) <= self.tx_chunk_size:
             self.port.write(data)
             return
         for offset in range(0, len(data), self.tx_chunk_size):
@@ -1004,6 +1025,10 @@ class App(tk.Tk):
         self.serial_mod, self.list_ports = require_pyserial()
         self.power_on = False
         self.activity_after: str | None = None
+        self.sector_idle_after: str | None = None
+        self.sector_stream_active = False
+        self.sector_stream_started = 0.0
+        self.last_sector_count = 0
         self.tx_chunk_size = tx_chunk_size
         self.tx_chunk_delay = tx_chunk_delay
         self.initial_mounted_image = mounted_image
@@ -1494,6 +1519,9 @@ class App(tk.Tk):
         self.worker = None
         self.connect_btn.configure(text="CONNECT")
         self.status_var.set("DISCONNECTED")
+        self._stop_sector_stream()
+        self.transfer_progress_var.set(0.0)
+        self.transfer_var.set("IDLE")
         self.power_on = False
         self._redraw_drive_face()
 
@@ -1646,6 +1674,18 @@ class App(tk.Tk):
         if len(shown_name) > 32:
             shown_name = shown_name[:29] + "..."
         byte_text = f"{self._format_bytes(pos)} / {self._format_bytes(total)}" if total else self._format_bytes(pos)
+        if phase == "sector":
+            self._start_sector_stream()
+            self.drive_sound.play("head")
+            elapsed = max(time.monotonic() - self.sector_stream_started, 0.001)
+            sector_rate = pos / elapsed
+            kb_rate = sector_rate * SECTOR_SIZE / 1024.0
+            self.last_sector_count = pos
+            self.transfer_var.set(f"IEC SECTOR {shown_name}  #{pos}  {sector_rate:4.1f} sec/s  {kb_rate:4.1f} KB/s")
+            self._arm_sector_idle()
+            return
+
+        self._stop_sector_stream()
         if phase == "start":
             self.drive_sound.play("motor")
             self.transfer_var.set(f"LOADING {shown_name}  0%  {byte_text}")
@@ -1657,6 +1697,38 @@ class App(tk.Tk):
         else:
             self.drive_sound.play("head")
             self.transfer_var.set(f"LOADING {shown_name}  {percent:5.1f}%  {byte_text}")
+
+    def _start_sector_stream(self) -> None:
+        if self.sector_stream_active:
+            return
+        self.sector_stream_active = True
+        self.sector_stream_started = time.monotonic()
+        self.transfer_bar.configure(mode="indeterminate")
+        self.transfer_bar.start(45)
+
+    def _stop_sector_stream(self) -> None:
+        if self.sector_idle_after is not None:
+            self.after_cancel(self.sector_idle_after)
+            self.sector_idle_after = None
+        if not self.sector_stream_active:
+            return
+        self.sector_stream_active = False
+        self.transfer_bar.stop()
+        self.transfer_bar.configure(mode="determinate")
+
+    def _arm_sector_idle(self) -> None:
+        if self.sector_idle_after is not None:
+            self.after_cancel(self.sector_idle_after)
+        self.sector_idle_after = self.after(SECTOR_IDLE_MS, self._sector_stream_idle)
+
+    def _sector_stream_idle(self) -> None:
+        self.sector_idle_after = None
+        self._stop_sector_stream()
+        self.transfer_progress_var.set(0.0)
+        if self.worker is not None:
+            self.transfer_var.set(f"IEC READY  {self.last_sector_count} sectors")
+        else:
+            self.transfer_var.set("IDLE")
 
     def _log(self, text: str) -> None:
         stamp = time.strftime("%H:%M:%S")
@@ -1734,6 +1806,7 @@ class App(tk.Tk):
         if self.activity_after is not None:
             self.after_cancel(self.activity_after)
             self.activity_after = None
+        self._stop_sector_stream()
         if self.worker is not None:
             self.worker.stop()
             self.worker = None

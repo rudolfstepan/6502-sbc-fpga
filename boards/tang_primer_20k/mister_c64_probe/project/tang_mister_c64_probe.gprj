@@ -24,12 +24,18 @@
         <File path="../rtl/fpga64_keyboard_simple.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/fpga64_buslogic_gowin.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/video_vicII_656x.vhd" type="file.vhdl" enable="1"/>
-        <File path="../rtl/sid_top_stub.sv" type="file.verilog" enable="1"/>
+        <File path="../../../../rtl/core/audio/sid/sid6581.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sid_top_native.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/fpga64_sid_iec_gowin.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/c1541_rom.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_misc.sv" type="file.verilog" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv" type="file.verilog" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/c1541_d64_sector_source.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/mister_c64_sdram_read_adapter.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/c1541_v1541_uart_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/c1541_static_d64_image.sv" type="file.verilog" enable="1"/>
         <File path="../rtl/c1541_static_dir_gcr.sv" type="file.verilog" enable="1"/>
         <File path="../../../../rtl/c64/mister_c1541_iec.vhd" type="file.vhdl" enable="1"/>

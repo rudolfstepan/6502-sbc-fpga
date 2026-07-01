@@ -36,12 +36,31 @@ for `LOAD"name",8`.
 Binary command IDs:
 
 ```text
+$30 SECTOR  payload: track byte, sector byte
 $40 DOS     payload: command bytes
 $41 OPEN    payload: channel byte, file/command name bytes
 $42 CLOSE   payload: channel byte
 $43 READ    payload: channel byte, length lo, length hi
 $44 WRITE   payload: channel byte, bytes to write
 ```
+
+The Tang MiSTer C64 probe 1541 backend uses `$30 SECTOR` directly from FPGA
+logic. A request frame for track/sector data is:
+
+```text
+C6 30 02 00 <track> <sector> <checksum>
+checksum = (30 + 02 + 00 + track + sector) & FF
+```
+
+The response is the normal binary response frame:
+
+```text
+64 30 <status> <len_lo> <len_hi> <payload...> <checksum>
+checksum = (30 + status + len_lo + len_hi + sum(payload)) & FF
+```
+
+For a successful sector read, `status` is `$00`, length is `256`, and the
+payload is exactly one D64 sector.
 
 ASCII test commands:
 

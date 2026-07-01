@@ -61,7 +61,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
-        fat32-card-image test-d64-drive test-fat32 test-d64-subsystem tunes-d64 \
+        fat32-card-image test-d64-drive test-c1541-d64-source test-c1541-d64-sdram \
+        test-c1541-v1541-uart test-fat32 test-d64-subsystem tunes-d64 \
         sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
         c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
         c64-graphics-test-prg c64-sprite-test-prg c64-d016-scroll-test-prg \
@@ -336,6 +337,32 @@ test-d64-drive: d64-test-image
 	  rtl/core/peripherals/d64_drive.vhd sim/tb/tb_d64_drive.vhd
 	$(GHDL) -e $(GHDL_FLAGS) tb_d64_drive
 	$(GHDL) -r $(GHDL_FLAGS) tb_d64_drive $(GHDL_RUN_FLAGS) --stop-time=10ms
+
+## MiSTer C64 probe: SDRAM-backed D64 sector source (prefetch/valid handshake).
+test-c1541-d64-source:
+	$(GHDL) -a $(GHDL_FLAGS) \
+	  boards/tang_primer_20k/mister_c64_probe/rtl/c1541_d64_sector_source.vhd \
+	  sim/tb/tb_c1541_d64_sector_source.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_c1541_d64_sector_source
+	$(GHDL) -r $(GHDL_FLAGS) tb_c1541_d64_sector_source $(GHDL_RUN_FLAGS) --stop-time=5ms
+
+## MiSTer C64 probe: full D64 read chain (source -> read adapter -> sdram_ctrl model).
+test-c1541-d64-sdram:
+	$(GHDL) -a $(GHDL_FLAGS) \
+	  boards/tang_primer_20k/mister_c64_probe/rtl/c1541_d64_sector_source.vhd \
+	  boards/tang_primer_20k/mister_c64_probe/rtl/mister_c64_sdram_read_adapter.vhd \
+	  sim/tb/tb_mister_c64_sdram_read_adapter.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_mister_c64_sdram_read_adapter
+	$(GHDL) -r $(GHDL_FLAGS) tb_mister_c64_sdram_read_adapter $(GHDL_RUN_FLAGS) --stop-time=20ms
+
+## MiSTer C64 probe: virtual-1541 UART sector backend (CMD_SECTOR round trip).
+test-c1541-v1541-uart:
+	$(GHDL) -a $(GHDL_FLAGS) \
+	  rtl/core/peripherals/uart_rx_ser.vhd rtl/core/peripherals/uart_tx_ser.vhd \
+	  boards/tang_primer_20k/mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd \
+	  sim/tb/tb_c1541_v1541_uart_sector_source.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_c1541_v1541_uart_sector_source
+	$(GHDL) -r $(GHDL_FLAGS) tb_c1541_v1541_uart_sector_source $(GHDL_RUN_FLAGS) --stop-time=10ms
 
 ## D64 GoDrive: focused GHDL run of the FAT32 reader (needs the FAT32 card image).
 test-fat32: fat32-card-image

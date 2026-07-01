@@ -18,7 +18,17 @@ module c1541_static_dir_gcr
     output reg        byte_n,
 
     input       [6:0] track,
-    output            we
+    output            we,
+
+    // Logical disk image bus.  The parent (mister_c1541_iec) instantiates the
+    // chosen backend - built-in test image, SDRAM D64 or virtual-1541 UART -
+    // and wires it here.  img_valid low stalls the read engine while a sector
+    // is being (re)fetched.
+    output      [7:0] img_track,
+    output      [4:0] img_sector,
+    output      [7:0] img_offset,
+    input       [7:0] img_dout,
+    input             img_valid
 );
 
 assign we = 1'b0;
@@ -51,14 +61,11 @@ wire [7:0] data_body = (byte_cnt == 0)   ? 8'h07 :
 
 wire [7:0] data = state ? data_body : data_header;
 wire [4:0] gcr_nibble = gcr_encode(nibble ? data[3:0] : data[7:4]);
-wire [7:0] image_dout;
 
-c1541_static_d64_image image_i (
-    .track(logical_track),
-    .sector(sector),
-    .offset(byte_cnt[7:0]),
-    .dout(image_dout)
-);
+// Drive the image bus; the backend returns img_dout / img_valid.
+assign img_track  = logical_track;
+assign img_sector = sector;
+assign img_offset = byte_cnt[7:0];
 
 function automatic [4:0] gcr_encode(input [3:0] value);
 begin
@@ -127,6 +134,10 @@ always @(posedge clk) begin
 
         if ((old_track != track) | (mode_r1 ^ mode) | ~mtr) begin
             bit_clk_cnt <= {freq,2'b00};
+        end else if (!img_valid) begin
+            // Freeze the read engine while the backend (re)fetches a sector.
+            // bit_clk_cnt holds and byte_n stays high, so the 1541 DOS simply
+            // sees the inter-sector gap stretch until the sector is ready.
         end else begin
             bit_clk_cnt <= bit_clk_cnt + 1'b1;
             if(byte_in && bit_clk_cnt[5:4] == 1) byte_n <= 1'b0;
@@ -224,7 +235,7 @@ always @(posedge clk) begin
                 gcr_bit_cnt <= 4'd0;
                 if (nibble) begin
                     nibble <= 1'b0;
-                    buff_do <= image_dout;
+                    buff_do <= img_dout;
                     if (!byte_cnt) data_cks <= 8'd0;
                     else data_cks <= data_cks ^ data;
 
