@@ -31,6 +31,10 @@
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv" type="file.verilog" enable="1"/>
         <File path="../../../../rtl/c64/c1541_rom.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../mister_c64_probe/rtl/c1541_d64_sector_source.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../mister_c64_probe/rtl/c1541_static_d64_image.sv" type="file.verilog" enable="1"/>
+        <File path="../../mister_c64_probe/rtl/c1541_static_dir_gcr.sv" type="file.verilog" enable="1"/>
         <File path="../../../../rtl/c64/mister_c1541_iec.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/c64_keyboard_matrix.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/vic_ii.vhd" type="file.vhdl" enable="1"/>

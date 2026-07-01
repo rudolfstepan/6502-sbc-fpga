@@ -26,6 +26,10 @@ add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_
 add_file -type vhdl {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd}
 add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv}
 add_file -type vhdl {../../../../rtl/c64/c1541_rom.vhd}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_d64_sector_source.vhd}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd}
+add_file -type verilog {../../mister_c64_probe/rtl/c1541_static_d64_image.sv}
+add_file -type verilog {../../mister_c64_probe/rtl/c1541_static_dir_gcr.sv}
 add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
 add_file -type vhdl {../../../../rtl/c64/c64_keyboard_matrix.vhd}
 add_file -type vhdl {../../../../rtl/c64/vic_ii.vhd}

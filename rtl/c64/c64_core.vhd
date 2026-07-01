@@ -31,6 +31,12 @@ entity c64_core is
     IEC_BUS_MODEL : boolean := false;
     -- Experimental full 1541 IEC responder adapted from the MiSTer C64 core.
     MISTER_1541_ENABLE : boolean := false;
+    -- 1541 disk backend: 0 = built-in test image, 2 = virtual 1541 sectors over UART.
+    MISTER_1541_BACKEND : integer := 0;
+    MISTER_1541_BAUD : integer := 230400;
+    -- Legacy KERNAL-hook transport at $DE00/$DE01. Disable when the physical
+    -- UART is owned by the IEC/1541 backend.
+    HOST_UART_ENABLE : boolean := true;
     -- Simulation-only RAM preload (ADDR VALUE hex); "" = zeroed (synthesis).
     RAM_INIT : string  := ""
   );
@@ -253,6 +259,8 @@ architecture rtl of c64_core is
   -- ---- Host disk UART ($DE00) ----
   signal cs_uart   : std_logic;
   signal uart_dout : std_logic_vector(7 downto 0);
+  signal legacy_uart_tx : std_logic;
+  signal m1541_uart_tx : std_logic := '1';
   signal urx_data  : std_logic_vector(7 downto 0);
   signal urx_valid : std_logic;
   constant RX_FIFO_DEPTH : integer := 256;
@@ -303,6 +311,7 @@ begin
   dbg_cia1 <= cia1_dbg_state;
   dbg_iec <= iec_dbg_state;
   dbg_regs <= cpu_regs;
+  uart_tx <= m1541_uart_tx when (MISTER_1541_ENABLE and MISTER_1541_BACKEND = 2) else legacy_uart_tx;
   monitor_mem_rdata <= mon_rdata_reg;
   monitor_mem_ready <= mon_ready_reg;
   -- dbg_cia1_irq <= cia1_irq_n;                    -- (DIAG heartbeat tap -- disabled)
@@ -692,6 +701,13 @@ begin
 
   gen_mister_1541 : if MISTER_1541_ENABLE generate
     m1541_i : entity work.mister_c1541_iec
+      generic map (
+        CLK_HZ       => 27000000,
+        DRIVE_CPU_HZ => 1000000,
+        BAUD         => MISTER_1541_BAUD,
+        GCR_TURBO    => 1,
+        D64_BACKEND  => MISTER_1541_BACKEND
+      )
       port map (
         clk     => clk,
         reset_n => core_reset_n,
@@ -700,6 +716,8 @@ begin
         iec_data_n => iec_data_n,
         drive_clk_pull_n  => iec_m1541_clk_pull_n,
         drive_data_pull_n => iec_m1541_data_pull_n,
+        uart_rx => uart_rx,
+        uart_tx => m1541_uart_tx,
         led => m1541_led
       );
   end generate;
@@ -763,17 +781,26 @@ begin
   --   $DE01 STATUS : bit0 = RX byte available, bit1 = TX busy, bit2 = RX overflow
   -- 115200 8N1 on the CH340 USB-UART; the held-cs C64 bus is handled by pulsing
   -- TX/pop once per CPU access (phi2_en) -- no 27x repeat.
-  cs_uart <= '1' when io = IO_EXP1 else '0';
+  cs_uart <= '1' when (HOST_UART_ENABLE and io = IO_EXP1) else '0';
 
-  utx_i : entity work.uart_tx_ser
-    generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
-    port map (clk => clk, reset_n => core_reset_n,
-              data => cpu_dout, valid => utx_send, tx => uart_tx, busy => utx_busy);
+  gen_host_uart : if HOST_UART_ENABLE generate
+    utx_i : entity work.uart_tx_ser
+      generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+      port map (clk => clk, reset_n => core_reset_n,
+                data => cpu_dout, valid => utx_send, tx => legacy_uart_tx, busy => utx_busy);
 
-  urx_i : entity work.uart_rx_ser
-    generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
-    port map (clk => clk, reset_n => core_reset_n,
-              rx => uart_rx, data => urx_data, valid => urx_valid);
+    urx_i : entity work.uart_rx_ser
+      generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+      port map (clk => clk, reset_n => core_reset_n,
+                rx => uart_rx, data => urx_data, valid => urx_valid);
+  end generate;
+
+  gen_no_host_uart : if not HOST_UART_ENABLE generate
+    legacy_uart_tx <= '1';
+    urx_data  <= (others => '0');
+    urx_valid <= '0';
+    utx_busy  <= '0';
+  end generate;
 
   -- One TX start pulse per CPU write to $DE00.
   utx_send <= '1' when (cs_uart = '1' and cpu_we = '1' and cpu_addr(0) = '0'

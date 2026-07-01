@@ -200,7 +200,10 @@ begin
   c64_i : entity work.c64_core
     generic map (
       IEC_BUS_MODEL => true,
-      MISTER_1541_ENABLE => true
+      MISTER_1541_ENABLE => true,
+      MISTER_1541_BACKEND => 2,
+      MISTER_1541_BAUD => 230400,
+      HOST_UART_ENABLE => false
     )
     port map (
       clk      => clk_pix,
