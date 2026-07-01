@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Project>
+    <Template>FPGA</Template>
+    <Version>1.9.11.03</Version>
+    <Device name="GW2A-18C" pn="GW2A-LV18PG256C8/I7">gw2a18c-011</Device>
+    <FileList>
+        <File path="../../../../rtl/core/sbc_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/hdmi/tmds_encoder.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/hdmi/hdmi_encoder.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../rtl/tang20k_hdmi_tx.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/t65/T65_Pack.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/t65/T65_ALU.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/t65/T65_MCode.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/t65/T65.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/c64_roms.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/dprom.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/spram.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/cpu_6510_gowin.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/mos6526.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/video_sync.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/fpga64_rgbcolor.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/fpga64_keyboard_simple.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/fpga64_buslogic_gowin.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/video_vicII_656x.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sid_top_stub.sv" type="file.verilog" enable="1"/>
+        <File path="../rtl/fpga64_sid_iec_gowin.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/ps2_to_mister_key.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/tang20k_mister_c64_probe_top.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../c64/constraints/tang20k_c64.cst" type="file.cst" enable="1"/>
+        <File path="../constraints/tang20k_mister_c64_probe.sdc" type="file.sdc" enable="1"/>
+    </FileList>
+    <Configuration>
+        <Option name="top_module" value="tang20k_mister_c64_probe_top"/>
+        <Option name="use_sspi_as_gpio" value="1"/>
+        <Option name="use_mspi_as_gpio" value="1"/>
+        <Option name="output_base_name" value="tang_mister_c64_probe"/>
+        <Option name="vhdl_std" value="vhd2019"/>
+        <Option name="verilog_std" value="sysv2017"/>
+        <Option name="timing_driven" value="1"/>
+        <Option name="route_maxfan" value="23"/>
+    </Configuration>
+</Project>

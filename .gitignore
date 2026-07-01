@@ -83,6 +83,13 @@ boards/tang_primer_20k/c64/project/tmp/
 boards/tang_primer_20k/c64/project/*.gprj.user
 rtl/c64/c64_roms.vhd
 
+# MiSTer C64 probe build products. The generated bitstream embeds C64 ROM data,
+# so keep only reproducible source/project files in git.
+boards/tang_primer_20k/mister_c64_probe/project/impl/
+boards/tang_primer_20k/mister_c64_probe/project/tmp/
+boards/tang_primer_20k/mister_c64_probe/project/rtl/roms/
+boards/tang_primer_20k/mister_c64_probe/project/*.gprj.user
+
 roms/c64/*
 !roms/c64/README.md
 
