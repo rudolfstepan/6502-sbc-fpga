@@ -158,6 +158,34 @@ fastloaders, copy protection, and software that overwrites the hook at `$C700`
 still need deeper support. KERNAL output-channel writes and direct IEC/CIA2
 bit-banging are not covered by the current channel hook.
 
+## IEC/CIA2 Bring-up Notes
+
+The first IEC hardware step adds an optional separated CIA2 port-A input path.
+The stable bitstream keeps `IEC_BUS_MODEL=false`, so CIA2 still reads the old
+port-A output loopback.  This avoids reintroducing the READY/loader freezes
+while the drive side is still passive.  With `IEC_BUS_MODEL=true`, the C64 sees
+the combined IEC bus on PA6/PA7 instead of reading its own PA4/PA5 writes back
+as drive responses.  The line model is open-collector style:
+
+- PA3 is C64 ATN out.
+- PA4/PA5 are C64 CLK/DATA pulls.
+- PA6/PA7 read the combined CLK/DATA bus.
+- `rtl/c64/c64_iec_drive.vhd` is the drive-side attachment point and will pull
+  CLK/DATA low once the listener/responder FSM is implemented.
+
+As of this note the IEC drive module is intentionally passive and releases both
+lines.  The normal build therefore leaves the real bus input path disabled until
+an active listener/responder FSM exists.  Ultima II reaches the harder path
+after the normal PRG load: it sends `M-W`/drive-code setup over the serial bus
+and then waits in a direct `$DD00` loop around `$0955`.
+
+The UART monitor `R` register dump includes `IEC=AACCDDLS`. `AA`, `CC`, and
+`DD` are wraparound edge counters for ATN, CLK, and DATA. `L` contains the
+synchronized ATN/CLK/DATA line snapshot in bits 7..5, and `S` is the current
+drive-state nibble. This is only a bring-up aid; the virtual drive still needs
+an active IEC listener before KERNAL serial-bus calls can complete without the
+RAM hook.
+
 ## Ultima II Loader Notes
 
 `ULT2-1.D64` starts with `ULTIMA II`, a PRG at `$0801-$46D9` whose BASIC line is

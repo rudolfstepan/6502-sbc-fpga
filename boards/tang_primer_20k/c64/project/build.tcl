@@ -21,6 +21,12 @@ add_file -type vhdl {../../../../rtl/c64/colour_ram.vhd}
 add_file -type vhdl {../../../../rtl/c64/cpu6510.vhd}
 add_file -type vhdl {../../../../rtl/c64/cia6526_full.vhd}
 add_file -type verilog {../../../../rtl/c64/mos6526_mist.v}
+add_file -type vhdl {../../../../rtl/c64/c64_iec_drive.vhd}
+add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_misc.sv}
+add_file -type vhdl {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd}
+add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv}
+add_file -type vhdl {../../../../rtl/c64/c1541_rom.vhd}
+add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
 add_file -type vhdl {../../../../rtl/c64/c64_keyboard_matrix.vhd}
 add_file -type vhdl {../../../../rtl/c64/vic_ii.vhd}
 add_file -type vhdl {../../../../rtl/core/audio/sid/sid6581.vhd}
@@ -53,7 +59,8 @@ set_option -top_module tang20k_c64_top
 set_option -use_sspi_as_gpio 1
 set_option -use_mspi_as_gpio 1
 set_option -output_base_name tang_c64
-set_option -vhdl_std vhd1993
+set_option -vhdl_std vhd2019
+set_option -verilog_std sysv2017
 set_option -timing_driven 1
 set_option -route_maxfan 23
 

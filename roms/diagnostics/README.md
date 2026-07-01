@@ -1,8 +1,8 @@
-# C64 Diagnostic PRGs
+# C64 Diagnostics
 
-This folder contains generated C64 PRGs used for hardware bring-up and virtual
-1541 debugging. They are intentionally separated from normal demo/game PRGs so
-the root `roms/` folder stays readable.
+This folder contains generated C64 PRGs and ROMs used for hardware bring-up and
+virtual 1541 debugging. They are intentionally separated from normal demo/game
+PRGs so the root `roms/` folder stays readable.
 
 ## CPU/IRQ Hang Diagnostics
 
@@ -53,6 +53,35 @@ python tools/c64_uart_prg_loader.py roms/v1541_hook.prg --port COM15
 
 After `RUN`, start the virtual drive server and use normal C64 commands such as
 `LOAD "$",8`, `LIST`, and `LOAD "PROGRAM",8,1`.
+
+## KERNAL-Slot Test ROMs
+
+These ROMs replace the normal C64 KERNAL image for a dedicated hardware test.
+They boot directly after reset and do not use BASIC or KERNAL services.
+
+| ROM | Purpose |
+| --- | --- |
+| `c64_cia2_iec_test.rom` | 8 KB KERNAL-slot ROM that verifies CIA2 port A and the modeled IEC CLK/DATA readback path. |
+
+Build it with:
+
+```powershell
+make c64-iec-test-rom
+```
+
+Build a Tang Primer 20K C64 bitstream with this ROM embedded:
+
+```powershell
+$env:C64_KERNAL_ROM="roms/diagnostics/c64_cia2_iec_test.rom"
+make c64-tang20k-build
+```
+
+Unset `C64_KERNAL_ROM` or open a fresh shell to build again with the normal
+`roms/c64/KERNAL.ROM`:
+
+```powershell
+Remove-Item Env:C64_KERNAL_ROM
+```
 
 ## Monitor Probe
 

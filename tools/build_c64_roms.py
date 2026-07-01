@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,12 +99,26 @@ def main() -> int:
         "",
     ]
     blocks.append("\n".join(header))
+    overrides = {
+        "kernal_rom": os.environ.get("C64_KERNAL_ROM"),
+    }
     for name, fname, expect in ROMS:
-        path = ROM_DIR / fname
+        override = overrides.get(name)
+        path = Path(override) if override else ROM_DIR / fname
+        if not path.is_absolute():
+            path = ROOT / path
+        if not path.exists():
+            if override:
+                raise SystemExit(
+                    f"{path}: C64_KERNAL_ROM points to a missing file. "
+                    "Unset it with `Remove-Item Env:C64_KERNAL_ROM` for a normal build, "
+                    "or set it to an existing 8 KB KERNAL-slot ROM."
+                )
+            raise SystemExit(f"{path}: missing ROM image")
         data = path.read_bytes()
         if len(data) != expect:
             raise SystemExit(
-                f"{fname}: expected {expect} bytes, got {len(data)}"
+                f"{path}: expected {expect} bytes, got {len(data)}"
             )
         # chargen is read by both the CPU (charset copy) and the VIC -> dual port.
         blocks.append(emit_rom(name, data, dual=(name == "chargen_rom")))

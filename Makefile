@@ -72,7 +72,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
         c64-cli-noirq-diag-prg c64-rti-diag-prg c64-hang-raw-irq-diag-prg \
         c64-v1541-loadfirst-prg c64-v1541-hook-prg c64-v1541-hook-diag-prg \
         c64-v1541-hook-dummy-diag-prg \
-        c64-sid-prgs
+        c64-sid-prgs c64-iec-test-rom
 
 ## ============================================================================
 ## Simulation targets
@@ -222,6 +222,13 @@ c64-v1541-hook-dummy-diag-prg:
 	$(PYTHON) tools/build_c64_v1541_segment_map.py $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg --code-address 0xC700
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/v1541_hook_dummy_diag.o').unlink(missing_ok=True)"
 	@echo "Built $(C64_DIAG_DIR)/v1541_hook_dummy_diag.prg (hardware dummy LOAD hook, no UART)"
+
+c64-iec-test-rom:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_DIAG_DIR)/c64_iec_test.o sw/c64_iec_test.s
+	$(LD65) -C sw/c64diag.cfg -o $(C64_DIAG_DIR)/c64_cia2_iec_test.rom $(C64_DIAG_DIR)/c64_iec_test.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/c64_iec_test.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_DIAG_DIR)/c64_cia2_iec_test.rom (8 KB C64 KERNAL-slot CIA2/IEC test ROM)"
 
 c64-sid-prgs:
 	$(PYTHON) tools/build_c64_sid_prgs.py

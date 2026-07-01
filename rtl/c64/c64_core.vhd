@@ -25,6 +25,12 @@ entity c64_core is
     -- System clocks per PHI2 (27 -> ~1 MHz CPU). Simulation overrides this with
     -- a small value to boot faster.
     PHI2_DIV : integer := 27;
+    -- Keep false for the stable bring-up bitstream.  True makes CIA2 PA6/PA7
+    -- see the modeled IEC bus instead of the old PA output loopback; this needs
+    -- an active drive responder or KERNAL/fastloaders can wait forever.
+    IEC_BUS_MODEL : boolean := false;
+    -- Experimental full 1541 IEC responder adapted from the MiSTer C64 core.
+    MISTER_1541_ENABLE : boolean := false;
     -- Simulation-only RAM preload (ADDR VALUE hex); "" = zeroed (synthesis).
     RAM_INIT : string  := ""
   );
@@ -42,6 +48,7 @@ entity c64_core is
     dbg_phi  : out std_logic;
     dbg_status : out std_logic_vector(15 downto 0);
     dbg_cia1 : out std_logic_vector(31 downto 0);
+    dbg_iec : out std_logic_vector(31 downto 0);
     dbg_regs : out std_logic_vector(63 downto 0);
     -- dbg_cia1_irq : out std_logic;                -- (DIAG heartbeat tap -- disabled)
 
@@ -209,6 +216,7 @@ architecture rtl of c64_core is
   signal cia1_pa_out, cia1_pb_out : std_logic_vector(7 downto 0);
   signal cia2_pa_out, cia2_pb_out : std_logic_vector(7 downto 0);
   signal cia2_pa_in : std_logic_vector(7 downto 0);
+  signal cia2_pa_bus_in : std_logic_vector(7 downto 0);
   signal cia1_pa_oe, cia1_pb_oe : std_logic_vector(7 downto 0);
   signal cia2_pa_oe, cia2_pb_oe : std_logic_vector(7 downto 0);
   signal cia1_cs_n, cia2_cs_n, cia_rw : std_logic;
@@ -223,6 +231,12 @@ architecture rtl of c64_core is
   signal iec_data_n : std_logic;
   signal iec_drive_clk_pull_n  : std_logic := '1';
   signal iec_drive_data_pull_n : std_logic := '1';
+  signal iec_probe_clk_pull_n  : std_logic := '1';
+  signal iec_probe_data_pull_n : std_logic := '1';
+  signal iec_m1541_clk_pull_n  : std_logic := '1';
+  signal iec_m1541_data_pull_n : std_logic := '1';
+  signal iec_dbg_state : std_logic_vector(31 downto 0);
+  signal m1541_led : std_logic;
 
   -- ---- SID ----
   signal sid_dout : std_logic_vector(7 downto 0);
@@ -287,6 +301,7 @@ begin
                 cpu_we & cpu_sync & restore_n & cia2_irq_n & vic_irq_n &
                 cia1_irq_n & cpu_irq_n & vic_ba & cpu_rdy;
   dbg_cia1 <= cia1_dbg_state;
+  dbg_iec <= iec_dbg_state;
   dbg_regs <= cpu_regs;
   monitor_mem_rdata <= mon_rdata_reg;
   monitor_mem_ready <= mon_ready_reg;
@@ -622,24 +637,72 @@ begin
   --   PA4/PA5: IEC CLK/DATA out, open-collector style
   --   PA6/PA7: IEC CLK/DATA in
   --
-  -- Earlier bring-up looped PA input straight back from PA output. That is fine
-  -- for the VIC bank bits, but it makes fastloaders read their own serial-bus
-  -- writes instead of the bus. Keep the bus pulled up for now; a drive
-  -- responder can pull CLK/DATA low through iec_drive_*_pull_n.
-  iec_atn_n  <= '0' when (cia2_pa_oe(3) = '1' and cia2_pa_out(3) = '0') else '1';
-  iec_clk_n  <= '0' when (cia2_pa_oe(4) = '1' and cia2_pa_out(4) = '0') or
-                         (iec_drive_clk_pull_n = '0') else '1';
-  iec_data_n <= '0' when (cia2_pa_oe(5) = '1' and cia2_pa_out(5) = '0') or
-                         (iec_drive_data_pull_n = '0') else '1';
+  iec_drive_clk_pull_n  <= iec_probe_clk_pull_n and iec_m1541_clk_pull_n;
+  iec_drive_data_pull_n <= iec_probe_data_pull_n and iec_m1541_data_pull_n;
 
-  cia2_pa_in(0) <= cia2_pa_out(0);
-  cia2_pa_in(1) <= cia2_pa_out(1);
-  cia2_pa_in(2) <= cia2_pa_out(2);
-  cia2_pa_in(3) <= iec_atn_n;
-  cia2_pa_in(4) <= iec_clk_n;
-  cia2_pa_in(5) <= iec_data_n;
-  cia2_pa_in(6) <= iec_clk_n;
-  cia2_pa_in(7) <= iec_data_n;
+  -- Passive bring-up used non-inverting output-loopback semantics.  The MiSTer
+  -- 1541 path switches CIA2 PA3/4/5 to the real C64-style inverted IEC drivers.
+  iec_atn_n <= not cia2_pa_out(3) when MISTER_1541_ENABLE else
+               '0' when (cia2_pa_oe(3) = '1' and cia2_pa_out(3) = '0') else
+               '1';
+  iec_clk_n <= '0' when (MISTER_1541_ENABLE and
+                         ((cia2_pa_out(4) = '1') or
+                          (iec_drive_clk_pull_n = '0'))) else
+               '0' when ((not MISTER_1541_ENABLE) and
+                         ((cia2_pa_oe(4) = '1' and cia2_pa_out(4) = '0') or
+                          (iec_drive_clk_pull_n = '0'))) else
+               '1';
+  iec_data_n <= '0' when (MISTER_1541_ENABLE and
+                          ((cia2_pa_out(5) = '1') or
+                           (iec_drive_data_pull_n = '0'))) else
+                '0' when ((not MISTER_1541_ENABLE) and
+                          ((cia2_pa_oe(5) = '1' and cia2_pa_out(5) = '0') or
+                           (iec_drive_data_pull_n = '0'))) else
+                '1';
+
+  -- Keep the locally-driven bits on the proven CIA output loopback path.  The
+  -- KERNAL mostly needs real IEC sense on PA6/PA7; feeding PA3..PA5 back as
+  -- bus pins changes what reads of $DD00 return while those bits are outputs.
+  cia2_pa_bus_in(0) <= cia2_pa_out(0);
+  cia2_pa_bus_in(1) <= cia2_pa_out(1);
+  cia2_pa_bus_in(2) <= cia2_pa_out(2);
+  cia2_pa_bus_in(3) <= cia2_pa_out(3);
+  cia2_pa_bus_in(4) <= cia2_pa_out(4);
+  cia2_pa_bus_in(5) <= cia2_pa_out(5);
+  cia2_pa_bus_in(6) <= (iec_clk_n and (not cia2_pa_out(4)))
+                       when MISTER_1541_ENABLE else iec_clk_n;
+  cia2_pa_bus_in(7) <= (iec_data_n and (not cia2_pa_out(5)))
+                       when MISTER_1541_ENABLE else iec_data_n;
+  cia2_pa_in <= cia2_pa_bus_in when IEC_BUS_MODEL else cia2_pa_out;
+
+  iec_drive_i : entity work.c64_iec_drive
+    generic map (
+      ENABLE_ATN_ACK => false
+    )
+    port map (
+      clk     => clk,
+      reset_n => core_reset_n,
+      atn_n   => iec_atn_n,
+      clk_n   => iec_clk_n,
+      data_n  => iec_data_n,
+      drive_clk_pull_n  => iec_probe_clk_pull_n,
+      drive_data_pull_n => iec_probe_data_pull_n,
+      dbg_state => iec_dbg_state
+    );
+
+  gen_mister_1541 : if MISTER_1541_ENABLE generate
+    m1541_i : entity work.mister_c1541_iec
+      port map (
+        clk     => clk,
+        reset_n => core_reset_n,
+        iec_atn_n  => iec_atn_n,
+        iec_clk_n  => iec_clk_n,
+        iec_data_n => iec_data_n,
+        drive_clk_pull_n  => iec_m1541_clk_pull_n,
+        drive_data_pull_n => iec_m1541_data_pull_n,
+        led => m1541_led
+      );
+  end generate;
 
   cia2_i : mos6526
     port map (

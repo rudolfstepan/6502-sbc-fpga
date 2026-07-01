@@ -78,6 +78,7 @@ architecture rtl of tang20k_c64_top is
   signal dbg_phi    : std_logic;
   signal dbg_status : std_logic_vector(15 downto 0);
   signal dbg_cia1   : std_logic_vector(31 downto 0);
+  signal dbg_iec    : std_logic_vector(31 downto 0);
   signal dbg_regs   : std_logic_vector(63 downto 0);
 
   signal dbg_uart_tx : std_logic;
@@ -197,6 +198,10 @@ begin
   -- authentic C64 speed; the half-speed test (54) proved the hang is NOT a setup-
   -- margin path, so back to the correct rate).
   c64_i : entity work.c64_core
+    generic map (
+      IEC_BUS_MODEL => true,
+      MISTER_1541_ENABLE => true
+    )
     port map (
       clk      => clk_pix,
       reset_n  => reset_n,
@@ -209,6 +214,7 @@ begin
       dbg_phi  => dbg_phi,
       dbg_status => dbg_status,
       dbg_cia1 => dbg_cia1,
+      dbg_iec => dbg_iec,
       dbg_regs => dbg_regs,
       -- dbg_cia1_irq => open,   -- (DIAG heartbeat tap -- disabled)
       vga_hs   => vga_hs,
@@ -339,6 +345,7 @@ begin
       dbg_phi    => dbg_phi,
       dbg_status => dbg_status,
       dbg_cia1   => dbg_cia1,
+      dbg_iec    => dbg_iec,
       dbg_regs   => dbg_regs
     );
 

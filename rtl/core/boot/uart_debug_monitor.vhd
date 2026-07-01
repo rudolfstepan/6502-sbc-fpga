@@ -39,6 +39,7 @@ entity uart_debug_monitor is
     dbg_phi    : in std_logic := '0';
     dbg_status : in std_logic_vector(15 downto 0) := (others => '0');
     dbg_cia1   : in std_logic_vector(31 downto 0) := (others => '0');
+    dbg_iec    : in std_logic_vector(31 downto 0) := (others => '0');
     dbg_regs   : in std_logic_vector(63 downto 0) := (others => '0');
 
     usb_connected : in std_logic := '0';
@@ -127,7 +128,7 @@ architecture rtl of uart_debug_monitor is
   signal dis_byte   : natural range 0 to 2 := 0;
   signal dis_midx   : natural range 0 to 2 := 0;
   signal dis_oidx   : natural range 0 to 6 := 0;
-  signal regs_idx   : natural range 0 to 63 := 0;
+  signal regs_idx   : natural range 0 to 75 := 0;
   signal dbg_last_pc : addr_t := (others => '0');
   signal dbg_snap_pc     : addr_t := (others => '0');
   signal dbg_snap_addr   : addr_t := (others => '0');
@@ -135,6 +136,7 @@ architecture rtl of uart_debug_monitor is
   signal dbg_snap_do     : data_t := (others => '0');
   signal dbg_snap_status : std_logic_vector(15 downto 0) := (others => '0');
   signal dbg_snap_cia1   : std_logic_vector(31 downto 0) := (others => '0');
+  signal dbg_snap_iec    : std_logic_vector(31 downto 0) := (others => '0');
   signal dbg_snap_regs   : std_logic_vector(63 downto 0) := (others => '0');
 
   signal mem_req_reg   : std_logic := '0';
@@ -306,6 +308,7 @@ architecture rtl of uart_debug_monitor is
     status : std_logic_vector(15 downto 0);
     regs : std_logic_vector(63 downto 0);
     cia1 : std_logic_vector(31 downto 0);
+    iec : std_logic_vector(31 downto 0);
     bus_addr : addr_t;
     bus_di : data_t;
     bus_do : data_t
@@ -373,7 +376,20 @@ architecture rtl of uart_debug_monitor is
       when 58 => return ascii('/');
       when 59 => return hex_char(bus_do(7 downto 4));
       when 60 => return hex_char(bus_do(3 downto 0));
-      when 61 => return x"0D";
+      when 61 => return ascii(' ');
+      when 62 => return ascii('I');
+      when 63 => return ascii('E');
+      when 64 => return ascii('C');
+      when 65 => return ascii('=');
+      when 66 => return hex_char(iec(31 downto 28));
+      when 67 => return hex_char(iec(27 downto 24));
+      when 68 => return hex_char(iec(23 downto 20));
+      when 69 => return hex_char(iec(19 downto 16));
+      when 70 => return hex_char(iec(15 downto 12));
+      when 71 => return hex_char(iec(11 downto 8));
+      when 72 => return hex_char(iec(7 downto 4));
+      when 73 => return hex_char(iec(3 downto 0));
+      when 74 => return x"0D";
       when others => return x"0A";
     end case;
   end function;
@@ -863,6 +879,7 @@ begin
         dbg_snap_do     <= (others => '0');
         dbg_snap_status <= (others => '0');
         dbg_snap_cia1   <= (others => '0');
+        dbg_snap_iec    <= (others => '0');
         dbg_snap_regs   <= (others => '0');
         mem_req_reg  <= '0';
         mem_we_reg   <= '0';
@@ -906,6 +923,7 @@ begin
           dbg_snap_do     <= dbg_do;
           dbg_snap_status <= dbg_status;
           dbg_snap_cia1   <= dbg_cia1;
+          dbg_snap_iec    <= dbg_iec;
           dbg_snap_regs   <= dbg_regs;
         end if;
 
@@ -1409,10 +1427,11 @@ begin
 
             when S_REGS_CHAR =>
               tx_data_reg <= regs_msg_char(regs_idx, dbg_snap_pc, dbg_snap_status, dbg_snap_regs,
-                                           dbg_snap_cia1, dbg_snap_addr, dbg_snap_di, dbg_snap_do);
+                                           dbg_snap_cia1, dbg_snap_iec,
+                                           dbg_snap_addr, dbg_snap_di, dbg_snap_do);
               tx_valid_reg <= '1';
               wait_uart <= '1';
-              if regs_idx = 62 then
+              if regs_idx = 75 then
                 msg <= MSG_PROMPT;
                 after_msg <= S_INPUT;
                 state <= S_SEND_MSG;
