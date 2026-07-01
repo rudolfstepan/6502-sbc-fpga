@@ -54,6 +54,7 @@
         <!-- HDMI TMDS encoder + data island/AVI InfoFrame (reused from SBC) -->
         <File path="../../../../rtl/core/hdmi/tmds_encoder.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/hdmi/hdmi_data_island_576p_pkg.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/hdmi/hdmi_encoder.vhd" type="file.vhdl" enable="1"/>
 
         <!-- Board top (this project) + HDMI TX (reused from the SBC board) -->

@@ -32,7 +32,8 @@ use ieee.numeric_std.all;
 
 entity c64_keyboard_matrix is
   generic (
-    CLK_HZ : positive := 27_000_000
+    CLK_HZ : positive := 27_000_000;
+    PC_CURSOR_KEYS : boolean := true
   );
   port (
     clk      : in  std_logic;
@@ -72,6 +73,10 @@ architecture rtl of c64_keyboard_matrix is
   signal down : row_t := (others => (others => '0'));
 
   signal restore_down : std_logic := '0';
+  signal crsr_right_down : std_logic := '0';
+  signal crsr_down_down  : std_logic := '0';
+  signal crsr_left_down  : std_logic := '0';
+  signal crsr_up_down    : std_logic := '0';
   signal joy2_up_down    : std_logic := '0';
   signal joy2_down_down  : std_logic := '0';
   signal joy2_left_down  : std_logic := '0';
@@ -159,7 +164,9 @@ architecture rtl of c64_keyboard_matrix is
     return r;
   end function;
 
-  -- Extended (E0-prefixed) keys: cursor + home.
+  -- Extended (E0-prefixed) keys. PC cursor arrows are handled as a separate
+  -- overlay below so left/up can press C64 Shift+cursor without disturbing a
+  -- real Shift key held by the user.
   function map_ext(code : std_logic_vector(7 downto 0)) return std_logic_vector is
     variable r : std_logic_vector(6 downto 0) := (others => '0');
     -- Call sites pass (PA column, PB row). Store as down[pb_row][pa_col] so the
@@ -170,9 +177,7 @@ architecture rtl of c64_keyboard_matrix is
     end procedure;
   begin
     case code is
-      when x"74" => m(0,2);  -- cursor right -> CRSR L/R
-      when x"72" => m(0,7);  -- cursor down  -> CRSR U/D
-      when others => null;   -- up/left need shift; added later
+      when others => null;
     end case;
     return r;
   end function;
@@ -249,6 +254,8 @@ begin
       if reset_n = '0' then
         down <= (others => (others => '0'));
         is_break <= '0'; is_ext <= '0'; restore_down <= '0';
+        crsr_right_down <= '0'; crsr_down_down <= '0';
+        crsr_left_down <= '0'; crsr_up_down <= '0';
         joy2_up_down <= '0'; joy2_down_down <= '0';
         joy2_left_down <= '0'; joy2_right_down <= '0';
         joy2_fire0_down <= '0'; joy2_fire5_down <= '0';
@@ -262,12 +269,25 @@ begin
           if is_ext = '1' and rx_byte = x"7D" then
             restore_down <= not is_break;
           else
+            if PC_CURSOR_KEYS and is_ext = '1' then
+              case rx_byte is
+                when x"74" => crsr_right_down <= not is_break; -- PC cursor right
+                when x"72" => crsr_down_down  <= not is_break; -- PC cursor down
+                when x"6B" => crsr_left_down  <= not is_break; -- PC cursor left
+                when x"75" => crsr_up_down    <= not is_break; -- PC cursor up
+                when others => null;
+              end case;
+            end if;
             if is_ext = '0' then
               update_joy2(joy2_up_down, joy2_down_down, joy2_left_down,
                           joy2_right_down, joy2_fire0_down, joy2_fire5_down,
                           rx_byte, not is_break);
             end if;
-            if is_ext = '1' then
+            if PC_CURSOR_KEYS and is_ext = '1' and
+               (rx_byte = x"74" or rx_byte = x"72" or
+                rx_byte = x"6B" or rx_byte = x"75") then
+              rc := (others => '0');
+            elsif is_ext = '1' then
               rc := map_ext(rx_byte);
             else
               rc := map_norm(rx_byte);
@@ -295,15 +315,30 @@ begin
   -- Matrix read: a pin bit is pulled low when a pressed key connects it to a low
   -- pin on the opposite port. With no pressed key, the CIA reads back its own pin
   -- level (outputs included), matching the MiST/MiSTer CIA top-level feedback.
-  process(down, col_drive, row_drive, joy2_n)
+  process(down, col_drive, row_drive, joy2_n,
+          crsr_right_down, crsr_down_down, crsr_left_down, crsr_up_down)
     variable cv : std_logic_vector(7 downto 0);
     variable rv : std_logic_vector(7 downto 0);
+    variable kd : row_t;
   begin
+    kd := down;
+    if PC_CURSOR_KEYS then
+      if (crsr_right_down or crsr_left_down) = '1' then
+        kd(2)(0) := '1'; -- C64 CRSR LEFT/RIGHT
+      end if;
+      if (crsr_down_down or crsr_up_down) = '1' then
+        kd(7)(0) := '1'; -- C64 CRSR UP/DOWN
+      end if;
+      if (crsr_left_down or crsr_up_down) = '1' then
+        kd(7)(1) := '1'; -- C64 LSHIFT for CRSR LEFT/UP
+      end if;
+    end if;
+
     cv := col_drive;
     rv := row_drive;
     for rr in 0 to 7 loop
       for cc in 0 to 7 loop
-        if down(rr)(cc) = '1' then
+        if kd(rr)(cc) = '1' then
           if col_drive(cc) = '0' then
             rv(rr) := '0';
           end if;

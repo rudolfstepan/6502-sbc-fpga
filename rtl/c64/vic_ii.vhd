@@ -1,9 +1,9 @@
 -- MOS 6569 VIC-II -- native C64 video, Milestone 1 scope.
 --
 -- Reuses the proven Tang Primer 20K display pipeline from rtl/core/peripherals/
--- vic_vga: exact CEA-861 720x480p timing (27 MHz pixel, 858x525 total, the
--- 640-wide content pillarboxed into 720) so the existing tang20k_hdmi_tx encoder
--- and HDMI capture devices keep working unchanged. The renderer is a 40x25 text
+-- vic_vga, but runs the native C64 path as 720x576p50 (27 MHz pixel,
+-- 864x625 total). That gives PAL-like 50 Hz frame/raster timing for games that
+-- drive logic from VIC raster IRQs. The renderer is a 40x25 text
 -- engine with a per-scanline character fetch that steals CPU bus cycles during
 -- horizontal blank (the CPU is held via the `ba` output -> core RDY).
 --
@@ -78,27 +78,26 @@ entity vic_ii is
 end entity;
 
 architecture rtl of vic_ii is
-  -- CEA-861 720x480p totals (identical to vic_vga CEA_480P path).
-  constant H_TOT  : natural := 858;
+  -- CEA-861 720x576p50 totals (27 MHz / 864 / 625 = 50 Hz).
+  constant H_TOT  : natural := 864;
   constant H_VIS  : natural := 720;
   constant H_PILL : natural := 40;                 -- pillarbox L/R
-  constant H_SS   : natural := 736;
-  constant H_SE   : natural := 798;
+  constant H_SS   : natural := 732;
+  constant H_SE   : natural := 796;
   constant H_CONT : natural := H_VIS - 2 * H_PILL; -- 640 content
   constant H_CEND : natural := H_PILL + H_CONT;
 
-  constant V_VIS  : natural := 480;
-  constant V_TOT  : natural := 525;
-  constant V_SS   : natural := 489;
-  constant V_SE   : natural := 495;
-  -- Software-visible VIC raster. The HDMI output uses 480p and doubles C64
-  -- scanlines vertically, so expose a logical C64 raster rather than the raw
-  -- HDMI line counter through $D011/$D012 and raster IRQ compare.
-  constant C64_RASTER_LINES  : natural := 263;
-  constant C64_RASTER_OFFSET : natural := 30;
+  constant V_VIS  : natural := 576;
+  constant V_TOT  : natural := 625;
+  constant V_SS   : natural := 581;
+  constant V_SE   : natural := 586;
+  -- Software-visible PAL VIC raster. The HDMI output line-doubles C64 scanlines,
+  -- so expose a logical C64 raster through $D011/$D012 and raster IRQ compare.
+  constant C64_RASTER_LINES  : natural := 312;
+  constant C64_RASTER_OFFSET : natural := 0;
 
-  -- Text band: 40 px top border, 25 rows * 16 px = 400, 40 px bottom border.
-  constant V_BORD : natural := 40;
+  -- Text band: 88 px top border, 25 rows * 16 px = 400, 88 px bottom border.
+  constant V_BORD : natural := 88;
   constant TV_END : natural := V_BORD + 400;       -- 440
 
   signal hc : natural range 0 to H_TOT - 1 := 0;

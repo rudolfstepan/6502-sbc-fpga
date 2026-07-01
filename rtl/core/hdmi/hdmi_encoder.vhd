@@ -21,6 +21,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use work.hdmi_data_island_pkg.all;
+use work.hdmi_data_island_576p_pkg.all;
 
 entity hdmi_encoder is
   generic (
@@ -31,6 +32,7 @@ entity hdmi_encoder is
     H_ACT    : natural := 720;
     V_ACT    : natural := 480;
     V_SYNC   : natural := 489;   -- first line of the vertical sync pulse
+    AVI_576P : boolean := false;
     -- Data island: a vertical-blank line, in the horizontal-blank region that
     -- precedes the (negative) HSYNC pulse, so sync wire levels are idle (1).
     DI_LINE  : natural := 482;
@@ -187,7 +189,11 @@ begin
     aux2 <= CTRL_00;
 
     if di_period then
-      aux0 <= DI_CH0(idx); aux1 <= DI_CH1(idx); aux2 <= DI_CH2(idx);
+      if AVI_576P then
+        aux0 <= DI576_CH0(idx); aux1 <= DI576_CH1(idx); aux2 <= DI576_CH2(idx);
+      else
+        aux0 <= DI_CH0(idx); aux1 <= DI_CH1(idx); aux2 <= DI_CH2(idx);
+      end if;
     elsif di_guard then
       aux0 <= dgb0(vs_a, hs_a); aux1 <= DGB_12; aux2 <= DGB_12;
     elsif di_pre then

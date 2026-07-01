@@ -8,9 +8,11 @@
 -- Bit clock:    135 MHz = 5 x 27 MHz.
 -- Bit rate:    270 Mbps per channel (135 MHz FCLK, DDR via OSER10).
 --
--- VGA refresh at 27 MHz pixel clock, 858x525 total (CEA-861 480p timing):
+-- Default VGA refresh at 27 MHz pixel clock, 858x525 total (CEA-861 480p timing):
 --   H = 27 MHz / 858 = 31.47 kHz
 --   V = 31468 / 525  = 59.94 Hz   (standard 640x480 @ 60 Hz)
+-- The native C64 top overrides the encoder timing to 720x576p50
+-- (864x625 total), still at the same 27 MHz pixel clock.
 --
 -- Clock generation:
 --   rPLL:  27 MHz -> 270 MHz (VCO 540 MHz)
@@ -34,6 +36,15 @@ use ieee.std_logic_1164.all;
 use work.sbc_pkg.all;
 
 entity tang20k_hdmi_tx is
+  generic (
+    HDMI_H_TOT    : natural := 858;
+    HDMI_V_TOT    : natural := 525;
+    HDMI_H_ACT    : natural := 720;
+    HDMI_V_ACT    : natural := 480;
+    HDMI_V_SYNC   : natural := 489;
+    HDMI_DI_LINE  : natural := 482;
+    HDMI_AVI_576P : boolean := false
+  );
   port (
     clk_in    : in  std_logic;   -- 27 MHz board oscillator
     reset_n   : in  std_logic;
@@ -267,6 +278,15 @@ begin
   -- frame). This turns the stream from bare DVI into HDMI so capture devices
   -- recognise the format. Generic defaults already match the CEA 480p timing.
   hdmi_enc : entity work.hdmi_encoder
+    generic map (
+      H_TOT   => HDMI_H_TOT,
+      V_TOT   => HDMI_V_TOT,
+      H_ACT   => HDMI_H_ACT,
+      V_ACT   => HDMI_V_ACT,
+      V_SYNC  => HDMI_V_SYNC,
+      AVI_576P => HDMI_AVI_576P,
+      DI_LINE => HDMI_DI_LINE
+    )
     port map (clk => clk_pix_i, reset_n => reset_n,
               de => de_pix, hs => hs_pix, vs => vs_pix,
               r8 => r8, g8 => g8, b8 => b8,

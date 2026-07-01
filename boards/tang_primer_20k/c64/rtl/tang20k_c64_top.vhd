@@ -176,6 +176,15 @@ begin
 
   -- HDMI TX also generates the system/pixel clocks from the 27 MHz oscillator.
   hdmi_i : entity work.tang20k_hdmi_tx
+    generic map (
+      HDMI_H_TOT   => 864,
+      HDMI_V_TOT   => 625,
+      HDMI_H_ACT   => 720,
+      HDMI_V_ACT   => 576,
+      HDMI_V_SYNC  => 581,
+      HDMI_DI_LINE => 578,
+      HDMI_AVI_576P => true
+    )
     port map (
       clk_in   => clk_27mhz,
       reset_n  => '1',
