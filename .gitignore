@@ -44,6 +44,7 @@ boards/tang_primer_20k/sbc/project/impl/pnr/*
 !boards/tang_primer_20k/sbc/project/impl/pnr/device.cfg
 boards/tang_primer_20k/sbc/project/tmp/
 boards/tang_primer_20k/sbc/project/*.gprj.user
+boards/tang_primer_20k/sbc/bitstream/
 
 # Generated Gowin IP elaboration/netlist files. Keep the editable .ipc and the
 # synthesizable .v wrappers committed; these files are recreated by the IDE.
