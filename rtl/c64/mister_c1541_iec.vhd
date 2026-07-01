@@ -7,6 +7,7 @@ entity mister_c1541_iec is
     CLK_HZ       : integer := 27000000;
     DRIVE_CPU_HZ : integer := 1000000;
     BAUD         : integer := 230400;
+    GCR_TURBO    : integer := 1;
     -- Disk image backend: 0 = built-in test image, 1 = .d64 in external SDRAM,
     -- 2 = virtual-1541 sectors over UART (tools/virtual_1541 CMD_SECTOR).
     D64_BACKEND  : integer := 0
@@ -105,6 +106,9 @@ architecture rtl of mister_c1541_iec is
   end component;
 
   component c1541_static_dir_gcr
+    generic (
+      GCR_TURBO : integer := 1
+    );
     port (
       clk    : in  std_logic;
       ce     : in  std_logic;
@@ -251,6 +255,9 @@ begin
     );
 
   gcr_i : c1541_static_dir_gcr
+    generic map (
+      GCR_TURBO => GCR_TURBO
+    )
     port map (
       clk    => clk,
       ce     => gcr_ce,

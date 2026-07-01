@@ -4,6 +4,9 @@
 // the 1541 DOS read a synthetic directory and PRG, while avoiding the RAM-heavy
 // MiSTer track/DDRAM path.
 module c1541_static_dir_gcr
+#(
+    parameter integer GCR_TURBO = 1
+)
 (
     input             clk,
     input             ce,
@@ -119,8 +122,12 @@ reg [6:0] old_track;
 always @(posedge clk) begin
     reg [5:0] bit_clk_cnt;
     reg       mode_r1;
+    reg [5:0] bit_clk_step;
 
     bit_clk_en <= 1'b0;
+    bit_clk_step = (GCR_TURBO < 1) ? 6'd1 :
+                   (GCR_TURBO > 8) ? 6'd8 :
+                                     GCR_TURBO;
 
     if(reset) begin
         old_track <= 7'd34;
@@ -139,10 +146,10 @@ always @(posedge clk) begin
             // bit_clk_cnt holds and byte_n stays high, so the 1541 DOS simply
             // sees the inter-sector gap stretch until the sector is ready.
         end else begin
-            bit_clk_cnt <= bit_clk_cnt + 1'b1;
+            bit_clk_cnt <= bit_clk_cnt + bit_clk_step;
             if(byte_in && bit_clk_cnt[5:4] == 1) byte_n <= 1'b0;
 
-            if (&bit_clk_cnt) begin
+            if (bit_clk_cnt >= (6'd63 - bit_clk_step + 6'd1)) begin
                 bit_clk_en <= 1'b1;
                 bit_clk_cnt <= {freq,2'b00};
             end

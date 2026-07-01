@@ -26,9 +26,47 @@ entity tang20k_mister_c64_probe_top is
 end entity;
 
 architecture rtl of tang20k_mister_c64_probe_top is
+  component rPLL is
+    generic (
+      FCLKIN         : string  := "100.0";
+      DEVICE         : string  := "GW1N-1";
+      IDIV_SEL       : integer := 0;
+      FBDIV_SEL      : integer := 0;
+      ODIV_SEL       : integer := 8;
+      PSDA_SEL       : string  := "0000";
+      DUTYDA_SEL     : string  := "1000";
+      DYN_SDIV_SEL   : integer := 2;
+      CLKFB_SEL      : string  := "internal";
+      CLKOUT_BYPASS  : string  := "false";
+      CLKOUTP_BYPASS : string  := "false";
+      CLKOUTD_BYPASS : string  := "false";
+      CLKOUTD_SRC    : string  := "CLKOUT"
+    );
+    port (
+      CLKOUT  : out std_logic;
+      LOCK    : out std_logic;
+      CLKOUTP : out std_logic;
+      CLKOUTD : out std_logic;
+      RESET   : in  std_logic;
+      RESET_P : in  std_logic;
+      CLKIN   : in  std_logic;
+      CLKFB   : in  std_logic;
+      FBDSEL  : in  std_logic_vector(5 downto 0);
+      IDSEL   : in  std_logic_vector(5 downto 0);
+      ODSEL   : in  std_logic_vector(5 downto 0);
+      PSDA    : in  std_logic_vector(3 downto 0);
+      DUTYDA  : in  std_logic_vector(3 downto 0);
+      FDLY    : in  std_logic_vector(3 downto 0)
+    );
+  end component;
+
+  constant C64_CLK_HZ : integer := 32000000;
+
   signal clk_sys  : std_logic;
   signal clk_pix  : std_logic;
+  signal clk_c64  : std_logic;
   signal pll_lock : std_logic;
+  signal c64_pll_lock : std_logic;
   signal reset_n  : std_logic;
   signal rst_sync : std_logic_vector(2 downto 0) := (others => '0');
 
@@ -72,10 +110,43 @@ architecture rtl of tang20k_mister_c64_probe_top is
 begin
   pa_en <= '1';
 
-  process(clk_pix)
+  -- The MiSTer/fpga64 core expects a 32 MHz master clock. Running it from the
+  -- 27 MHz HDMI pixel clock makes CPU, VIC, CIA timers and SID about 16% slow.
+  c64_pll_i : rPLL
+    generic map (
+      FCLKIN         => "27",
+      DEVICE         => "GW2A-18C",
+      IDIV_SEL       => 8,
+      FBDIV_SEL      => 63,
+      ODIV_SEL       => 4,
+      DYN_SDIV_SEL   => 6,
+      CLKFB_SEL      => "internal",
+      CLKOUT_BYPASS  => "false",
+      CLKOUTP_BYPASS => "false",
+      CLKOUTD_BYPASS => "false",
+      CLKOUTD_SRC    => "CLKOUT"
+    )
+    port map (
+      CLKIN   => clk_27mhz,
+      CLKOUT  => open,
+      CLKOUTD => clk_c64,
+      LOCK    => c64_pll_lock,
+      RESET   => '0',
+      RESET_P => '0',
+      CLKFB   => '0',
+      CLKOUTP => open,
+      FBDSEL  => (others => '0'),
+      IDSEL   => (others => '0'),
+      ODSEL   => (others => '0'),
+      PSDA    => (others => '0'),
+      DUTYDA  => (others => '0'),
+      FDLY    => (others => '0')
+    );
+
+  process(clk_c64)
   begin
-    if rising_edge(clk_pix) then
-      rst_sync <= rst_sync(1 downto 0) & (pll_lock and key(0));
+    if rising_edge(clk_c64) then
+      rst_sync <= rst_sync(1 downto 0) & (pll_lock and c64_pll_lock and key(0));
     end if;
   end process;
   reset_n <= rst_sync(2);
@@ -105,7 +176,7 @@ begin
       ADDR_WIDTH => 16
     )
     port map (
-      clk  => clk_pix,
+      clk  => clk_c64,
       addr => ram_addr,
       data => ram_dout,
       q    => ram_din,
@@ -114,7 +185,7 @@ begin
 
   c64_i : entity work.fpga64_sid_iec
     port map (
-      clk32       => clk_pix,
+      clk32       => clk_c64,
       reset_n     => reset_n,
       bios        => "01",
       pause       => '0',
@@ -178,7 +249,7 @@ begin
       sid_cfg     => "0000",
       sid_fc_off_l => (others => '0'),
       sid_fc_off_r => (others => '0'),
-      sid_ld_clk  => clk_pix,
+      sid_ld_clk  => clk_c64,
       sid_ld_addr => (others => '0'),
       sid_ld_data => (others => '0'),
       sid_ld_wr   => '0',
@@ -217,13 +288,14 @@ begin
 
   drive_i : entity work.mister_c1541_iec
     generic map (
-      CLK_HZ       => 27000000,     -- must match clk_pix for correct UART baud
-      DRIVE_CPU_HZ => 1000000,
+      CLK_HZ       => C64_CLK_HZ,   -- must match clk_c64 for correct UART baud
+      DRIVE_CPU_HZ => 1000000,     -- keep the real 1541 DOS core at stock speed
       BAUD         => 230400,      -- match the virtual_1541 GUI default baud
+      GCR_TURBO    => 1,           -- keep disk rotation timing conservative
       D64_BACKEND  => 2             -- virtual-1541 sectors over UART
     )
     port map (
-      clk     => clk_pix,
+      clk     => clk_c64,
       reset_n => reset_n,
       iec_atn_n  => c64_iec_atn_o,
       iec_clk_n  => iec_clk_n,
@@ -237,7 +309,7 @@ begin
 
   ps2_i : entity work.ps2_to_mister_key
     port map (
-      clk      => clk_pix,
+      clk      => clk_c64,
       reset_n  => reset_n,
       ps2_clk  => ps2_clk,
       ps2_data => ps2_data,
@@ -246,7 +318,7 @@ begin
 
   sync_i : entity work.video_sync
     port map (
-      clk32 => clk_pix,
+      clk32 => clk_c64,
       pause => '0',
       hsync => raw_hs,
       vsync => raw_vs,
@@ -271,7 +343,7 @@ begin
       BCK_HALF => 4
     )
     port map (
-      clk => clk_pix,
+      clk => clk_c64,
       reset_n => reset_n,
       sample => audio16,
       dac_bck => dac_bck,

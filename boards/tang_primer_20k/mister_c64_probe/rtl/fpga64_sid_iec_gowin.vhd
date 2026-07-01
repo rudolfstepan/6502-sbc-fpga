@@ -871,6 +871,10 @@ dma_din   <= cpuDi;
 -- Keyboard
 -- -----------------------------------------------------------------------
 Keyboard: entity work.fpga64_keyboard
+generic map (
+	PC_CURSOR_KEYS  => true,
+	NUMPAD_JOYSTICK => true
+)
 port map (
 	clk => clk32,
 	
