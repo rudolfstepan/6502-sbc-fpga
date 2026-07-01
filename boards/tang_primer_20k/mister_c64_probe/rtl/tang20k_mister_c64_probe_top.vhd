@@ -50,9 +50,14 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal audio_mix : signed(18 downto 0);
   signal audio16 : std_logic_vector(15 downto 0);
 
-  signal c64_iec_data : std_logic;
-  signal c64_iec_clk  : std_logic;
-  signal c64_iec_atn  : std_logic;
+  signal c64_iec_data_o : std_logic;
+  signal c64_iec_clk_o  : std_logic;
+  signal c64_iec_atn_o  : std_logic;
+  signal iec_data_n     : std_logic;
+  signal iec_clk_n      : std_logic;
+  signal drive_clk_pull_n  : std_logic := '1';
+  signal drive_data_pull_n : std_logic := '1';
+  signal drive_led      : std_logic;
   signal ps2_key_mister : std_logic_vector(10 downto 0);
 
   signal pause_out : std_logic;
@@ -193,11 +198,11 @@ begin
       cnt2_o      => cnt2_o,
       cnt1_i      => '1',
       cnt1_o      => cnt1_o,
-      iec_data_o  => c64_iec_data,
-      iec_data_i  => c64_iec_data,
-      iec_clk_o   => c64_iec_clk,
-      iec_clk_i   => c64_iec_clk,
-      iec_atn_o   => c64_iec_atn,
+      iec_data_o  => c64_iec_data_o,
+      iec_data_i  => iec_data_n,
+      iec_clk_o   => c64_iec_clk_o,
+      iec_clk_i   => iec_clk_n,
+      iec_atn_o   => c64_iec_atn_o,
       c64rom_addr => (others => '0'),
       c64rom_data => (others => '0'),
       c64rom_wr   => '0',
@@ -205,6 +210,26 @@ begin
       cass_write  => cass_write,
       cass_sense  => '1',
       cass_read   => '1'
+    );
+
+  -- IEC is open collector: the C64 side and the drive side only pull low.
+  iec_clk_n  <= c64_iec_clk_o and drive_clk_pull_n;
+  iec_data_n <= c64_iec_data_o and drive_data_pull_n;
+
+  drive_i : entity work.mister_c1541_iec
+    generic map (
+      CLK_HZ       => 27000000,
+      DRIVE_CPU_HZ => 1000000
+    )
+    port map (
+      clk     => clk_pix,
+      reset_n => reset_n,
+      iec_atn_n  => c64_iec_atn_o,
+      iec_clk_n  => iec_clk_n,
+      iec_data_n => iec_data_n,
+      drive_clk_pull_n  => drive_clk_pull_n,
+      drive_data_pull_n => drive_data_pull_n,
+      led => drive_led
     );
 
   ps2_i : entity work.ps2_to_mister_key

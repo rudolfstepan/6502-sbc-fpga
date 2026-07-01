@@ -8,8 +8,7 @@ add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_encoder.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
 add_file -type vhdl {../../rtl/tang20k_hdmi_tx.vhd}
 
-# MiSTer C64 core files.  This probe intentionally uses the local reference tree
-# directly so we can evaluate the port before vendoring the whole core.
+# MiSTer C64 core files vendored under third_party/mister_c64.
 add_file -type vhdl {../../../../third_party/mister_c64/rtl/t65/T65_Pack.vhd}
 add_file -type vhdl {../../../../third_party/mister_c64/rtl/t65/T65_ALU.vhd}
 add_file -type vhdl {../../../../third_party/mister_c64/rtl/t65/T65_MCode.vhd}
@@ -29,6 +28,13 @@ add_file -type vhdl {../../../../third_party/mister_c64/rtl/video_vicII_656x.vhd
 add_file -type verilog {../rtl/sid_top_stub.sv}
 
 add_file -type vhdl {../rtl/fpga64_sid_iec_gowin.vhd}
+
+# Minimal MiSTer 1541 IEC responder.
+add_file -type vhdl {../../../../rtl/c64/c1541_rom.vhd}
+add_file -type vhdl {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd}
+add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_misc.sv}
+add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv}
+add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
 
 # Tang probe top.
 add_file -type vhdl {../rtl/ps2_to_mister_key.vhd}

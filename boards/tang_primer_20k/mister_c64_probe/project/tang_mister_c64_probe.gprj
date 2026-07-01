@@ -26,6 +26,11 @@
         <File path="../../../../third_party/mister_c64/rtl/video_vicII_656x.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/sid_top_stub.sv" type="file.verilog" enable="1"/>
         <File path="../rtl/fpga64_sid_iec_gowin.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/c1541_rom.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_misc.sv" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv" type="file.verilog" enable="1"/>
+        <File path="../../../../rtl/c64/mister_c1541_iec.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/ps2_to_mister_key.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/tang20k_mister_c64_probe_top.vhd" type="file.vhdl" enable="1"/>
         <File path="../../c64/constraints/tang20k_c64.cst" type="file.cst" enable="1"/>

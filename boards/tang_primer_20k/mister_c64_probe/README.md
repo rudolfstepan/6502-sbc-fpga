@@ -42,6 +42,13 @@ Build status:
 - Hardware test 2026-07-01: BASIC `RUN` loops are stable after gating the
   external 64K RAM write enable with `ramCE`; ungated `ramWE` corrupted RAM
   during I/O cycles.
+- Build test 2026-07-01 with Gowin V1.9.12.03: minimal MiSTer 1541 IEC
+  responder fits and produces a bitstream.
+- Hardware test 2026-07-01: with the minimal MiSTer 1541 IEC responder,
+  `LOAD"$",8` no longer hangs at `SEARCHING`; it returns `FILE NOT FOUND`
+  because no disk/track backend is connected yet.
 - Fits without SID/1541: about 45/46 BSRAM and 23% logic.
+- Fits with minimal 1541 responder and SID stub: 12523/20736 logic (61%),
+  7560/10368 CLS (73%), 46/46 BSRAM (100%).
 - The full MiSTer platform shell (`emu`) is not used; it depends on MiSTer HPS,
   DDRAM, OSD, SD upload and Altera PLL/scaler blocks.

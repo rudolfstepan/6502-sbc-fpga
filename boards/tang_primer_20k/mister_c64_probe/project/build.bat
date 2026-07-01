@@ -2,11 +2,9 @@
 setlocal enableextensions
 cd /d "%~dp0"
 
-set "GWSH="
-for /f "delims=" %%I in ('where gw_sh 2^>nul') do if not defined GWSH set "GWSH=%%I"
-if not defined GWSH set "GWSH=C:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin\gw_sh.exe"
+set "GWSH=C:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin\gw_sh.exe"
 if not exist "%GWSH%" (
-    echo ERROR: gw_sh not found on PATH or at:
+    echo ERROR: gw_sh not found at:
     echo        %GWSH%
     exit /b 1
 )
