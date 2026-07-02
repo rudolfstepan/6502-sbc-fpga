@@ -120,7 +120,6 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal vga_g : std_logic_vector(5 downto 0);
 
   signal audio_l, audio_r : std_logic_vector(17 downto 0);
-  signal audio_mix : signed(18 downto 0);
   signal audio16 : std_logic_vector(15 downto 0);
 
   signal c64_iec_data_o : std_logic;
@@ -206,6 +205,15 @@ begin
   reset_n <= reset_released;
 
   hdmi_i : entity work.tang20k_hdmi_tx
+    generic map (
+      HDMI_H_TOT    => 864,
+      HDMI_V_TOT    => 625,
+      HDMI_H_ACT    => 720,
+      HDMI_V_ACT    => 576,
+      HDMI_V_SYNC   => 581,
+      HDMI_DI_LINE  => 578,
+      HDMI_AVI_576P => true
+    )
     port map (
       clk_in   => clk_27mhz,
       reset_n  => '1',
@@ -423,8 +431,9 @@ begin
   vga_g <= std_logic_vector(g8(7 downto 2));
   vga_b <= std_logic_vector(b8(7 downto 3));
 
-  audio_mix <= resize(signed(audio_l), 19) + resize(signed(audio_r), 19);
-  audio16 <= std_logic_vector(audio_mix(18 downto 3));
+  -- sid_top_native mirrors the 16-bit SID sample into the 18-bit MiSTer audio
+  -- ports by sign extension, so keep the original 16-bit level for the PT8211.
+  audio16 <= audio_l(15 downto 0);
 
   audio_i : entity work.pt8211_dac
     generic map (
