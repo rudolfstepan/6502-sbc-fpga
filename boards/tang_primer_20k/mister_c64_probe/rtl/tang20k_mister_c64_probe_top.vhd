@@ -115,9 +115,10 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal sync_hs, sync_vs : std_logic;
   signal hblank, vblank : std_logic;
   signal r8, g8, b8 : unsigned(7 downto 0);
-  signal vga_de : std_logic;
-  signal vga_r, vga_b : std_logic_vector(4 downto 0);
-  signal vga_g : std_logic_vector(5 downto 0);
+  signal vga_de : std_logic := '0';
+  signal vga_hs, vga_vs : std_logic := '1';
+  signal vga_r, vga_b : std_logic_vector(4 downto 0) := (others => '0');
+  signal vga_g : std_logic_vector(5 downto 0) := (others => '0');
 
   signal audio_l, audio_r : std_logic_vector(17 downto 0);
   signal audio16 : std_logic_vector(15 downto 0);
@@ -218,8 +219,8 @@ begin
       clk_in   => clk_27mhz,
       reset_n  => '1',
       vga_de   => vga_de,
-      vga_hs   => sync_hs,
-      vga_vs   => sync_vs,
+      vga_hs   => vga_hs,
+      vga_vs   => vga_vs,
       vga_r    => vga_r,
       vga_g    => vga_g,
       vga_b    => vga_b,
@@ -426,10 +427,29 @@ begin
       vblank => vblank
     );
 
-  vga_de <= not (hblank or vblank);
-  vga_r <= std_logic_vector(r8(7 downto 3));
-  vga_g <= std_logic_vector(g8(7 downto 2));
-  vga_b <= std_logic_vector(b8(7 downto 3));
+  -- Register the MiSTer video output in the C64 clock domain before handing it
+  -- to the HDMI pixel-clock domain. The two clocks come from independent PLLs,
+  -- so the SDC cuts the CDC path; this register keeps the source side short.
+  process(clk_c64)
+  begin
+    if rising_edge(clk_c64) then
+      if reset_n = '0' then
+        vga_de <= '0';
+        vga_hs <= '1';
+        vga_vs <= '1';
+        vga_r  <= (others => '0');
+        vga_g  <= (others => '0');
+        vga_b  <= (others => '0');
+      else
+        vga_de <= not (hblank or vblank);
+        vga_hs <= sync_hs;
+        vga_vs <= sync_vs;
+        vga_r  <= std_logic_vector(r8(7 downto 3));
+        vga_g  <= std_logic_vector(g8(7 downto 2));
+        vga_b  <= std_logic_vector(b8(7 downto 3));
+      end if;
+    end if;
+  end process;
 
   -- sid_top_native mirrors the 16-bit SID sample into the 18-bit MiSTer audio
   -- ports by sign extension, so keep the original 16-bit level for the PT8211.
