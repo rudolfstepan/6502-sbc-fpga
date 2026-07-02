@@ -75,6 +75,7 @@ reg[15:0]                     byte_cnt;
 reg[7:0]                      send_data;
 wire[7:0]                     data_recv;
 reg[9:0]                      wr_data_cnt;
+reg                           block_read_valid_pending;
 
 assign debug_state = state;
 assign cmd_req_ack = (state == S_END);
@@ -325,19 +326,21 @@ end
 always@(posedge sys_clk or posedge rst)
 begin
 	if(rst == 1'b1)
+	begin
 		block_read_valid <= 1'b0;
-	else if(state == S_READ && byte_cnt < 16'd512)
-		block_read_valid <= spi_wr_ack;
-	else
-		block_read_valid <= 1'b0;
-end
-
-always@(posedge sys_clk or posedge rst)
-begin
-	if(rst == 1'b1)
 		block_read_data <= 8'd0;
-	else if(state == S_READ && spi_wr_ack == 1'b1)
-		block_read_data <= data_recv;
+		block_read_valid_pending <= 1'b0;
+	end
+	else
+	begin
+		block_read_valid <= block_read_valid_pending;
+		block_read_valid_pending <= 1'b0;
+		if(state == S_READ && spi_wr_ack == 1'b1 && byte_cnt < 16'd512)
+		begin
+			block_read_data <= data_recv;
+			block_read_valid_pending <= 1'b1;
+		end
+	end
 end
 
 endmodule

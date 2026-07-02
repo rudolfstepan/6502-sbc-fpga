@@ -20,6 +20,11 @@ entity tang20k_mister_c64_probe_top is
     tmds_d_p   : out std_logic_vector(2 downto 0);
     tmds_d_n   : out std_logic_vector(2 downto 0);
 
+    sd_dclk    : out std_logic;
+    sd_ncs     : out std_logic;
+    sd_mosi    : out std_logic;
+    sd_miso    : in  std_logic;
+
     uart_tx    : out std_logic;
     uart_rx    : in  std_logic
   );
@@ -60,6 +65,35 @@ architecture rtl of tang20k_mister_c64_probe_top is
     );
   end component;
 
+  component sd_card_top
+    generic (
+      SPI_LOW_SPEED_DIV  : integer := 268;
+      SPI_HIGH_SPEED_DIV : integer := 2
+    );
+    port (
+      clk                    : in  std_logic;
+      rst                    : in  std_logic;
+      SD_nCS                 : out std_logic;
+      SD_DCLK                : out std_logic;
+      SD_MOSI                : out std_logic;
+      SD_MISO                : in  std_logic;
+      sd_init_done           : out std_logic;
+      sd_sec_read            : in  std_logic;
+      sd_sec_read_addr       : in  std_logic_vector(31 downto 0);
+      sd_sec_read_data       : out std_logic_vector(7 downto 0);
+      sd_sec_read_data_valid : out std_logic;
+      sd_sec_read_end        : out std_logic;
+      sd_sec_write           : in  std_logic;
+      sd_sec_write_addr      : in  std_logic_vector(31 downto 0);
+      sd_sec_write_data      : in  std_logic_vector(7 downto 0);
+      sd_sec_write_data_req  : out std_logic;
+      sd_sec_write_end       : out std_logic;
+      debug_sec_state        : out std_logic_vector(4 downto 0);
+      debug_cmd_state        : out std_logic_vector(3 downto 0);
+      debug_cmd_error        : out std_logic
+    );
+  end component;
+
   constant C64_CLK_HZ : integer := 32000000;
 
   signal clk_sys  : std_logic;
@@ -68,7 +102,8 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal pll_lock : std_logic;
   signal c64_pll_lock : std_logic;
   signal reset_n  : std_logic;
-  signal rst_sync : std_logic_vector(2 downto 0) := (others => '0');
+  signal reset_cnt : unsigned(20 downto 0) := (others => '0');
+  signal reset_released : std_logic := '0';
 
   signal ram_addr : unsigned(15 downto 0);
   signal ram_din  : unsigned(7 downto 0);
@@ -97,6 +132,12 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal drive_data_pull_n : std_logic := '1';
   signal drive_led      : std_logic;
   signal ps2_key_mister : std_logic_vector(10 downto 0);
+  signal sd_init_done   : std_logic;
+  signal sd_sec_read    : std_logic;
+  signal sd_sec_read_addr : std_logic_vector(31 downto 0);
+  signal sd_sec_read_data : std_logic_vector(7 downto 0);
+  signal sd_sec_read_valid : std_logic;
+  signal sd_sec_read_end : std_logic;
 
   signal pause_out : std_logic;
   signal nmi_ack   : std_logic;
@@ -146,10 +187,23 @@ begin
   process(clk_c64)
   begin
     if rising_edge(clk_c64) then
-      rst_sync <= rst_sync(1 downto 0) & (pll_lock and c64_pll_lock and key(0));
+      if key(0) = '0' then
+        reset_cnt <= (others => '0');
+        reset_released <= '0';
+      elsif reset_released = '0' then
+        if pll_lock = '1' and c64_pll_lock = '1' then
+          if reset_cnt = (reset_cnt'range => '1') then
+            reset_released <= '1';
+          else
+            reset_cnt <= reset_cnt + 1;
+          end if;
+        else
+          reset_cnt <= (others => '0');
+        end if;
+      end if;
     end if;
   end process;
-  reset_n <= rst_sync(2);
+  reset_n <= reset_released;
 
   hdmi_i : entity work.tang20k_hdmi_tx
     port map (
@@ -292,7 +346,7 @@ begin
       DRIVE_CPU_HZ => 1000000,     -- keep the real 1541 DOS core at stock speed
       BAUD         => 230400,      -- match the virtual_1541 GUI default baud
       GCR_TURBO    => 1,           -- keep disk rotation timing conservative
-      D64_BACKEND  => 2             -- virtual-1541 sectors over UART
+      D64_BACKEND  => 3             -- first FAT32 root *.D64 on SD card
     )
     port map (
       clk     => clk_c64,
@@ -304,7 +358,41 @@ begin
       drive_data_pull_n => drive_data_pull_n,
       uart_rx => uart_rx,
       uart_tx => uart_tx,
+      sd_init_done           => sd_init_done,
+      sd_sec_read            => sd_sec_read,
+      sd_sec_read_addr       => sd_sec_read_addr,
+      sd_sec_read_data       => sd_sec_read_data,
+      sd_sec_read_data_valid => sd_sec_read_valid,
+      sd_sec_read_end        => sd_sec_read_end,
       led => drive_led
+    );
+
+  sd_i : sd_card_top
+    generic map (
+      SPI_LOW_SPEED_DIV  => 268,
+      SPI_HIGH_SPEED_DIV => 8
+    )
+    port map (
+      clk                    => clk_c64,
+      rst                    => not reset_n,
+      SD_nCS                 => sd_ncs,
+      SD_DCLK                => sd_dclk,
+      SD_MOSI                => sd_mosi,
+      SD_MISO                => sd_miso,
+      sd_init_done           => sd_init_done,
+      sd_sec_read            => sd_sec_read,
+      sd_sec_read_addr       => sd_sec_read_addr,
+      sd_sec_read_data       => sd_sec_read_data,
+      sd_sec_read_data_valid => sd_sec_read_valid,
+      sd_sec_read_end        => sd_sec_read_end,
+      sd_sec_write           => '0',
+      sd_sec_write_addr      => (others => '0'),
+      sd_sec_write_data      => (others => '0'),
+      sd_sec_write_data_req  => open,
+      sd_sec_write_end       => open,
+      debug_sec_state        => open,
+      debug_cmd_state        => open,
+      debug_cmd_error        => open
     );
 
   ps2_i : entity work.ps2_to_mister_key

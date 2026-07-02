@@ -12,8 +12,8 @@ Current scope:
 - internal 64K RAM
 - fixed PAL/default configuration
 - PS/2 keyboard bridge plus a Tang-proven C64 matrix feeding CIA1
-- IEC lines looped back/released, no 1541 drive yet
-- SID is stubbed out for the first fit/stability probe
+- MiSTer 1541 IEC drive logic with a read-only D64 sector backend
+- SID output through the native PT8211 path
 - Tang HDMI/audio output reused from the native C64 project
 
 Build:
@@ -29,8 +29,60 @@ Gowin IDE:
 boards\tang_primer_20k\mister_c64_probe\project\tang_mister_c64_probe.gprj
 ```
 
-If this core fits and reaches the BASIC screen, the next step is adding the
-MiSTer `iec_drive`/`c1541_multi` path or a reduced GCR/track backend.
+## SD-card 1541 backend
+
+The current SD backend is intentionally raw and read-only to keep the full
+MiSTer C64 + SID + 1541 design fitting on the Tang 20K.  It does not parse FAT32
+yet.  The D64 image must start at SD LBA 0 in the expanded raw layout used by
+`c1541_sd_d64_sector_source.vhd`.
+
+The SD card is connected through the external PMOD1/GPIO microSD breakout, not
+the Tang Primer's on-board SDIO slot:
+
+```text
+PMOD1 pin 5 / T11 -> SCK
+PMOD1 pin 6 / P11 -> CS
+PMOD1 pin 7 / T12 -> MOSI
+PMOD1 pin 8 / R11 -> MISO
+```
+
+Raw image layout:
+
+- one 256-byte D64 sector per 512-byte SD block
+- D64 sector index `n` lives at SD LBA `n`
+- only the lower 256 bytes of each SD block are used
+- the upper 256 bytes are ignored/padded
+
+Create a raw SD image from a 35-track D64:
+
+```bat
+python tools\d64\make_raw_sd_d64_image.py path\to\disk.d64 build\mister1541_sd.img
+```
+
+Or use the converter GUI:
+
+```bat
+tools\d64\start_d64_to_sd_image_gui.bat
+```
+
+Write `build\mister1541_sd.img` to a card with your normal image writer, insert
+the card, program the bitstream, then use:
+
+```text
+LOAD"$",8
+LIST
+LOAD"*",8
+RUN
+```
+
+This first stage proves PC-independent 1541 sector reads.  A FAT32 file selector
+can be added later, but the direct FAT32 scanner was too large together with the
+MiSTer core on GW2A-18.
+
+The helper scripts `tools\d64\write_raw_sd_image.ps1` and
+`tools\d64\verify_raw_sd_image.ps1` can write/verify the image against a Windows
+PhysicalDrive when run with the necessary permissions.  Be careful to select the
+SD card, not a system disk.
 
 Build status:
 
@@ -54,6 +106,18 @@ Build status:
   `HELLO` PRG through the 1541 DOS sector chain. The image bytes are separated
   into `c1541_static_d64_image.sv` as a `track/sector/offset -> byte` layer for
   later UART/SDRAM/D64 replacement.
+- Build test 2026-07-02 with Gowin V1.9.12.03: raw SD-card D64 backend
+  (`D64_BACKEND=3`) fits and produces a bitstream.  FAT32 auto-mount was tested
+  first but exceeded GW2A-18 logic resources, so this stage uses a D64 at SD
+  LBA 0.
+- Hardware test 2026-07-02: external PMOD1/GPIO SD breakout works with the raw
+  expanded D64 layout.  `LOAD"$",8` and `LIST` show the directory through the
+  MiSTer 1541 DOS/IEC path.  Earlier tests accidentally constrained the SD
+  signals to the Tang on-board SDIO slot; the working pinout is the PMOD1
+  breakout listed above.
+- Tooling 2026-07-02: `tools\d64\d64_to_sd_image_gui.py` and
+  `tools\d64\make_raw_sd_d64_image.py` generate the expanded raw image format
+  used by the FPGA backend.
 - Next static-image test: directory now contains `HELLO` and `SECOND`, allowing
   one hardware build to verify `LOAD"*",8`, `LOAD"HELLO",8` and
   `LOAD"SECOND",8` through the same 1541 DOS path.

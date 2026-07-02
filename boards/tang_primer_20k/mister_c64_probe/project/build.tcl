@@ -4,6 +4,7 @@ set_device GW2A-LV18PG256C8/I7 -name GW2A-18C
 add_file -type vhdl {../../../../rtl/core/sbc_pkg.vhd}
 add_file -type vhdl {../../../../rtl/core/hdmi/tmds_encoder.vhd}
 add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd}
+add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_data_island_576p_pkg.vhd}
 add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_encoder.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
 add_file -type vhdl {../../rtl/tang20k_hdmi_tx.vhd}
@@ -37,9 +38,16 @@ add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_
 add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_rx_ser.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_tx_ser.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/d64_sector_map.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/d64_drive.vhd}
+add_file -type verilog {../../../../third_party/alinx_sd/spi_master.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_cmd.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_sec_read_write.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_top.v}
 add_file -type vhdl {../rtl/c1541_d64_sector_source.vhd}
 add_file -type vhdl {../rtl/mister_c64_sdram_read_adapter.vhd}
 add_file -type vhdl {../rtl/c1541_v1541_uart_sector_source.vhd}
+add_file -type vhdl {../rtl/c1541_sd_d64_sector_source.vhd}
 add_file -type verilog {../rtl/c1541_static_d64_image.sv}
 add_file -type verilog {../rtl/c1541_static_dir_gcr.sv}
 add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
@@ -48,8 +56,7 @@ add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
 add_file -type vhdl {../rtl/ps2_to_mister_key.vhd}
 add_file -type vhdl {../rtl/tang20k_mister_c64_probe_top.vhd}
 
-# Reuse the native C64 board pinout.
-add_file -type cst {../../c64/constraints/tang20k_c64.cst}
+add_file -type cst {../constraints/tang20k_mister_c64_probe.cst}
 add_file -type sdc {../constraints/tang20k_mister_c64_probe.sdc}
 
 set_option -top_module tang20k_mister_c64_probe_top

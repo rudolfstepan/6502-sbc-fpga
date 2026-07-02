@@ -8,6 +8,9 @@ e~*.cf
 # Generated simulation artifacts (built by make roms / make sd-boot-image)
 sim/generated/
 
+# Local generated images and scratch outputs
+build/
+
 # ── PIX16 / Xilinx ISE ────────────────────────────────────────────────────────
 # Keep: .xise project file, bitstreams/
 # Ignore: everything ISE generates during synthesis & implementation

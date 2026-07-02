@@ -9,7 +9,8 @@ entity mister_c1541_iec is
     BAUD         : integer := 230400;
     GCR_TURBO    : integer := 1;
     -- Disk image backend: 0 = built-in test image, 1 = .d64 in external SDRAM,
-    -- 2 = virtual-1541 sectors over UART (tools/virtual_1541 CMD_SECTOR).
+    -- 2 = virtual-1541 sectors over UART (tools/virtual_1541 CMD_SECTOR),
+    -- 3 = first FAT32 root *.D64 on SD card.
     D64_BACKEND  : integer := 0
   );
   port (
@@ -34,6 +35,14 @@ entity mister_c1541_iec is
     -- virtual-1541 UART port (driven only when D64_BACKEND = 2).
     uart_rx : in  std_logic := '1';
     uart_tx : out std_logic;
+
+    -- SD raw sector port (driven only when D64_BACKEND = 3).
+    sd_init_done           : in  std_logic := '0';
+    sd_sec_read            : out std_logic;
+    sd_sec_read_addr       : out std_logic_vector(31 downto 0);
+    sd_sec_read_data       : in  std_logic_vector(7 downto 0) := (others => '0');
+    sd_sec_read_data_valid : in  std_logic := '0';
+    sd_sec_read_end        : in  std_logic := '0';
 
     led : out std_logic
   );
@@ -291,6 +300,8 @@ begin
     uart_tx    <= '1';
     sdram_addr <= (others => '0');
     sdram_rd   <= '0';
+    sd_sec_read <= '0';
+    sd_sec_read_addr <= (others => '0');
   end generate;
 
   gen_sdram : if D64_BACKEND = 1 generate
@@ -308,8 +319,10 @@ begin
         sdram_q     => sdram_q,
         sdram_valid => sdram_valid,
         sdram_ready => sdram_ready
-      );
+    );
     uart_tx <= '1';
+    sd_sec_read <= '0';
+    sd_sec_read_addr <= (others => '0');
   end generate;
 
   gen_uart : if D64_BACKEND = 2 generate
@@ -328,6 +341,34 @@ begin
         valid   => img_valid,
         uart_rx => uart_rx,
         uart_tx => uart_tx
+      );
+    sdram_addr <= (others => '0');
+    sdram_rd   <= '0';
+    sd_sec_read <= '0';
+    sd_sec_read_addr <= (others => '0');
+  end generate;
+
+  gen_sd : if D64_BACKEND = 3 generate
+    img_i : entity work.c1541_sd_d64_sector_source
+      generic map (
+        CLK_HZ => CLK_HZ,
+        BAUD   => BAUD
+      )
+      port map (
+        clk     => clk,
+        reset   => drive_reset,
+        track   => img_track,
+        sector  => img_sector,
+        offset  => img_offset,
+        dout    => img_dout,
+        valid   => img_valid,
+        sd_init_done           => sd_init_done,
+        sd_sec_read            => sd_sec_read,
+        sd_sec_read_addr       => sd_sec_read_addr,
+        sd_sec_read_data       => sd_sec_read_data,
+        sd_sec_read_data_valid => sd_sec_read_data_valid,
+        sd_sec_read_end        => sd_sec_read_end,
+        uart_tx                => uart_tx
       );
     sdram_addr <= (others => '0');
     sdram_rd   <= '0';

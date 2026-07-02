@@ -7,6 +7,7 @@
         <File path="../../../../rtl/core/sbc_pkg.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/hdmi/tmds_encoder.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/hdmi/hdmi_data_island_576p_pkg.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/hdmi/hdmi_encoder.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
         <File path="../../rtl/tang20k_hdmi_tx.vhd" type="file.vhdl" enable="1"/>
@@ -33,15 +34,22 @@
         <File path="../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv" type="file.verilog" enable="1"/>
         <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/d64_sector_map.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/d64_drive.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/spi_master.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_cmd.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_sec_read_write.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_top.v" type="file.verilog" enable="1"/>
         <File path="../rtl/c1541_d64_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/mister_c64_sdram_read_adapter.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/c1541_v1541_uart_sector_source.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/c1541_sd_d64_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/c1541_static_d64_image.sv" type="file.verilog" enable="1"/>
         <File path="../rtl/c1541_static_dir_gcr.sv" type="file.verilog" enable="1"/>
         <File path="../../../../rtl/c64/mister_c1541_iec.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/ps2_to_mister_key.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/tang20k_mister_c64_probe_top.vhd" type="file.vhdl" enable="1"/>
-        <File path="../../c64/constraints/tang20k_c64.cst" type="file.cst" enable="1"/>
+        <File path="../constraints/tang20k_mister_c64_probe.cst" type="file.cst" enable="1"/>
         <File path="../constraints/tang20k_mister_c64_probe.sdc" type="file.sdc" enable="1"/>
     </FileList>
     <Configuration>
