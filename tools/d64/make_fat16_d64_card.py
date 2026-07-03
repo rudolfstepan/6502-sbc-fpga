@@ -271,6 +271,39 @@ class Fat16Builder:
         return bytes(card)
 
 
+HOOK_LBA = 8
+HOOK_MAGIC = b"C64HOOK1"
+
+
+def build_hook_block(prg_path: Path) -> bytes:
+    """Boot image for the FPGA power-up loader: header + resident hook code.
+
+    Reads the sparse hook PRG plus its .segments.json and embeds the code
+    segment (the part living at $C000) behind a "C64HOOK1" header.  The FPGA
+    boot loader in c64_sd_hook_boot_loader.vhd streams this into C64 RAM at
+    power-up, so the hook works without any UART upload.
+    """
+    import json
+
+    seg_path = prg_path.with_name(prg_path.name + ".segments.json")
+    if not seg_path.exists():
+        raise SystemExit(f"{seg_path}: segment map for --hook-image not found")
+    segmap = json.loads(seg_path.read_text())
+    prg = prg_path.read_bytes()
+    code = None
+    load_addr = None
+    for seg in segmap["segments"]:
+        if seg["address"] >= 0xC000:
+            code = prg[seg["offset"]:seg["offset"] + seg["size"]]
+            load_addr = seg["address"]
+    if code is None or load_addr is None:
+        raise SystemExit(f"{prg_path}: no resident code segment at/above $C000")
+    if len(code) > 0x1000:
+        raise SystemExit(f"{prg_path}: hook code exceeds the $C000-$CFFF window")
+    header = HOOK_MAGIC + struct.pack("<HH", load_addr, len(code)) + bytes(4)
+    return header + code
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--output", type=Path, required=True)
@@ -284,6 +317,12 @@ def main() -> int:
         type=Path,
         help="also write a ca65 include table for sw/c64_sd_d64_select.s",
     )
+    parser.add_argument(
+        "--hook-image",
+        type=Path,
+        help="embed this hook PRG at LBA 8 for the FPGA power-up boot loader "
+             "(MBR layout only; needs the PRG's .segments.json next to it)",
+    )
     args = parser.parse_args()
 
     builder = Fat16Builder(
@@ -296,12 +335,27 @@ def main() -> int:
         builder.add_file(path.name, path.read_bytes())
 
     image = builder.build()
+
+    if args.hook_image:
+        if args.superfloppy:
+            raise SystemExit("--hook-image needs the MBR layout: a superfloppy "
+                             "has no free space before the filesystem")
+        hook = build_hook_block(args.hook_image)
+        end_lba = HOOK_LBA + (len(hook) + SECTOR - 1) // SECTOR
+        if end_lba > builder.meta["partition_start_lba"]:
+            raise SystemExit("hook image does not fit before the partition")
+        image = bytearray(image)
+        image[HOOK_LBA * SECTOR:HOOK_LBA * SECTOR + len(hook)] = hook
+        image = bytes(image)
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(image)
     if args.selector_table:
         write_selector_table(args.selector_table, builder.meta["files"])  # type: ignore[arg-type]
 
     print(f"wrote {args.output} ({len(image)} bytes)")
+    if args.hook_image:
+        print(f"embedded hook image {args.hook_image} at LBA {HOOK_LBA}")
     if args.selector_table:
         print(f"wrote selector table {args.selector_table}")
     print(

@@ -68,7 +68,7 @@ end
 
 endmodule
 
-module iecdrv_bitmem #(parameter ADDRWIDTH)
+module iecdrv_bitmem #(parameter ADDRWIDTH = 8)
 (
 	input	                     clock_a,
 	input	     [ADDRWIDTH-1:0] address_a,
@@ -123,7 +123,7 @@ end
 
 endmodule
 
-module iecdrv_bitmem64 #(parameter ADDRWIDTH)
+module iecdrv_bitmem64 #(parameter ADDRWIDTH = 8)
 (
 	input	                     clock_a,
 	input	     [ADDRWIDTH-1:0] address_a,
@@ -175,7 +175,7 @@ endmodule
 
 // -------------------------------------------------------------------------------
 
-module iecdrv_bitmemSP #(parameter ADDRWIDTH)
+module iecdrv_bitmemSP #(parameter ADDRWIDTH = 8)
 (
 	input	                     clock_a,
 	input	     [ADDRWIDTH-1:0] address_a,
@@ -206,7 +206,7 @@ end
 
 endmodule
 
-module iecdrv_bitmem64SP #(parameter ADDRWIDTH)
+module iecdrv_bitmem64SP #(parameter ADDRWIDTH = 8)
 (
 	input	                     clock_a,
 	input	     [ADDRWIDTH-1:0] address_a,

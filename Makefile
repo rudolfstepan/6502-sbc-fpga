@@ -79,7 +79,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
         c64-v1541-hook-dummy-diag-prg \
         c64-sd-d64-selector-prg c64-sd-fat16-selector-prg \
         c64-sd-fastload-first-prg \
-        c64-sd-fastload-hook-prg c64-sd-hook-test \
+        c64-sd-fastload-hook-prg c64-sd-hook-test test-c64-sd-hook-boot \
+        mister64-sd-hook-block \
         mister64-fat16-d64-card c64-sid-prgs c64-iec-test-rom
 
 ## ============================================================================
@@ -238,10 +239,21 @@ c64-sd-d64-selector-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/sd_d64_select.o').unlink(missing_ok=True)"
 	@echo "Built $(C64_DIAG_DIR)/sd_d64_select.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
 
+mister64-sd-hook-block: c64-sd-fastload-hook-prg
+	$(PYTHON) tools/d64/make_sd_hook_block.py -o build/sd_hook_block.bin $(C64_DIAG_DIR)/sd_fastload_hook.prg
+	@echo "Write it below the FAT16 partition with tools/write_sd_hook_block.ps1 (elevated)"
+
+test-c64-sd-hook-boot:
+	$(GHDL) -a $(GHDL_FLAGS) boards/tang_primer_20k/mister_c64_probe/rtl/c64_sd_hook_boot_loader.vhd \
+	  sim/tb/tb_c64_sd_hook_boot_loader.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_c64_sd_hook_boot_loader
+	$(GHDL) -r $(GHDL_FLAGS) tb_c64_sd_hook_boot_loader $(GHDL_RUN_FLAGS)
+
 c64-sd-hook-test: c64-sd-fastload-hook-prg
 	@$(PYTHON) -c "import pathlib; pathlib.Path('build').mkdir(parents=True, exist_ok=True)"
-	$(PYTHON) tools/d64/make_fat16_d64_card.py -o build/test_fat16_card.img roms/test_d64/c64_testdisk.d64 roms/test_d64/c64_basic_testdisk.d64 --size 32M
+	$(PYTHON) tools/d64/make_fat16_d64_card.py -o build/test_fat16_card.img roms/test_d64/c64_testdisk.d64 roms/test_d64/c64_basic_testdisk.d64 --size 32M --hook-image roms/diagnostics/sd_fastload_hook.prg
 	$(PYTHON) tools/test_c64_sd_hook.py build/test_fat16_card.img
+	$(PYTHON) tools/test_c64_sd_hook.py build/test_fat16_card.img --standalone
 
 c64-sd-fat16-selector-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"
@@ -266,10 +278,10 @@ c64-sd-fastload-hook-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)/sd_fastload_hook.o').unlink(missing_ok=True)"
 	@echo "Built $(C64_DIAG_DIR)/sd_fastload_hook.prg (upload, RUN; LOAD hook with fastload + LOAD\"@\" disk menu)"
 
-mister64-fat16-d64-card:
-	$(PYTHON) tools/d64/make_fat16_d64_card.py -o $(MISTER64_FAT16_IMG) $(MISTER64_D64S) --size $(MISTER64_FAT16_SIZE) --selector-table $(C64_SD_D64_SELECTOR_TABLE)
+mister64-fat16-d64-card: c64-sd-fastload-hook-prg
+	$(PYTHON) tools/d64/make_fat16_d64_card.py -o $(MISTER64_FAT16_IMG) $(MISTER64_D64S) --size $(MISTER64_FAT16_SIZE) --selector-table $(C64_SD_D64_SELECTOR_TABLE) --hook-image $(C64_DIAG_DIR)/sd_fastload_hook.prg
 	$(MAKE) c64-sd-d64-selector-prg
-	@echo "Built $(MISTER64_FAT16_IMG) and matching $(C64_DIAG_DIR)/sd_d64_select.prg"
+	@echo "Built $(MISTER64_FAT16_IMG) (hook embedded at LBA 8) and matching $(C64_DIAG_DIR)/sd_d64_select.prg"
 
 c64-iec-test-rom:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_DIAG_DIR)').mkdir(parents=True, exist_ok=True)"

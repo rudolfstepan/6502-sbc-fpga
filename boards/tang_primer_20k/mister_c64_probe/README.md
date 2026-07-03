@@ -19,9 +19,18 @@ Current scope:
 Build:
 
 ```bat
+make c64-kernal-load-vector-patch
+make c64-roms
 cd boards\tang_primer_20k\mister_c64_probe\project
 build.bat
 ```
+
+The first two steps matter: `rtl\c64\c64_roms.vhd` embeds the patched KERNAL
+and is generated and gitignored (the Commodore ROMs are not in the repo).  A
+build tree where it is stale or missing synthesizes an old KERNAL without the
+current `$C000` guard stub - the resident hook then works after a UART upload
+plus `RUN` (via the `$0330` vector) but silently stops working after every
+reset.  That exact failure cost a debugging round on 2026-07-03.
 
 Gowin IDE:
 
@@ -179,16 +188,74 @@ the FAT-chain contiguity check, and returns to READY without touching the
 BASIC program in memory.  RAM keeps the hook across resets; only a power
 cycle requires a new upload.
 
+### Standalone boot without PC or UART
+
+For fully standalone operation the FPGA loads the hook from the SD card at
+power-up, so no UART upload and no RUN are needed at all.
+`rtl\c64_sd_hook_boot_loader.vhd` holds the C64 paused after reset, waits for
+the SD card, reads a boot image from LBA 8 (the unpartitioned gap between the
+MBR and the FAT16 partition at LBA 2048) and streams it into C64 RAM through
+the same port the UART monitor uses.  The image format is:
+
+```text
+bytes 0-7    magic "C64HOOK1"
+bytes 8-9    load address, little endian (normally $C000)
+bytes 10-11  payload length, little endian
+bytes 12-15  reserved
+bytes 16..   hook code, continuing through following SD blocks
+```
+
+`make mister64-fat16-d64-card` embeds the current hook automatically
+(`--hook-image roms\diagnostics\sd_fastload_hook.prg`).  An already
+formatted card with .d64 files on it does not need to be rebuilt: the block
+lives below the partition, so it can be added in place without touching the
+filesystem:
+
+```bat
+make mister64-sd-hook-block
+powershell tools\write_sd_hook_block.ps1 -DriveLetter G     (elevated)
+```
+
+The write script resolves the drive letter to its physical disk, refuses
+boot/system disks and non-USB/SD buses, checks that the block ends below the
+first partition, and verifies the sectors after writing.  The loader writes
+the first payload byte - the JMP signature the KERNAL guard stub checks -
+last, so an interrupted copy can never leave a half image that looks like a
+valid hook.  Because the SD init time at the slow SPI clock is hard to
+bound, the C64 is held paused for at most two seconds; if the card is not
+ready by then the machine boots normally and the loader keeps waiting in
+the background.  As soon as the card comes up it re-pauses the C64 for the
+few milliseconds the copy takes and installs the hook late - that also
+covers a card inserted after power-on.  A stalled transfer is retried from
+the start up to three times; a foreign card without the magic gives up
+immediately.  Superfloppy cards have no room before the filesystem, so the
+standalone boot needs the default MBR layout.
+
+The loader reports what happened at `$DF06` (`PRINT PEEK(57094)` from
+BASIC): bit 0 done, bit 1 success, bit 2 header seen, bit 3 gave up, bit 4
+SD seen, bits 7:5 copy attempts.  A healthy boot reads as `23` (done +
+success + header + SD) plus `32` per attempt, i.e. `55` for a single-pass
+copy.  `PRINT PEEK(49152)` must be `76` (the hook's JMP) once the hook is
+resident.
+
+Power-on then looks like this: switch on, the C64 banner appears with the
+hook already resident, `LOAD"@",8` opens the disk menu.  The boot loader has
+its own GHDL testbench (`make test-c64-sd-hook-boot`) covering the copy, the
+signature-last ordering, bad-magic rejection and the no-card watchdog.
+
 The whole chain can be regression-tested without hardware:
 
 ```bat
 make c64-sd-hook-test
 ```
 
-builds the hook PRG, generates a FAT16 card image from the test D64s and runs
-`tools\test_c64_sd_hook.py`: a small 6502 emulator executes the real PRG
-against the image with the `$DF00-$DF0D` window emulated, and every fastload
-is compared byte-for-byte against an independent Python D64 parse.
+builds the hook PRG, generates a FAT16 card image (with the hook embedded at
+LBA 8) from the test D64s and runs `tools\test_c64_sd_hook.py` twice: once
+with the PRG loaded the UART way plus install, and once in `--standalone`
+mode where RAM receives only what the boot loader would copy from LBA 8 and
+install never runs.  A small 6502 emulator executes the real PRG against the
+image with the `$DF00-$DF0D` window emulated, and every fastload is compared
+byte-for-byte against an independent Python D64 parse.
 
 The disk selector runs entirely on the C64: `sw\c64_sd_fat16_select.s` parses
 the FAT16 filesystem itself through the `$DF0D` raw-block window.  It handles
@@ -303,6 +370,20 @@ Build status:
 - Hardware test 2026-07-03: the combined hook works on the Tang board with
   the rebuilt bitstream: `LOAD"@",8` scans the card and mounts, `LOAD"*",8,1`
   and named loads run through the `$DF08-$DF0C` fastload port.
+- Added 2026-07-03: standalone boot loader `c64_sd_hook_boot_loader.vhd`
+  reads the hook from card LBA 8 into C64 RAM at power-up (no PC, no UART).
+  Verified by its own GHDL testbench and by `make c64-sd-hook-test`, whose
+  `--standalone` pass boots the emulated C64 purely from the card image.
+- Hardware test 2026-07-03: standalone boot works on the Tang board.  Power
+  on with the card in the external GPIO reader, the hook is resident without
+  any PC involvement, `LOAD"@",8` opens the menu, and the hook survives
+  resets because the boot loader re-copies it every time.  The C64 is held
+  for at most two seconds; a slow or late card gets a short re-pause copy
+  once `sd_init_done` arrives, and `$DF06` reports the loader status
+  (`PEEK(57094)` = 55 after a clean single-attempt copy).  An earlier
+  failed attempt turned out to be a stale generated `c64_roms.vhd` in the
+  build tree, i.e. an old KERNAL without the `$C000` stub - see the build
+  notes at the top.
 - Tooling 2026-07-02: `tools\d64\d64_to_sd_image_gui.py` and
   `tools\d64\make_raw_sd_d64_image.py` generate the expanded raw image format
   used by the FPGA backend.

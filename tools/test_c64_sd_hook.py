@@ -16,21 +16,35 @@ or simply:
 
 import json, sys
 
-if len(sys.argv) < 2:
+STANDALONE = "--standalone" in sys.argv[1:]
+argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+
+if not argv:
     raise SystemExit(__doc__)
 
-IMG = sys.argv[1]
+IMG = argv[0]
 image = open(IMG, "rb").read()
 
-PRG = sys.argv[2] if len(sys.argv) > 2 else "roms/diagnostics/sd_fastload_hook.prg"
+PRG = argv[1] if len(argv) > 1 else "roms/diagnostics/sd_fastload_hook.prg"
 SEG = PRG + ".segments.json"
 
 ram = bytearray(0x10000)
-prg = open(PRG, "rb").read()
-segmap = json.load(open(SEG))
-for seg in segmap["segments"]:
-    a, o, s = seg["address"], seg["offset"], seg["size"]
-    ram[a:a + s] = prg[o:o + s]
+if STANDALONE:
+    # Standalone boot path: RAM receives only what the FPGA boot loader
+    # would copy from the "C64HOOK1" block at LBA 8; install/RUN never runs.
+    base = 8 * 512
+    if image[base:base + 8] != b"C64HOOK1":
+        raise SystemExit("no C64HOOK1 image at LBA 8 (build the card with --hook-image)")
+    hook_addr = image[base + 8] | (image[base + 9] << 8)
+    hook_len = image[base + 10] | (image[base + 11] << 8)
+    ram[hook_addr:hook_addr + hook_len] = image[base + 16:base + 16 + hook_len]
+    print(f"standalone boot: {hook_len} bytes at ${hook_addr:04X} from LBA 8")
+else:
+    prg = open(PRG, "rb").read()
+    segmap = json.load(open(SEG))
+    for seg in segmap["segments"]:
+        a, o, s = seg["address"], seg["offset"], seg["size"]
+        ram[a:a + s] = prg[o:o + s]
 
 # --- D64 geometry ---
 SPT = [0] + [21]*17 + [19]*7 + [18]*6 + [17]*5   # SPT[track], tracks 1..35
@@ -328,10 +342,14 @@ def check(cond, msg):
 ram[0x2B] = 0x01; ram[0x2C] = 0x08          # TXTTAB $0801
 ram[0x2D] = 0x03; ram[0x2E] = 0x08          # VARTAB $0803
 
-# 1) install via SYS 49152
-res = run(0xC000)
-flush_output("install")
-check(ram[0x330] | (ram[0x331] << 8) != 0, "ILOAD written")
+# 1) install via SYS 49152 (skipped in standalone mode: the KERNAL guard
+#    stub enters at $C003 without install ever having run)
+if not STANDALONE:
+    res = run(0xC000)
+    flush_output("install")
+    check(ram[0x330] | (ram[0x331] << 8) != 0, "ILOAD written")
+else:
+    check(ram[0xC000] == 0x4C, "hook signature JMP present at $C000")
 
 # 2) fastload before any mount -> $E5 error + hint, carry set, A=$04
 res = call_load("*", 1)

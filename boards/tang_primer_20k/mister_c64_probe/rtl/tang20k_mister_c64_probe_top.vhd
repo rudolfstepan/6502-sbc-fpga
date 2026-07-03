@@ -201,9 +201,23 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal drive_req_addr  : std_logic_vector(31 downto 0) := (others => '0');
   signal sd_mounted      : std_logic := '0';
   signal sd_owner_fast   : std_logic := '0';
+  signal sd_owner_boot   : std_logic := '0';
   signal sd_xfer_busy    : std_logic := '0';
   signal sd_issue_read   : std_logic := '0';
   signal sd_issue_addr   : std_logic_vector(31 downto 0) := (others => '0');
+  signal boot_req_pend   : std_logic := '0';
+  signal boot_req_addr   : std_logic_vector(31 downto 0) := (others => '0');
+  signal boot_sd_sec_read : std_logic;
+  signal boot_sd_sec_read_addr : std_logic_vector(31 downto 0);
+  signal boot_sd_valid   : std_logic;
+  signal boot_sd_end     : std_logic;
+  signal boot_mem_we     : std_logic;
+  signal boot_mem_addr   : std_logic_vector(15 downto 0);
+  signal boot_mem_wdata  : std_logic_vector(7 downto 0);
+  signal boot_active     : std_logic;
+  signal boot_done       : std_logic;
+  signal boot_status     : std_logic_vector(7 downto 0);
+  signal c64_pause       : std_logic;
   signal pb_o      : unsigned(7 downto 0);
   signal pa2_o     : std_logic;
   signal pc2_n_o   : std_logic;
@@ -309,10 +323,15 @@ begin
       we   => ram_we_mux
     );
 
-  ram_addr <= unsigned(mon_mem_addr) when mon_active = '1' else c64_ram_addr;
-  ram_dout <= unsigned(mon_mem_wdata) when mon_active = '1' else c64_ram_dout;
-  ram_we_mux <= (mon_mem_req and mon_mem_we) when mon_active = '1' else
+  -- RAM port priority: SD boot loader (power-up only), UART monitor, C64.
+  ram_addr <= unsigned(boot_mem_addr) when boot_active = '1' else
+              unsigned(mon_mem_addr)  when mon_active = '1' else c64_ram_addr;
+  ram_dout <= unsigned(boot_mem_wdata) when boot_active = '1' else
+              unsigned(mon_mem_wdata)  when mon_active = '1' else c64_ram_dout;
+  ram_we_mux <= boot_mem_we when boot_active = '1' else
+                (mon_mem_req and mon_mem_we) when mon_active = '1' else
                 (c64_ram_we and c64_ram_ce);
+  c64_pause <= mon_active or boot_active;
 
   process(clk_c64)
   begin
@@ -332,7 +351,7 @@ begin
       clk32       => clk_c64,
       reset_n     => reset_n,
       bios        => "01",
-      pause       => mon_active,
+      pause       => c64_pause,
       pause_out   => pause_out,
       ps2_key     => ps2_key_mister,
       kbd_reset   => '0',
@@ -438,6 +457,9 @@ begin
   --   $DF04        write bit0=1 to mount/invalidate the cached sector
   --   $DF05        status: bit0 SD init done, bit1 drive active,
   --                bit2 D64 mounted, bit7 packed-D64 mode
+  --   $DF06        hook boot loader status: bit0 done, bit1 success,
+  --                bit2 header seen, bit3 gave up, bit4 SD seen,
+  --                bits7:5 copy attempts
   --
   -- Tang fastload sector window:
   --   $DF08        D64 track (1-based)
@@ -454,7 +476,7 @@ begin
   disk_io_ext <= '1' when cart_iof = '1' and cart_io_addr(7 downto 4) = "0000" else '0';
   process(cart_io_addr, sd_mount_lba_reg, sd_init_done, drive_led, sd_mounted,
           fast_track_reg, fast_sector_reg, fast_offset_reg, fast_ready,
-          fast_error, fast_state, fast_buf)
+          fast_error, fast_state, fast_buf, boot_status)
   begin
     case to_integer(cart_io_addr(3 downto 0)) is
       when 0 => disk_io_data <= sd_mount_lba_reg(7 downto 0);
@@ -462,6 +484,7 @@ begin
       when 2 => disk_io_data <= sd_mount_lba_reg(23 downto 16);
       when 3 => disk_io_data <= sd_mount_lba_reg(31 downto 24);
       when 5 => disk_io_data <= "1" & "0000" & sd_mounted & drive_led & sd_init_done;
+      when 6 => disk_io_data <= boot_status;
       when 8 => disk_io_data <= fast_track_reg;
       when 9 => disk_io_data <= "000" & fast_sector_reg;
       when 10 => disk_io_data <= std_logic_vector(fast_offset_reg);
@@ -491,8 +514,10 @@ begin
   -- neither side can steal the other's data stream mid-sector.
   sd_card_sec_read      <= sd_issue_read;
   sd_card_sec_read_addr <= sd_issue_addr;
-  drive_sd_sec_read_valid <= sd_sec_read_valid when sd_owner_fast = '0' and sd_xfer_busy = '1' else '0';
-  drive_sd_sec_read_end   <= sd_sec_read_end   when sd_owner_fast = '0' and sd_xfer_busy = '1' else '0';
+  drive_sd_sec_read_valid <= sd_sec_read_valid when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' else '0';
+  drive_sd_sec_read_end   <= sd_sec_read_end   when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' else '0';
+  boot_sd_valid <= sd_sec_read_valid when sd_owner_boot = '1' and sd_xfer_busy = '1' else '0';
+  boot_sd_end   <= sd_sec_read_end   when sd_owner_boot = '1' and sd_xfer_busy = '1' else '0';
 
   process(clk_c64)
   begin
@@ -515,15 +540,22 @@ begin
         fast_wait_cnt <= (others => '0');
         drive_req_pend <= '0';
         drive_req_addr <= (others => '0');
+        boot_req_pend <= '0';
+        boot_req_addr <= (others => '0');
         sd_owner_fast <= '0';
+        sd_owner_boot <= '0';
         sd_xfer_busy <= '0';
       else
-        -- Latch drive sector requests so they survive a running fastload
-        -- transfer; the drive FSM waits on sd_sec_read_end and never has
-        -- more than one request outstanding.
+        -- Latch drive and boot-loader sector requests so they survive a
+        -- running transfer; each requester waits on sd_sec_read_end and
+        -- never has more than one request outstanding.
         if drive_sd_sec_read = '1' then
           drive_req_pend <= '1';
           drive_req_addr <= drive_sd_sec_read_addr;
+        end if;
+        if boot_sd_sec_read = '1' then
+          boot_req_pend <= '1';
+          boot_req_addr <= boot_sd_sec_read_addr;
         end if;
 
         case fast_state is
@@ -616,19 +648,29 @@ begin
         end if;
 
         -- Grant the SD controller to one requester per whole transfer.
-        -- The drive wins ties: the 1541 DOS is timing-sensitive while the
+        -- The power-up boot loader goes first (the C64 is paused anyway),
+        -- then the drive: the 1541 DOS is timing-sensitive while the
         -- fastload window simply polls a little longer.
         if sd_xfer_busy = '0' then
-          if drive_req_pend = '1' then
+          if boot_req_pend = '1' then
+            sd_issue_read <= '1';
+            sd_issue_addr <= boot_req_addr;
+            sd_owner_fast <= '0';
+            sd_owner_boot <= '1';
+            sd_xfer_busy <= '1';
+            boot_req_pend <= '0';
+          elsif drive_req_pend = '1' then
             sd_issue_read <= '1';
             sd_issue_addr <= drive_req_addr;
             sd_owner_fast <= '0';
+            sd_owner_boot <= '0';
             sd_xfer_busy <= '1';
             drive_req_pend <= '0';
           elsif fast_req_pend = '1' then
             sd_issue_read <= '1';
             sd_issue_addr <= fast_req_addr;
             sd_owner_fast <= '1';
+            sd_owner_boot <= '0';
             sd_xfer_busy <= '1';
             fast_req_pend <= '0';
           end if;
@@ -746,6 +788,31 @@ begin
       mem_addr  => mon_mem_addr,
       mem_wdata => mon_mem_wdata,
       mem_ready => mon_mem_ready
+    );
+
+  -- Standalone power-up loader: pulls the resident SD hook from the card
+  -- (LBA 8, "C64HOOK1" header written by make_fat16_d64_card.py) into C64
+  -- RAM while the core is paused, so no UART upload is needed.
+  boot_i : entity work.c64_sd_hook_boot_loader
+    generic map (
+      HOOK_LBA => x"00000008",
+      CLK_HZ   => C64_CLK_HZ
+    )
+    port map (
+      clk     => clk_c64,
+      reset_n => reset_n,
+      sd_init_done           => sd_init_done,
+      sd_sec_read            => boot_sd_sec_read,
+      sd_sec_read_addr       => boot_sd_sec_read_addr,
+      sd_sec_read_data       => sd_sec_read_data,
+      sd_sec_read_data_valid => boot_sd_valid,
+      sd_sec_read_end        => boot_sd_end,
+      mem_we    => boot_mem_we,
+      mem_addr  => boot_mem_addr,
+      mem_wdata => boot_mem_wdata,
+      active    => boot_active,
+      done      => boot_done,
+      status    => boot_status
     );
 
   sd_i : sd_card_top
