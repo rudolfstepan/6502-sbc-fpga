@@ -6,6 +6,11 @@ use ieee.numeric_std.all;
 use work.sbc_pkg.all;
 
 entity sbc_t65_boot_top is
+  generic (
+    CLK_DIV     : natural := 2;
+    UART_CLK_HZ : positive := 50_000_000;
+    VGA_640     : boolean := false
+  );
   port (
     clk          : in  std_logic;
     reset_n      : in  std_logic;
@@ -20,6 +25,7 @@ entity sbc_t65_boot_top is
     vga_b       : out std_logic_vector(4 downto 0);
     vga_hs      : out std_logic;
     vga_vs      : out std_logic;
+    vga_de      : out std_logic;
 
     uart_rx       : in  std_logic;
     uart_tx_data  : out data_t;
@@ -321,6 +327,7 @@ begin
     );
 
   uart_rx_i : entity work.uart_rx_ser
+    generic map (CLK_HZ => UART_CLK_HZ)
     port map (
       clk     => clk,
       reset_n => cpu_reset_n,
@@ -333,6 +340,7 @@ begin
     port map (addr => char_addr, dout => char_data);
 
   vic_i : entity work.vic_vga
+    generic map (CLK_DIV => CLK_DIV, VGA_640 => VGA_640)
     port map (
       clk          => clk,
       reset_n      => cpu_reset_n,
@@ -350,7 +358,7 @@ begin
       vic_fetch_bitmap => vic_fetch_bitmap,
       vga_hs       => vga_hs,
       vga_vs       => vga_vs,
-      vga_de       => open,
+      vga_de       => vga_de,
       vga_r        => vga_r,
       vga_g        => vga_g,
       vga_b        => vga_b

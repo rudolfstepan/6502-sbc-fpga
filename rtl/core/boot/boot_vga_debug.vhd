@@ -11,7 +11,8 @@ entity boot_vga_debug is
     -- See vic_vga: false = legacy 640-in-858 hybrid, true = CEA-861 720x480p
     -- with the 640-wide content pillarboxed into the 720 active region. Must
     -- match the runtime VIC so the HDMI mode does not change at boot handoff.
-    CEA_480P : boolean := false
+    CEA_480P : boolean := false;
+    VGA_640  : boolean := false
   );
   port (
     clk             : in  std_logic;
@@ -60,12 +61,11 @@ architecture rtl of boot_vga_debug is
     if c then return a; else return b; end if;
   end function;
 
-  -- 858x525 total. See vic_vga for the CEA_480P pillarbox rationale.
-  constant H_TOT  : natural := 858;
+  constant H_TOT  : natural := ite(VGA_640, 800, 858);
   constant H_VIS  : natural := ite(CEA_480P, 720, 640);
   constant H_PILL : natural := ite(CEA_480P,  40,   0);
-  constant H_SS   : natural := ite(CEA_480P, 736, 671);
-  constant H_SE   : natural := ite(CEA_480P, 798, 767);
+  constant H_SS   : natural := ite(VGA_640, 656, ite(CEA_480P, 736, 671));
+  constant H_SE   : natural := ite(VGA_640, 752, ite(CEA_480P, 798, 767));
   constant H_CONT : natural := H_VIS - 2 * H_PILL;   -- 640
   constant H_CEND : natural := H_PILL + H_CONT;
 
@@ -99,6 +99,12 @@ architecture rtl of boot_vga_debug is
   signal char_addr : std_logic_vector(9 downto 0);
   signal char_data : data_t;
   signal pbit      : std_logic;
+  signal vga_r_i   : std_logic_vector(4 downto 0);
+  signal vga_g_i   : std_logic_vector(5 downto 0);
+  signal vga_b_i   : std_logic_vector(4 downto 0);
+  signal vga_hs_i  : std_logic;
+  signal vga_vs_i  : std_logic;
+  signal vga_de_i  : std_logic;
 
   function ascii(c : character) return data_t is
   begin
@@ -425,18 +431,39 @@ begin
 
   pbit <= (char_data(7 - cpix) xor char_code(7)) when in_text = '1' else '0';
 
-  vga_hs <= '0' when hc >= H_SS and hc < H_SE else '1';
-  vga_vs <= '0' when vc >= V_SS and vc < V_SE else '1';
-  vga_de <= active;
+  vga_hs_i <= '0' when hc >= H_SS and hc < H_SE else '1';
+  vga_vs_i <= '0' when vc >= V_SS and vc < V_SE else '1';
+  vga_de_i <= active;
 
-  vga_r <= "11111" when pbit = '1' and active = '1' and (boot_error = '1' or ram_test_error = '1' or no_card_timeout = '1') else
-           "11111" when pbit = '1' and active = '1' and crow = 2 else
-           "11100" when pbit = '1' and active = '1' else
-           "00000";
-  vga_g <= "000000" when pbit = '1' and active = '1' and (boot_error = '1' or ram_test_error = '1' or no_card_timeout = '1') else
-           "111111" when pbit = '1' and active = '1' else
-           "000000";
-  vga_b <= "00000" when pbit = '1' and active = '1' and (boot_error = '1' or ram_test_error = '1' or no_card_timeout = '1') else
-           "11111" when pbit = '1' and active = '1' and crow = 2 else
-           "00000";
+  vga_r_i <= "11111" when pbit = '1' and active = '1' and (boot_error = '1' or ram_test_error = '1' or no_card_timeout = '1') else
+             "11111" when pbit = '1' and active = '1' and crow = 2 else
+             "11100" when pbit = '1' and active = '1' else
+             "00000";
+  vga_g_i <= "000000" when pbit = '1' and active = '1' and (boot_error = '1' or ram_test_error = '1' or no_card_timeout = '1') else
+             "111111" when pbit = '1' and active = '1' else
+             "000000";
+  vga_b_i <= "00000" when pbit = '1' and active = '1' and (boot_error = '1' or ram_test_error = '1' or no_card_timeout = '1') else
+             "11111" when pbit = '1' and active = '1' and crow = 2 else
+             "00000";
+
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if reset_n = '0' then
+        vga_r  <= (others => '0');
+        vga_g  <= (others => '0');
+        vga_b  <= (others => '0');
+        vga_hs <= '1';
+        vga_vs <= '1';
+        vga_de <= '0';
+      else
+        vga_r  <= vga_r_i;
+        vga_g  <= vga_g_i;
+        vga_b  <= vga_b_i;
+        vga_hs <= vga_hs_i;
+        vga_vs <= vga_vs_i;
+        vga_de <= vga_de_i;
+      end if;
+    end if;
+  end process;
 end architecture;

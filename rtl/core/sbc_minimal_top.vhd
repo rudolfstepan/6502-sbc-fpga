@@ -20,7 +20,9 @@ use work.sbc_pkg.all;
 entity sbc_minimal_top is
   generic (
     ROM_INIT_FILE : string  := "";
-    CLK_DIV       : natural := 2   -- vic_vga pixel-clock divisor (2=50 MHz, 1=27 MHz)
+    CLK_DIV       : natural := 2;  -- vic_vga pixel-clock divisor (2=50 MHz, 1=25/27 MHz)
+    UART_CLK_HZ   : positive := 50_000_000;
+    VGA_640       : boolean := false
   );
   port (
     clk      : in  std_logic;
@@ -354,6 +356,7 @@ begin
     );
 
   uart_rx_i : entity work.uart_rx_ser
+    generic map (CLK_HZ => UART_CLK_HZ)
     port map (
       clk     => clk,
       reset_n => reset_n,
@@ -367,7 +370,7 @@ begin
     port map (addr => char_addr, dout => char_data);
 
   vic_i : entity work.vic_vga
-    generic map (CLK_DIV => CLK_DIV)
+    generic map (CLK_DIV => CLK_DIV, VGA_640 => VGA_640)
     port map (
       clk          => clk,
       reset_n      => reset_n,

@@ -37,7 +37,8 @@ entity vic_vga is
     --   true  = exact CEA-861 720x480p (VIC 3): the native 640-wide content is
     --           pillarboxed into the standard 720 active region so HDMI capture
     --           devices recognise a known mode (Tang Primer 20K).
-    CEA_480P : boolean := false
+    CEA_480P : boolean := false;
+    VGA_640  : boolean := false
   );
   port (
     clk          : in  std_logic;
@@ -100,13 +101,11 @@ architecture rtl of vic_vga is
     if c then return a; else return b; end if;
   end function;
 
-  -- 858x525 total @ pixel clock. At 27 MHz -> 59.94 Hz (CEA-861 480p totals).
-  -- H_freq = 27 MHz / 858 = 31.47 kHz,  V_freq = 31468 / 525 = 59.94 Hz
-  constant H_TOT  : natural := 858;
+  constant H_TOT  : natural := ite(VGA_640, 800, 858);
   constant H_VIS  : natural := ite(CEA_480P, 720, 640);  -- active / DE width
   constant H_PILL : natural := ite(CEA_480P,  40,   0);  -- pillarbox border L/R
-  constant H_SS   : natural := ite(CEA_480P, 736, 671);  -- H-Sync-Start
-  constant H_SE   : natural := ite(CEA_480P, 798, 767);  -- H-Sync-Ende
+  constant H_SS   : natural := ite(VGA_640, 656, ite(CEA_480P, 736, 671));
+  constant H_SE   : natural := ite(VGA_640, 752, ite(CEA_480P, 798, 767));
   -- Native content width (40 chars * 16 px = 640) carved out of the active
   -- region: [H_PILL, H_CEND).  H_CONT stays 640 for the renderer geometry.
   constant H_CONT : natural := H_VIS - 2 * H_PILL;

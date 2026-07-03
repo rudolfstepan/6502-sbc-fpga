@@ -21,6 +21,7 @@ architecture sim of tb_sbc_t65_boot_shadow is
   signal vga_b         : std_logic_vector(4 downto 0);
   signal vga_hs        : std_logic;
   signal vga_vs        : std_logic;
+  signal vga_de        : std_logic;
   signal uart_tx_data  : data_t;
   signal uart_tx_valid : std_logic;
   signal via_portb     : data_t;
@@ -61,6 +62,7 @@ begin
       vga_b         => vga_b,
       vga_hs        => vga_hs,
       vga_vs        => vga_vs,
+      vga_de        => vga_de,
       uart_rx       => '1',
       uart_tx_data  => uart_tx_data,
       uart_tx_valid => uart_tx_valid,
