@@ -4,12 +4,17 @@ use ieee.numeric_std.all;
 
 -- Raw SD-card D64 sector source for the Tang MiSTer C64 probe.
 --
--- Version 1 deliberately avoids FAT32 to keep the MiSTer C64 + 1541 + SID
--- design inside the Tang 20K.  The raw image stores one 256-byte D64 sector in
--- the lower half of each 512-byte SD block starting at RAW_D64_LBA.
+-- Version 1 deliberately avoids in-fabric FAT parsing to keep the MiSTer C64 +
+-- 1541 + SID design inside the Tang 20K.  The default raw image stores one
+-- 256-byte D64 sector in the lower half of each 512-byte SD block starting at
+-- RAW_D64_LBA.  PACKED_D64_FILE instead treats RAW_D64_LBA as the start of a
+-- normal contiguous .d64 file and selects the lower/upper SD-block half.
 entity c1541_sd_d64_sector_source is
   generic (
     RAW_D64_LBA       : std_logic_vector(31 downto 0) := x"00000000";
+    -- false: expanded raw layout, one D64 sector per SD block, lower half only.
+    -- true:  normal contiguous .d64 file, two 256-byte D64 sectors per SD block.
+    PACKED_D64_FILE    : boolean := false;
     SD_BYTE_ADDRESSING : boolean := false;
     CLK_HZ             : integer := 32000000;
     BAUD               : integer := 230400;
@@ -31,6 +36,9 @@ entity c1541_sd_d64_sector_source is
     sd_sec_read_data       : in  std_logic_vector(7 downto 0);
     sd_sec_read_data_valid : in  std_logic;
     sd_sec_read_end        : in  std_logic;
+
+    mount_lba    : in std_logic_vector(31 downto 0);
+    mount_strobe : in std_logic;
 
     uart_tx : out std_logic
   );
@@ -63,7 +71,9 @@ architecture rtl of c1541_sd_d64_sector_source is
   signal map_valid : std_logic;
   signal map_index : std_logic_vector(9 downto 0);
   signal map_error : std_logic_vector(7 downto 0);
+  signal active_d64_lba : unsigned(31 downto 0) := (others => '0');
   signal target_lba : unsigned(31 downto 0) := (others => '0');
+  signal fetch_upper_half : std_logic := '0';
   signal raw_pos : unsigned(9 downto 0) := (others => '0');
   signal sd_read_r : std_logic := '0';
   signal copy_idx : unsigned(7 downto 0) := (others => '0');
@@ -176,7 +186,9 @@ begin
         loaded_sector <= (others => '1');
         fetch_track <= (others => '0');
         fetch_sector <= (others => '0');
+        active_d64_lba <= unsigned(RAW_D64_LBA);
         target_lba <= (others => '0');
+        fetch_upper_half <= '0';
         raw_pos <= (others => '0');
         copy_idx <= (others => '0');
         raw_valid_count <= (others => '0');
@@ -190,6 +202,18 @@ begin
         sd_read_r <= '0';
         utx_valid <= '0';
 
+        if mount_strobe = '1' then
+          active_d64_lba <= unsigned(mount_lba);
+          mounted <= '1';
+          sd_read_r <= '0';
+          loaded_track <= (others => '1');
+          loaded_sector <= (others => '1');
+          if sd_init_done = '1' then
+            state <= S_READY;
+          else
+            state <= S_WAIT_SD;
+          end if;
+        else
         case state is
           when S_WAIT_SD =>
             if sd_init_done = '1' then
@@ -211,7 +235,14 @@ begin
 
           when S_DRV_REQ =>
             if map_valid = '1' then
-              target_lba <= unsigned(RAW_D64_LBA) + resize(unsigned(map_index), 32);
+              if PACKED_D64_FILE then
+                target_lba <= active_d64_lba
+                            + resize(unsigned(map_index(9 downto 1)), 32);
+                fetch_upper_half <= map_index(0);
+              else
+                target_lba <= active_d64_lba + resize(unsigned(map_index), 32);
+                fetch_upper_half <= '0';
+              end if;
               raw_pos <= (others => '0');
               copy_idx <= (others => '0');
               raw_valid_count <= (others => '0');
@@ -232,7 +263,7 @@ begin
 
           when S_DRV_WAIT =>
             if sd_sec_read_data_valid = '1' then
-              if raw_pos(8) = '0' then
+              if raw_pos(8) = fetch_upper_half then
                 sec_buf(to_integer(raw_pos(7 downto 0))) <= sd_sec_read_data;
                 if raw_pos(7 downto 0) >= 2 and raw_pos(7 downto 0) < 16 then
                   dbg_buf(to_integer(raw_pos(3 downto 0))) <= sd_sec_read_data;
@@ -250,6 +281,7 @@ begin
           when others =>
             state <= S_WAIT_SD;
         end case;
+        end if;
 
         if dbg_pending = '1' and utx_ready = '1' and utx_valid = '0' then
           utx_data <= dbg_char(dbg_pos, dbg_buf);

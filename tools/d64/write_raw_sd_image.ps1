@@ -10,6 +10,36 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Assert-Admin {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw "Raw disk writes require an elevated PowerShell session. Start PowerShell as Administrator."
+  }
+}
+
+function Dismount-TargetVolumes {
+  param([int]$Number)
+
+  $parts = Get-Partition -DiskNumber $Number -ErrorAction SilentlyContinue
+  foreach ($part in $parts) {
+    if ($part.DriveLetter) {
+      Write-Host "Dismounting volume $($part.DriveLetter):"
+      try {
+        Dismount-Volume -DriveLetter $part.DriveLetter -Force -Confirm:$false -ErrorAction Stop
+      }
+      catch {
+        Write-Host "Could not dismount $($part.DriveLetter): $($_.Exception.Message)"
+      }
+
+      Write-Host "Removing drive letter $($part.DriveLetter):"
+      Remove-PartitionAccessPath -DiskNumber $Number -PartitionNumber $part.PartitionNumber -AccessPath "$($part.DriveLetter):\" -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+Assert-Admin
+
 $imagePath = (Resolve-Path -LiteralPath $Image).Path
 $disk = Get-Disk -Number $DiskNumber
 
@@ -35,39 +65,46 @@ $disk | Format-List Number,FriendlyName,BusType,Size,PartitionStyle,IsBoot,IsSys
 Write-Host "Image: $imagePath"
 Write-Host "Bytes: $($imageBytes.Length)"
 
-$parts = Get-Partition -DiskNumber $DiskNumber -ErrorAction SilentlyContinue
-foreach ($part in $parts) {
-  if ($part.DriveLetter) {
-    Write-Host "Removing drive letter $($part.DriveLetter):"
-    Remove-PartitionAccessPath -DiskNumber $DiskNumber -PartitionNumber $part.PartitionNumber -AccessPath "$($part.DriveLetter):\" -ErrorAction SilentlyContinue
-  }
-}
-
 $wasOffline = $disk.IsOffline
 $wasReadOnly = $disk.IsReadOnly
+$offlineSucceeded = $false
 
 if ($disk.IsReadOnly) {
   Write-Host "Clearing read-only flag"
   Set-Disk -Number $DiskNumber -IsReadOnly $false
 }
 
+Dismount-TargetVolumes -Number $DiskNumber
+
 if (-not $disk.IsOffline) {
   Write-Host "Setting disk offline for raw write"
-  Set-Disk -Number $DiskNumber -IsOffline $true
-  Start-Sleep -Milliseconds 500
+  try {
+    Set-Disk -Number $DiskNumber -IsOffline $true
+    $offlineSucceeded = $true
+    Start-Sleep -Milliseconds 500
+  }
+  catch {
+    Write-Host "Could not set disk offline, trying raw write after volume dismount: $($_.Exception.Message)"
+  }
 }
 
 $path = "\\.\PhysicalDrive$DiskNumber"
-$fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+$fs = $null
 try {
+  $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
   $fs.Write($imageBytes, 0, $imageBytes.Length)
   $fs.Flush($true)
 }
+catch {
+  throw "Raw write to $path failed: $($_.Exception.Message). Close Explorer/windows using the SD card, keep the drive letter removed, and run this script from an elevated PowerShell session."
+}
 finally {
-  $fs.Dispose()
+  if ($fs) {
+    $fs.Dispose()
+  }
 }
 
-if (-not $wasOffline) {
+if (-not $wasOffline -and $offlineSucceeded) {
   Write-Host "Setting disk online again"
   Set-Disk -Number $DiskNumber -IsOffline $false
 }

@@ -10,8 +10,13 @@ entity mister_c1541_iec is
     GCR_TURBO    : integer := 1;
     -- Disk image backend: 0 = built-in test image, 1 = .d64 in external SDRAM,
     -- 2 = virtual-1541 sectors over UART (tools/virtual_1541 CMD_SECTOR),
-    -- 3 = first FAT32 root *.D64 on SD card.
-    D64_BACKEND  : integer := 0
+    -- 3 = SD-card D64 sector source.
+    D64_BACKEND  : integer := 0;
+    -- Used only when D64_BACKEND = 3.  SD_PACKED_D64_FILE=false keeps the
+    -- original expanded raw layout; true reads a normal contiguous .d64 file
+    -- starting at SD_D64_LBA.
+    SD_D64_LBA : std_logic_vector(31 downto 0) := x"00000000";
+    SD_PACKED_D64_FILE : boolean := false
   );
   port (
     clk     : in  std_logic;
@@ -44,6 +49,10 @@ entity mister_c1541_iec is
     sd_sec_read_data_valid : in  std_logic := '0';
     sd_sec_read_end        : in  std_logic := '0';
 
+    -- Runtime SD mount control (used only when D64_BACKEND = 3).
+    sd_mount_lba    : in std_logic_vector(31 downto 0) := (others => '0');
+    sd_mount_strobe : in std_logic := '0';
+
     led : out std_logic
   );
 end entity;
@@ -71,6 +80,7 @@ architecture rtl of mister_c1541_iec is
   signal mtr      : std_logic;
   signal freq     : std_logic_vector(1 downto 0);
   signal drive_reset : std_logic;
+  signal tr00_sense_n : std_logic;
   signal raw_drive_clk_pull_n  : std_logic := '1';
   signal raw_drive_data_pull_n : std_logic := '1';
   signal iec_atn_sync  : std_logic_vector(2 downto 0) := (others => '1');
@@ -159,6 +169,7 @@ architecture rtl of mister_c1541_iec is
   signal img_valid  : std_logic;
 begin
   drive_reset <= not reset_n;
+  tr00_sense_n <= '1' when track_num /= 0 else '0';
   drive_clk_pull_n  <= '1' when drive_reset = '1' else raw_drive_clk_pull_n;
   drive_data_pull_n <= '1' when drive_reset = '1' else raw_drive_data_pull_n;
 
@@ -259,7 +270,7 @@ begin
       sync_n       => gcr_sync_n,
       byte_n       => gcr_byte_n,
       wps_n        => '1',
-      tr00_sense_n => '1' when track_num /= 0 else '0',
+      tr00_sense_n => tr00_sense_n,
       act          => led
     );
 
@@ -351,6 +362,8 @@ begin
   gen_sd : if D64_BACKEND = 3 generate
     img_i : entity work.c1541_sd_d64_sector_source
       generic map (
+        RAW_D64_LBA => SD_D64_LBA,
+        PACKED_D64_FILE => SD_PACKED_D64_FILE,
         CLK_HZ => CLK_HZ,
         BAUD   => BAUD
       )
@@ -368,6 +381,8 @@ begin
         sd_sec_read_data       => sd_sec_read_data,
         sd_sec_read_data_valid => sd_sec_read_data_valid,
         sd_sec_read_end        => sd_sec_read_end,
+        mount_lba              => sd_mount_lba,
+        mount_strobe           => sd_mount_strobe,
         uart_tx                => uart_tx
       );
     sdram_addr <= (others => '0');

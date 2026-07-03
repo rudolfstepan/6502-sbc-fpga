@@ -108,8 +108,11 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal ram_addr : unsigned(15 downto 0);
   signal ram_din  : unsigned(7 downto 0);
   signal ram_dout : unsigned(7 downto 0);
-  signal ram_ce   : std_logic;
-  signal ram_we   : std_logic;
+  signal ram_we_mux : std_logic;
+  signal c64_ram_addr : unsigned(15 downto 0);
+  signal c64_ram_dout : unsigned(7 downto 0);
+  signal c64_ram_ce   : std_logic;
+  signal c64_ram_we   : std_logic;
 
   signal raw_hs, raw_vs : std_logic;
   signal sync_hs, sync_vs : std_logic;
@@ -133,15 +136,74 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal drive_led      : std_logic;
   signal ps2_key_mister : std_logic_vector(10 downto 0);
   signal sd_init_done   : std_logic;
-  signal sd_sec_read    : std_logic;
-  signal sd_sec_read_addr : std_logic_vector(31 downto 0);
+  signal sd_card_sec_read      : std_logic;
+  signal sd_card_sec_read_addr : std_logic_vector(31 downto 0);
   signal sd_sec_read_data : std_logic_vector(7 downto 0);
   signal sd_sec_read_valid : std_logic;
   signal sd_sec_read_end : std_logic;
+  signal drive_sd_sec_read    : std_logic;
+  signal drive_sd_sec_read_addr : std_logic_vector(31 downto 0);
+  signal drive_sd_sec_read_valid : std_logic;
+  signal drive_sd_sec_read_end : std_logic;
 
   signal pause_out : std_logic;
   signal nmi_ack   : std_logic;
   signal dma_din   : unsigned(7 downto 0);
+  constant MONITOR_MAGIC0 : std_logic_vector(7 downto 0) := x"A5";
+  constant MONITOR_MAGIC1 : std_logic_vector(7 downto 0) := x"5A";
+  constant MONITOR_MAGIC2 : std_logic_vector(7 downto 0) := x"C3";
+  constant MONITOR_MAGIC3 : std_logic_vector(7 downto 0) := x"3C";
+  signal mon_rx_data    : std_logic_vector(7 downto 0);
+  signal mon_rx_valid   : std_logic;
+  signal mon_tx_data    : std_logic_vector(7 downto 0);
+  signal mon_tx_valid   : std_logic;
+  signal mon_tx_busy    : std_logic;
+  signal mon_uart_tx    : std_logic;
+  signal mon_active     : std_logic;
+  signal mon_enter      : std_logic := '0';
+  signal mon_magic_idx  : integer range 0 to 3 := 0;
+  signal mon_mem_req    : std_logic;
+  signal mon_mem_we     : std_logic;
+  signal mon_mem_addr   : std_logic_vector(15 downto 0);
+  signal mon_mem_wdata  : std_logic_vector(7 downto 0);
+  signal mon_mem_ready  : std_logic := '0';
+  signal mon_mem_req_d  : std_logic := '0';
+  signal drive_uart_tx  : std_logic;
+  signal cart_io_addr  : unsigned(15 downto 0);
+  signal cart_io_wdata : unsigned(7 downto 0);
+  signal cart_io_we    : std_logic;
+  signal cart_ioe      : std_logic;
+  signal cart_iof      : std_logic;
+  signal disk_io_ext   : std_logic;
+  signal disk_io_data  : std_logic_vector(7 downto 0);
+  signal sd_mount_lba_reg : std_logic_vector(31 downto 0) := (others => '0');
+  signal sd_mount_strobe  : std_logic := '0';
+  type fast_buf_t is array(0 to 255) of std_logic_vector(7 downto 0);
+  signal fast_buf : fast_buf_t := (others => (others => '0'));
+  type fast_state_t is (FAST_IDLE, FAST_WAIT);
+  signal fast_state : fast_state_t := FAST_IDLE;
+  signal fast_track_reg  : std_logic_vector(7 downto 0) := x"12";
+  signal fast_sector_reg : std_logic_vector(4 downto 0) := "00001";
+  signal fast_offset_reg : unsigned(7 downto 0) := (others => '0');
+  signal fast_ready      : std_logic := '0';
+  signal fast_error      : std_logic := '0';
+  signal fast_map_valid  : std_logic;
+  signal fast_map_index  : std_logic_vector(9 downto 0);
+  signal fast_map_error  : std_logic_vector(7 downto 0);
+  signal fast_upper_half : std_logic := '0';
+  signal fast_raw_pos    : unsigned(9 downto 0) := (others => '0');
+  -- ~0.53 s at 31.5 MHz; well above a worst-case SPI sector read.
+  constant FAST_TIMEOUT  : unsigned(23 downto 0) := (others => '1');
+  signal fast_wait_cnt   : unsigned(23 downto 0) := (others => '0');
+  signal fast_req_pend   : std_logic := '0';
+  signal fast_req_addr   : std_logic_vector(31 downto 0) := (others => '0');
+  signal drive_req_pend  : std_logic := '0';
+  signal drive_req_addr  : std_logic_vector(31 downto 0) := (others => '0');
+  signal sd_mounted      : std_logic := '0';
+  signal sd_owner_fast   : std_logic := '0';
+  signal sd_xfer_busy    : std_logic := '0';
+  signal sd_issue_read   : std_logic := '0';
+  signal sd_issue_addr   : std_logic_vector(31 downto 0) := (others => '0');
   signal pb_o      : unsigned(7 downto 0);
   signal pa2_o     : std_logic;
   signal pc2_n_o   : std_logic;
@@ -150,6 +212,7 @@ architecture rtl of tang20k_mister_c64_probe_top is
   signal cass_motor, cass_write : std_logic;
 begin
   pa_en <= '1';
+  uart_tx <= mon_uart_tx when mon_active = '1' else drive_uart_tx;
 
   -- The MiSTer/fpga64 core expects a 32 MHz master clock. Running it from the
   -- 27 MHz HDMI pixel clock makes CPU, VIC, CIA timers and SID about 16% slow.
@@ -243,24 +306,42 @@ begin
       addr => ram_addr,
       data => ram_dout,
       q    => ram_din,
-      we   => ram_we and ram_ce
+      we   => ram_we_mux
     );
+
+  ram_addr <= unsigned(mon_mem_addr) when mon_active = '1' else c64_ram_addr;
+  ram_dout <= unsigned(mon_mem_wdata) when mon_active = '1' else c64_ram_dout;
+  ram_we_mux <= (mon_mem_req and mon_mem_we) when mon_active = '1' else
+                (c64_ram_we and c64_ram_ce);
+
+  process(clk_c64)
+  begin
+    if rising_edge(clk_c64) then
+      if reset_n = '0' then
+        mon_mem_req_d <= '0';
+        mon_mem_ready <= '0';
+      else
+        mon_mem_req_d <= mon_active and mon_mem_req;
+        mon_mem_ready <= mon_mem_req_d;
+      end if;
+    end if;
+  end process;
 
   c64_i : entity work.fpga64_sid_iec
     port map (
       clk32       => clk_c64,
       reset_n     => reset_n,
       bios        => "01",
-      pause       => '0',
+      pause       => mon_active,
       pause_out   => pause_out,
       ps2_key     => ps2_key_mister,
       kbd_reset   => '0',
       shift_mod   => "00",
-      ramAddr     => ram_addr,
+      ramAddr     => c64_ram_addr,
       ramDin      => ram_din,
-      ramDout     => ram_dout,
-      ramCE       => ram_ce,
-      ramWE       => ram_we,
+      ramDout     => c64_ram_dout,
+      ramCE       => c64_ram_ce,
+      ramWE       => c64_ram_we,
       io_cycle    => open,
       ext_cycle   => open,
       refresh     => open,
@@ -278,16 +359,19 @@ begin
       game        => '1',
       exrom       => '1',
       io_rom      => '0',
-      io_ext      => '0',
-      io_data     => (others => '0'),
+      io_ext      => disk_io_ext,
+      io_data     => unsigned(disk_io_data),
       irq_n       => '1',
       nmi_n       => '1',
       nmi_ack     => nmi_ack,
       romL        => open,
       romH        => open,
       UMAXromH    => open,
-      IOE         => open,
-      IOF         => open,
+      IOE         => cart_ioe,
+      IOF         => cart_iof,
+      cart_io_addr  => cart_io_addr,
+      cart_io_wdata => cart_io_wdata,
+      cart_io_we    => cart_io_we,
       freeze_key  => open,
       mod_key     => open,
       tape_play   => open,
@@ -349,13 +433,220 @@ begin
   iec_clk_n  <= c64_iec_clk_o and drive_clk_pull_n;
   iec_data_n <= c64_iec_data_o and drive_data_pull_n;
 
+  -- Minimal SD D64 mount register window in C64 I/O2:
+  --   $DF00-$DF03  selected .d64 start LBA, little-endian
+  --   $DF04        write bit0=1 to mount/invalidate the cached sector
+  --   $DF05        status: bit0 SD init done, bit1 drive active,
+  --                bit2 D64 mounted, bit7 packed-D64 mode
+  --
+  -- Tang fastload sector window:
+  --   $DF08        D64 track (1-based)
+  --   $DF09        D64 sector
+  --   $DF0A        byte offset inside buffered sector
+  --   $DF0B        write bit0=1 to read sector, bit1=1 to clear error
+  --                read status: bit0 SD ready, bit1 busy, bit2 sector ready,
+  --                bit3 error, bit4 D64 mounted, bit7 packed-D64 mode
+  --   $DF0C        buffered sector byte at $DF0A
+  --   $DF0D        write bit0=1 to read the raw 512-byte SD block at the
+  --                $DF00-$DF03 LBA (no mount required), bit1 selects the
+  --                buffered 256-byte half; poll $DF0B, read via $DF0A/$DF0C.
+  --                Lets the C64 parse the FAT16 filesystem itself.
+  disk_io_ext <= '1' when cart_iof = '1' and cart_io_addr(7 downto 4) = "0000" else '0';
+  process(cart_io_addr, sd_mount_lba_reg, sd_init_done, drive_led, sd_mounted,
+          fast_track_reg, fast_sector_reg, fast_offset_reg, fast_ready,
+          fast_error, fast_state, fast_buf)
+  begin
+    case to_integer(cart_io_addr(3 downto 0)) is
+      when 0 => disk_io_data <= sd_mount_lba_reg(7 downto 0);
+      when 1 => disk_io_data <= sd_mount_lba_reg(15 downto 8);
+      when 2 => disk_io_data <= sd_mount_lba_reg(23 downto 16);
+      when 3 => disk_io_data <= sd_mount_lba_reg(31 downto 24);
+      when 5 => disk_io_data <= "1" & "0000" & sd_mounted & drive_led & sd_init_done;
+      when 8 => disk_io_data <= fast_track_reg;
+      when 9 => disk_io_data <= "000" & fast_sector_reg;
+      when 10 => disk_io_data <= std_logic_vector(fast_offset_reg);
+      when 11 =>
+        if fast_state = FAST_IDLE then
+          disk_io_data <= "1" & "00" & sd_mounted & fast_error & fast_ready & "0" & sd_init_done;
+        else
+          disk_io_data <= "1" & "00" & sd_mounted & fast_error & fast_ready & "1" & sd_init_done;
+        end if;
+      when 12 => disk_io_data <= fast_buf(to_integer(fast_offset_reg));
+      when others => disk_io_data <= (others => '0');
+    end case;
+  end process;
+
+  fast_map_i : entity work.d64_sector_map
+    port map (
+      track        => fast_track_reg,
+      sector       => "000" & fast_sector_reg,
+      valid        => fast_map_valid,
+      sector_index => fast_map_index,
+      error_code   => fast_map_error
+    );
+
+  -- SD access arbiter: the 1541 drive backend and the $DF08 fastload window
+  -- both read whole 512-byte blocks from sd_card_top.  Requests are latched
+  -- and the controller is granted to one owner per complete transfer, so
+  -- neither side can steal the other's data stream mid-sector.
+  sd_card_sec_read      <= sd_issue_read;
+  sd_card_sec_read_addr <= sd_issue_addr;
+  drive_sd_sec_read_valid <= sd_sec_read_valid when sd_owner_fast = '0' and sd_xfer_busy = '1' else '0';
+  drive_sd_sec_read_end   <= sd_sec_read_end   when sd_owner_fast = '0' and sd_xfer_busy = '1' else '0';
+
+  process(clk_c64)
+  begin
+    if rising_edge(clk_c64) then
+      sd_mount_strobe <= '0';
+      sd_issue_read <= '0';
+      if reset_n = '0' then
+        sd_mount_lba_reg <= (others => '0');
+        sd_mounted <= '0';
+        fast_state <= FAST_IDLE;
+        fast_track_reg <= x"12";
+        fast_sector_reg <= "00001";
+        fast_offset_reg <= (others => '0');
+        fast_ready <= '0';
+        fast_error <= '0';
+        fast_req_pend <= '0';
+        fast_req_addr <= (others => '0');
+        fast_upper_half <= '0';
+        fast_raw_pos <= (others => '0');
+        fast_wait_cnt <= (others => '0');
+        drive_req_pend <= '0';
+        drive_req_addr <= (others => '0');
+        sd_owner_fast <= '0';
+        sd_xfer_busy <= '0';
+      else
+        -- Latch drive sector requests so they survive a running fastload
+        -- transfer; the drive FSM waits on sd_sec_read_end and never has
+        -- more than one request outstanding.
+        if drive_sd_sec_read = '1' then
+          drive_req_pend <= '1';
+          drive_req_addr <= drive_sd_sec_read_addr;
+        end if;
+
+        case fast_state is
+          when FAST_IDLE =>
+            null;
+
+          when FAST_WAIT =>
+            fast_wait_cnt <= fast_wait_cnt + 1;
+            if sd_owner_fast = '1' and sd_xfer_busy = '1' then
+              if sd_sec_read_valid = '1' then
+                if fast_raw_pos(8) = fast_upper_half then
+                  fast_buf(to_integer(fast_raw_pos(7 downto 0))) <= sd_sec_read_data;
+                end if;
+                fast_raw_pos <= fast_raw_pos + 1;
+              end if;
+              if sd_sec_read_end = '1' then
+                fast_ready <= '1';
+                fast_state <= FAST_IDLE;
+              end if;
+            end if;
+            if fast_wait_cnt = FAST_TIMEOUT then
+              fast_error <= '1';
+              fast_req_pend <= '0';
+              fast_state <= FAST_IDLE;
+            end if;
+        end case;
+
+        if cart_io_we = '1' and cart_iof = '1' and cart_io_addr(7 downto 4) = "0000" then
+          case to_integer(cart_io_addr(3 downto 0)) is
+            when 0 => sd_mount_lba_reg(7 downto 0) <= std_logic_vector(cart_io_wdata);
+            when 1 => sd_mount_lba_reg(15 downto 8) <= std_logic_vector(cart_io_wdata);
+            when 2 => sd_mount_lba_reg(23 downto 16) <= std_logic_vector(cart_io_wdata);
+            when 3 => sd_mount_lba_reg(31 downto 24) <= std_logic_vector(cart_io_wdata);
+            when 4 =>
+              if cart_io_wdata(0) = '1' then
+                sd_mount_strobe <= '1';
+                sd_mounted <= '1';
+              end if;
+            when 8 =>
+              fast_track_reg <= std_logic_vector(cart_io_wdata);
+            when 9 =>
+              fast_sector_reg <= std_logic_vector(cart_io_wdata(4 downto 0));
+            when 10 =>
+              fast_offset_reg <= cart_io_wdata;
+            when 11 =>
+              if cart_io_wdata(1) = '1' then
+                fast_error <= '0';
+              end if;
+              if cart_io_wdata(0) = '1' and fast_state = FAST_IDLE then
+                fast_ready <= '0';
+                -- Refuse to start while an aborted fastload transfer is
+                -- still draining, so its tail cannot be mistaken for the
+                -- new sector's data.
+                if sd_init_done = '1' and sd_mounted = '1'
+                   and fast_map_valid = '1'
+                   and not (sd_xfer_busy = '1' and sd_owner_fast = '1') then
+                  fast_req_addr <= std_logic_vector(unsigned(sd_mount_lba_reg)
+                                 + resize(unsigned(fast_map_index(9 downto 1)), 32));
+                  fast_upper_half <= fast_map_index(0);
+                  fast_req_pend <= '1';
+                  fast_raw_pos <= (others => '0');
+                  fast_wait_cnt <= (others => '0');
+                  fast_error <= '0';
+                  fast_state <= FAST_WAIT;
+                else
+                  fast_error <= '1';
+                end if;
+              end if;
+            when 13 =>
+              -- Raw block read: LBA straight from $DF00-$DF03 instead of the
+              -- track/sector map, so the mount guard does not apply here.
+              if cart_io_wdata(0) = '1' and fast_state = FAST_IDLE then
+                fast_ready <= '0';
+                if sd_init_done = '1'
+                   and not (sd_xfer_busy = '1' and sd_owner_fast = '1') then
+                  fast_req_addr <= sd_mount_lba_reg;
+                  fast_upper_half <= cart_io_wdata(1);
+                  fast_req_pend <= '1';
+                  fast_raw_pos <= (others => '0');
+                  fast_wait_cnt <= (others => '0');
+                  fast_error <= '0';
+                  fast_state <= FAST_WAIT;
+                else
+                  fast_error <= '1';
+                end if;
+              end if;
+            when others =>
+              null;
+          end case;
+        end if;
+
+        -- Grant the SD controller to one requester per whole transfer.
+        -- The drive wins ties: the 1541 DOS is timing-sensitive while the
+        -- fastload window simply polls a little longer.
+        if sd_xfer_busy = '0' then
+          if drive_req_pend = '1' then
+            sd_issue_read <= '1';
+            sd_issue_addr <= drive_req_addr;
+            sd_owner_fast <= '0';
+            sd_xfer_busy <= '1';
+            drive_req_pend <= '0';
+          elsif fast_req_pend = '1' then
+            sd_issue_read <= '1';
+            sd_issue_addr <= fast_req_addr;
+            sd_owner_fast <= '1';
+            sd_xfer_busy <= '1';
+            fast_req_pend <= '0';
+          end if;
+        elsif sd_sec_read_end = '1' then
+          sd_xfer_busy <= '0';
+        end if;
+      end if;
+    end if;
+  end process;
+
   drive_i : entity work.mister_c1541_iec
     generic map (
       CLK_HZ       => C64_CLK_HZ,   -- must match clk_c64 for correct UART baud
       DRIVE_CPU_HZ => 1000000,     -- keep the real 1541 DOS core at stock speed
       BAUD         => 230400,      -- match the virtual_1541 GUI default baud
       GCR_TURBO    => 1,           -- keep disk rotation timing conservative
-      D64_BACKEND  => 3             -- first FAT32 root *.D64 on SD card
+      D64_BACKEND  => 3,
+      SD_PACKED_D64_FILE => true    -- normal contiguous .d64 file on FAT16
     )
     port map (
       clk     => clk_c64,
@@ -366,14 +657,95 @@ begin
       drive_clk_pull_n  => drive_clk_pull_n,
       drive_data_pull_n => drive_data_pull_n,
       uart_rx => uart_rx,
-      uart_tx => uart_tx,
+      uart_tx => drive_uart_tx,
       sd_init_done           => sd_init_done,
-      sd_sec_read            => sd_sec_read,
-      sd_sec_read_addr       => sd_sec_read_addr,
+      sd_sec_read            => drive_sd_sec_read,
+      sd_sec_read_addr       => drive_sd_sec_read_addr,
       sd_sec_read_data       => sd_sec_read_data,
-      sd_sec_read_data_valid => sd_sec_read_valid,
-      sd_sec_read_end        => sd_sec_read_end,
+      sd_sec_read_data_valid => drive_sd_sec_read_valid,
+      sd_sec_read_end        => drive_sd_sec_read_end,
+      sd_mount_lba           => sd_mount_lba_reg,
+      sd_mount_strobe        => sd_mount_strobe,
       led => drive_led
+    );
+
+  mon_rx_i : entity work.uart_rx_ser
+    generic map (CLK_HZ => C64_CLK_HZ, BAUD => 115200)
+    port map (
+      clk     => clk_c64,
+      reset_n => reset_n,
+      rx      => uart_rx,
+      data    => mon_rx_data,
+      valid   => mon_rx_valid
+    );
+
+  mon_tx_i : entity work.uart_tx_ser
+    generic map (CLK_HZ => C64_CLK_HZ, BAUD => 115200)
+    port map (
+      clk     => clk_c64,
+      reset_n => reset_n,
+      data    => mon_tx_data,
+      valid   => mon_tx_valid,
+      tx      => mon_uart_tx,
+      busy    => mon_tx_busy
+    );
+
+  process(clk_c64)
+  begin
+    if rising_edge(clk_c64) then
+      mon_enter <= '0';
+      if reset_n = '0' or mon_active = '1' then
+        mon_magic_idx <= 0;
+      elsif mon_rx_valid = '1' then
+        case mon_magic_idx is
+          when 0 =>
+            if mon_rx_data = MONITOR_MAGIC0 then
+              mon_magic_idx <= 1;
+            else
+              mon_magic_idx <= 0;
+            end if;
+          when 1 =>
+            if mon_rx_data = MONITOR_MAGIC1 then
+              mon_magic_idx <= 2;
+            elsif mon_rx_data = MONITOR_MAGIC0 then
+              mon_magic_idx <= 1;
+            else
+              mon_magic_idx <= 0;
+            end if;
+          when 2 =>
+            if mon_rx_data = MONITOR_MAGIC2 then
+              mon_magic_idx <= 3;
+            elsif mon_rx_data = MONITOR_MAGIC0 then
+              mon_magic_idx <= 1;
+            else
+              mon_magic_idx <= 0;
+            end if;
+          when others =>
+            if mon_rx_data = MONITOR_MAGIC3 then
+              mon_enter <= '1';
+            end if;
+            mon_magic_idx <= 0;
+        end case;
+      end if;
+    end if;
+  end process;
+
+  monitor_i : entity work.c64_prg_upload_monitor
+    port map (
+      clk       => clk_c64,
+      reset_n   => reset_n,
+      enter_btn => mon_enter,
+      rx_data   => mon_rx_data,
+      rx_valid  => mon_rx_valid,
+      tx_busy   => mon_tx_busy,
+      tx_data   => mon_tx_data,
+      tx_valid  => mon_tx_valid,
+      active    => mon_active,
+      mem_req   => mon_mem_req,
+      mem_we    => mon_mem_we,
+      mem_addr  => mon_mem_addr,
+      mem_wdata => mon_mem_wdata,
+      mem_ready => mon_mem_ready
     );
 
   sd_i : sd_card_top
@@ -389,8 +761,8 @@ begin
       SD_MOSI                => sd_mosi,
       SD_MISO                => sd_miso,
       sd_init_done           => sd_init_done,
-      sd_sec_read            => sd_sec_read,
-      sd_sec_read_addr       => sd_sec_read_addr,
+      sd_sec_read            => sd_card_sec_read,
+      sd_sec_read_addr       => sd_card_sec_read_addr,
       sd_sec_read_data       => sd_sec_read_data,
       sd_sec_read_data_valid => sd_sec_read_valid,
       sd_sec_read_end        => sd_sec_read_end,

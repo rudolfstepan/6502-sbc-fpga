@@ -93,6 +93,9 @@ port(
 	UMAXromH 	: out std_logic;
 	IOE			: out std_logic;
 	IOF			: out std_logic;
+	cart_io_addr  : out unsigned(15 downto 0);
+	cart_io_wdata : out unsigned(7 downto 0);
+	cart_io_we    : out std_logic;
 	freeze_key  : out std_logic;
 	mod_key     : out std_logic;
 	tape_play   : out std_logic;
@@ -499,6 +502,9 @@ port map (
 
 IOE <= ioe_i;
 IOF <= iof_i;
+cart_io_addr <= cpuAddr;
+cart_io_wdata <= cpuDo;
+cart_io_we <= pulseWr_io;
 cs_io <= cs_vic or cs_sid or cs_color or cs_cia1 or cs_cia2 or ioe_i or iof_i;
 
 process(clk32)
@@ -853,6 +859,7 @@ begin
 					when "01" => turbo_m <= "110";
 					when "10" => turbo_m <= "111";
 					when "11" => turbo_m <= "111"; -- unused
+					when others => turbo_m <= "111";
 				end case;
 			end if;
 		end if;

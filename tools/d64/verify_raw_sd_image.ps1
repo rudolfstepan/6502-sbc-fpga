@@ -12,6 +12,33 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Assert-Admin {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+  if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw "Raw disk reads require an elevated PowerShell session. Start PowerShell as Administrator."
+  }
+}
+
+function Dismount-TargetVolumes {
+  param([int]$Number)
+
+  $parts = Get-Partition -DiskNumber $Number -ErrorAction SilentlyContinue
+  foreach ($part in $parts) {
+    if ($part.DriveLetter) {
+      Write-Host "Dismounting volume $($part.DriveLetter):"
+      try {
+        Dismount-Volume -DriveLetter $part.DriveLetter -Force -Confirm:$false -ErrorAction Stop
+      }
+      catch {
+        Write-Host "Could not dismount $($part.DriveLetter): $($_.Exception.Message)"
+      }
+    }
+  }
+}
+
+Assert-Admin
+
 $imagePath = (Resolve-Path -LiteralPath $Image).Path
 $disk = Get-Disk -Number $DiskNumber
 
@@ -40,16 +67,20 @@ Write-Host "Comparing bytes: $compareBytes"
 
 $wasOffline = $disk.IsOffline
 $wasReadOnly = $disk.IsReadOnly
+$offlineSucceeded = $false
 
 if ($disk.IsReadOnly) {
   Write-Host "Clearing read-only flag"
   Set-Disk -Number $DiskNumber -IsReadOnly $false
 }
 
+Dismount-TargetVolumes -Number $DiskNumber
+
 if (-not $disk.IsOffline) {
   Write-Host "Setting disk offline for raw read"
   try {
     Set-Disk -Number $DiskNumber -IsOffline $true
+    $offlineSucceeded = $true
     Start-Sleep -Milliseconds 500
   }
   catch {
@@ -74,7 +105,7 @@ finally {
   $fs.Dispose()
 }
 
-if (-not $wasOffline -and (Get-Disk -Number $DiskNumber).IsOffline) {
+if (-not $wasOffline -and $offlineSucceeded -and (Get-Disk -Number $DiskNumber).IsOffline) {
   Write-Host "Setting disk online again"
   Set-Disk -Number $DiskNumber -IsOffline $false
 }

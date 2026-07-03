@@ -54,6 +54,7 @@ add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
 
 # Tang probe top.
 add_file -type vhdl {../rtl/ps2_to_mister_key.vhd}
+add_file -type vhdl {../rtl/c64_prg_upload_monitor.vhd}
 add_file -type vhdl {../rtl/tang20k_mister_c64_probe_top.vhd}
 
 add_file -type cst {../constraints/tang20k_mister_c64_probe.cst}
