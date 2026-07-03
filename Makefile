@@ -64,7 +64,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_hdmi_encoder.vhd
 
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
-        clean pix16 tang_primer_20k d64-test-image test-d64 test-d64-map \
+        clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-c1541-d64-source test-c1541-d64-sdram \
         test-c1541-v1541-uart test-fat32 test-d64-subsystem tunes-d64 \
         sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
@@ -312,7 +312,7 @@ roms:
 	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(SBC_EHBASIC_ROM_HEX) ../roms/kernel.rom@0x0000 ../roms/ehbasic.rom@0x1000
 
 sd-boot-image:
-	$(PYTHON) tools/make_sd_boot_image.py --output $(SBC_EHBASIC_SD_IMG) ../roms/kernel.rom@0x0000 ../roms/ehbasic.rom@0x1000
+	$(PYTHON) tools/make_sd_boot_image.py --output $(SBC_EHBASIC_SD_IMG) roms/fpga_ehbasic_16kb.rom@0x0000
 
 sd-boot-test-image:
 	$(PYTHON) tools/make_sd_boot_image.py --output $(SBC_TEST_SD_IMG) sim/hex/rom_welcome.hex@0x3800
@@ -530,6 +530,21 @@ clean:
 
 pix16:
 	$(MAKE) -C boards/pix16
+
+pipistrello:
+	$(MAKE) -C boards/pipistrello
+
+pipistrello-hdmi-test:
+	$(MAKE) -C boards/pipistrello hdmi-test
+
+pipistrello-6502-hdmi:
+	$(MAKE) -C boards/pipistrello sbc-hdmi
+
+pipistrello-6502-sd-hdmi:
+	$(MAKE) -C boards/pipistrello sbc-sd-hdmi
+
+pipistrello-c64:
+	$(MAKE) -C boards/pipistrello c64
 
 tang_primer_20k:
 	$(MAKE) -C boards/tang_primer_20k
