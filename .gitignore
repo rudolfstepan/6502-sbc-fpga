@@ -94,6 +94,9 @@ boards/pipistrello/project/*.xml
 boards/pipistrello/project/*.xpi
 boards/pipistrello/project/*.xst
 boards/pipistrello/project/*.xwbt
+boards/pipistrello/project/*.mcs
+boards/pipistrello/project/*.cfi
+boards/pipistrello/project/*.prm
 boards/pipistrello/project/webtalk.log
 
 # ── Tang Primer 20K / GowinEDA ────────────────────────────────────────────────

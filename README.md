@@ -74,6 +74,23 @@ details.
 ISE build products are intentionally ignored by `.gitignore`; `fpga.xise` is the
 project file that should be kept under version control.
 
+## Pipistrello Spartan-6 Board Status
+
+The Pipistrello board port lives under:
+
+```text
+fpga/boards/pipistrello/
+```
+
+It targets the Saanlima Pipistrello / Xilinx Spartan-6 `XC6SLX45-CSG324-3`
+through checked-in ISE `.xise` projects. Current bring-up includes a HDMI/DVI
+colour-bar test, minimal 6502 SBC HDMI targets, a raw-SD 6502 boot experiment,
+and the native C64 core booting to the BASIC V2 ready screen over the board HDMI
+connector.
+
+See [Pipistrello Project Notes](boards/pipistrello/docs/README.md) for the
+project layout, build targets, and ISE source/build-artifact policy.
+
 ## Tang Primer 20K Board Status
 
 The Gowin project for the Tang Primer 20K lives at:

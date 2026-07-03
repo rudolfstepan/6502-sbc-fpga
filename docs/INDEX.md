@@ -27,6 +27,7 @@ Welcome to the 6502 SBC FPGA documentation. This directory contains comprehensiv
 - **[FPGA Image Captures](./images/README.md)** - Real HDMI screenshots captured from FPGA hardware
 - **[Roadmap](./roadmap.md)** - Project roadmap and milestones
 - **[PIX16 Build Guide](../boards/pix16/README.md)** - Xilinx ISE build and programming guide for the PIX16 Spartan-6 board
+- **[Pipistrello Project Notes](../boards/pipistrello/docs/README.md)** - Spartan-6 LX45 ISE projects, HDMI/DVI bring-up, 6502 SBC variants, and native C64 status
 - **[Tang Primer 20K Guide](../boards/tang_primer_20k/README.md)** - Gowin build notes, CH340 UART, HDMI boot screen, and on-board microSD wiring
 - **[Native C64 on Tang Primer 20K](../boards/tang_primer_20k/c64/README.md)** - Original C64 ROM boot, VIC-II text/bitmap modes, UART PRG upload, and C64-specific Gowin build
 - **[Hardware Support](./HARDWARE_SUPPORT.md)** - PIX16 board pinout, target device, and VGA smoke-test notes

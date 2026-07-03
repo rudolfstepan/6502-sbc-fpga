@@ -2,6 +2,9 @@
 
 Initial Xilinx ISE board port for the Saanlima Pipistrello Spartan-6 LX45.
 
+See [docs/README.md](docs/README.md) for the project overview, current hardware
+status, repository layout, and ISE source/build-artifact policy.
+
 ## Build
 
 ```sh
