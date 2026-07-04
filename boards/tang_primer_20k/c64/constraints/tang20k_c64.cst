@@ -41,6 +41,20 @@ IO_PORT "tmds_d_p[1]" IO_TYPE=LVCMOS33D PULL_MODE=NONE;
 IO_LOC "tmds_d_p[2]" K14;
 IO_PORT "tmds_d_p[2]" IO_TYPE=LVCMOS33D PULL_MODE=NONE;
 
+// SD card in SPI mode on the PMOD1 breakout (same pins as the MiSTer probe):
+//   sd_dclk -> breakout SCK   (PMOD1 pin 5 / T11)
+//   sd_ncs  -> breakout CS    (PMOD1 pin 6 / P11)
+//   sd_mosi -> breakout MOSI  (PMOD1 pin 7 / T12)
+//   sd_miso -> breakout MISO  (PMOD1 pin 8 / R11)
+IO_LOC "sd_dclk" T11;
+IO_PORT "sd_dclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "sd_ncs" P11;
+IO_PORT "sd_ncs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd_mosi" T12;
+IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd_miso" R11;
+IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
 // Host disk link: CH340 USB-UART -> PC 1541 server (115200 8N1)
 IO_LOC "uart_tx" M11;
 IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;

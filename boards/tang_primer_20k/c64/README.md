@@ -20,7 +20,10 @@ rtl/c64/                         # board-independent C64 core
   cpu6510.vhd                    # T65 + $00/$01 processor port (ROM banking)
   cia6526_full.vhd              # full 6526: ports A/B, Timer A/B, TOD, ICR/IRQ
   c64_keyboard_matrix.vhd        # PS/2 -> 8x8 C64 keyboard matrix (+ RESTORE/NMI)
-  vic_ii.vhd                     # VIC-II text/bitmap modes + raster IRQ (HDMI-ready)
+  vic_ii.vhd                     # "small" VIC-II: line-buffer renderer + raster IRQ
+  vic_ii_xl.vhd                  # "XL" VIC-II: cycle-based 6569 model (see below)
+  c64_ram_dp.vhd                 # 64K x 8 dual-port RAM (XL VIC fetch port B)
+  colour_ram_dp.vhd              # 1K x 4 dual-port colour RAM (XL VIC port B)
   c64_core.vhd                   # wires it all together (board independent)
 
 boards/tang_primer_20k/c64/
@@ -49,6 +52,57 @@ boards/tang_primer_20k/c64/
    `gw_sh project/build.tcl` with a fresh source file list.
 3. Flash `impl/pnr/tang_c64.fs`.
 
+Tested bitstreams live in `bitstream/` with a date+version suffix; see
+`bitstream/RELEASE_NOTES.md` for what each one contains.
+
+### Choosing the VIC implementation
+
+`c64_core` has a `VIC_XL` generic (set in `rtl/tang20k_c64_top.vhd`, currently
+`true`):
+
+* `VIC_XL => false` — `vic_ii.vhd`, the "small" line-buffer VIC of the frozen
+  bring-up bitstream. It prefetches each line during H-blank over the RAM steal
+  bus; no badlines, no border flip-flops, register changes act per line.
+* `VIC_XL => true` — `vic_ii_xl.vhd`, a cycle-based 6569 model after Christian
+  Bauer's vic-ii.txt: real badlines (VC/RC/VCBASE), live badline condition
+  (FLD/linecrunch), border flip-flops with RSEL/CSEL/DEN, YSCROLL, mid-line
+  register effects, sprite DMA with Y-crunch and X/Y expansion flip-flops,
+  idle-state $3FFF fetches, invalid modes rendering black, and working
+  collision IRQs. Documented deviations: 64 CPU cycles per line instead of 63
+  (1.000 MHz CPU), and one top-border raster line per frame runs 1.5x (the
+  625-line HDMI frame is half a C64 line longer than 312).
+
+  With `VIC_XL` the VIC fetches through a dedicated read port on dual-port
+  RAMs (`c64_ram_dp`/`colour_ram_dp`); the CPU keeps its own RAM port at all
+  times and BA only reproduces the 6510 stall timing. The write FIFOs and the
+  steal mux of the small-VIC path stay in the code but see a permanently
+  released bus. Smoke test: `sim/tb/tb_vic_ii_xl.vhd` (GHDL) checks raster IRQ,
+  badline BA cadence (25 x 43 cycles/frame), DEN=0 full border, sprite display
+  and sprite/background collision incl. read-clear semantics.
+
+### SD floppy
+
+The native core carries the same SD floppy as the MiSTer C64 probe board
+(`boards/tang_primer_20k/mister_c64_probe`), so the same FAT16 card, resident
+SD hook and disk menu work unchanged:
+
+* `mister_c1541_iec` runs with `D64_BACKEND => 3` (contiguous .d64 file on the
+  card, mounted at runtime).
+* The board top implements the identical register window in C64 I/O2
+  ($DF00-$DF0D): mount LBA + strobe, status, hook-boot status, and the
+  fastload sector window incl. the raw-block read that lets the C64 parse the
+  FAT16 filesystem itself.
+* `c64_sd_hook_boot_loader` pulls the resident hook ("C64HOOK1" header at
+  LBA 8, written by `tools/d64/make_fat16_d64_card.py`) into C64 RAM at
+  power-up. In this core the CPU is parked through the monitor RDY path while
+  the loader streams bytes through the monitor memory port (a small FIFO shim
+  bridges the per-byte writes onto the req/ready handshake).
+* SD card in SPI mode on the PMOD1 breakout: SCK=T11, CS=P11, MOSI=T12,
+  MISO=R11 (same pins as the probe board).
+
+The SD arbiter grants whole 512-byte transfers to one owner at a time
+(boot loader, then 1541 drive, then fastload window), exactly like the probe.
+
 Reset = KEY[0] (T10). A short press is a normal C64 reset and leaves RAM
 contents intact, matching the real machine. Hold KEY[0] for about one second to
 request a cold FPGA reset: the core keeps reset asserted, clears all 64K C64 RAM
@@ -73,14 +127,38 @@ python tools/c64_uart_prg_loader.py roms/sprite_test.prg --port COM15
 ```
 
 The C64 PRG loader sends monitor wake sequence `A5 5A C3 3C` before uploading. The board
-top ignores all other received bytes while the monitor is idle; normal C64 mode
-uses the same CH340 link for the host-disk UART at `$DE00/$DE01`. The loader
+top ignores all other received bytes while the monitor is idle; with the SD
+floppy build the CH340 link is otherwise free. The loader
 also uses conservative UART pacing by default because the FPGA monitor writes
 directly into C64 RAM and does not acknowledge each byte. The default streams
 16 bytes per monitor line with no artificial delay, which keeps 16 KB uploads
 practical at the fixed 115200 baud. If a board or older bitstream still drops
 bytes, fall back to the old pacing with `--safe` or explicitly use
 `--wake-sequence "0xA5 0x5A 0xC3 0x3C" --bytes-per-line 1 --line-delay 0.001`.
+
+### UART monitor
+
+The board carries the small `c64_prg_upload_monitor` (the full FLAT_64K
+`uart_debug_monitor` no longer fits next to the SD floppy). Waking it with the
+magic sequence `A5 5A C3 3C` pauses the C64 (RDY) and prints `FPGA MONITOR`;
+it understands:
+
+```text
+L aaaa       enter hex load mode at aaaa, then send hex bytes; '.' ends it
+M aaaa bbbb  hex dump aaaa..bbbb: 8 bytes per line plus an ASCII column
+             (non-printable as '.'), reads RAM under ROM/I/O
+G            release the C64 and leave the monitor
+```
+
+Interactive use from the PC:
+
+```powershell
+python tools/c64_uart_monitor_wake.py --port COM15
+```
+
+The monitor lives in `boards/tang_primer_20k/mister_c64_probe/rtl/` and is
+shared with the probe board; the `M` dump sits behind the `ENABLE_DUMP`
+generic, which only this board top enables.
 
 After upload, type:
 
@@ -148,10 +226,15 @@ fastloaders, and copy-protected disks still need the later KERNAL/IEC/1541 load
 path. After testing large games, use a long KEY[0] reset if BASIC/KERNAL should
 restart with clean RAM instead of preserving the uploaded program bytes.
 
-### Virtual 1541 UART transport
+### Virtual 1541 UART transport (superseded by the SD floppy)
 
-The C64 board top now routes the native C64 host-disk UART to the CH340 while
-the monitor is inactive. The C64 sees this transport at:
+> The current board top runs the 1541 from the SD card (`MISTER_1541_BACKEND
+> => 3`, see the SD floppy section); the UART transport below is NOT wired in
+> the default build any more. It still works when the core is built with
+> `MISTER_1541_BACKEND => 2` and `HOST_UART_ENABLE => true`.
+
+With that configuration the board top routes the native C64 host-disk UART to
+the CH340 while the monitor is inactive. The C64 sees this transport at:
 
 | Address | Direction | Meaning |
 | --- | --- | --- |

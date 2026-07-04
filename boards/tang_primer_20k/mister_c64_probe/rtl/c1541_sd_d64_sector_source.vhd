@@ -47,6 +47,11 @@ end entity;
 architecture rtl of c1541_sd_d64_sector_source is
   type sec_buf_t is array(0 to 255) of std_logic_vector(7 downto 0);
   signal sec_buf : sec_buf_t := (others => (others => '0'));
+  -- '1' while the "loaded" sector is the all-zero placeholder for an illegal
+  -- track/sector. Kept as a flag instead of bulk-clearing sec_buf: a whole-
+  -- array write in one clock stops Gowin from extracting the buffer as RAM
+  -- (256x8 falls into registers + muxes, >1.5k LUTs).
+  signal blank_sector : std_logic := '0';
 
   type state_t is (
     S_WAIT_SD,
@@ -135,7 +140,8 @@ architecture rtl of c1541_sd_d64_sector_source is
     return x"00";
   end function;
 begin
-  dout <= sec_buf(to_integer(unsigned(offset)));
+  dout <= (others => '0') when blank_sector = '1'
+          else sec_buf(to_integer(unsigned(offset)));
   req_change <= '0' when (track = loaded_track and sector = loaded_sector) else '1';
   valid <= '1' when state = S_READY and req_change = '0' and mounted = '1' else '0';
 
@@ -186,6 +192,7 @@ begin
         loaded_sector <= (others => '1');
         fetch_track <= (others => '0');
         fetch_sector <= (others => '0');
+        blank_sector <= '0';
         active_d64_lba <= unsigned(RAW_D64_LBA);
         target_lba <= (others => '0');
         fetch_upper_half <= '0';
@@ -247,11 +254,12 @@ begin
               copy_idx <= (others => '0');
               raw_valid_count <= (others => '0');
               dbg_buf <= (others => (others => '0'));
+              blank_sector <= '0';
               state <= S_DRV_STARTED;
             else
-              for i in 0 to 255 loop
-                sec_buf(i) <= x"00";
-              end loop;
+              -- Illegal track/sector: serve an all-zero sector via the
+              -- blank_sector flag (see declaration for why no bulk clear).
+              blank_sector <= '1';
               loaded_track <= fetch_track;
               loaded_sector <= fetch_sector;
               state <= S_READY;

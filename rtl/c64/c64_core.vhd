@@ -25,13 +25,28 @@ entity c64_core is
     -- System clocks per PHI2 (27 -> ~1 MHz CPU). Simulation overrides this with
     -- a small value to boot faster.
     PHI2_DIV : integer := 27;
+    -- Video implementation:
+    --   false = vic_ii     -- the proven line-buffer VIC (stable bring-up
+    --                         bitstream; whole-line prefetch, no badlines)
+    --   true  = vic_ii_xl  -- cycle-based 6569 model (real badlines, border
+    --                         flip-flops, YSCROLL/RSEL, mid-line register
+    --                         effects, sprite DMA with Y-crunch, collision
+    --                         IRQs). Needs PHI2_DIV = 27 (engine cycle grid
+    --                         is locked to the 27 MHz / 864x625 raster).
+    -- With VIC_XL the VIC fetches through dedicated read ports on dual-port
+    -- RAM/colour RAM (c64_ram_dp/colour_ram_dp), so the CPU keeps its RAM port
+    -- at all times: BA only emulates the 6510 stall timing, and the deferred
+    -- write FIFOs/steal mux see a permanently released bus.
+    VIC_XL : boolean := false;
     -- Keep false for the stable bring-up bitstream.  True makes CIA2 PA6/PA7
     -- see the modeled IEC bus instead of the old PA output loopback; this needs
     -- an active drive responder or KERNAL/fastloaders can wait forever.
     IEC_BUS_MODEL : boolean := false;
     -- Experimental full 1541 IEC responder adapted from the MiSTer C64 core.
     MISTER_1541_ENABLE : boolean := false;
-    -- 1541 disk backend: 0 = built-in test image, 2 = virtual 1541 sectors over UART.
+    -- 1541 disk backend: 0 = built-in test image, 2 = virtual 1541 sectors over
+    -- UART, 3 = SD-card D64 (contiguous .d64 file, mounted at runtime through
+    -- the sd_mount_* ports -- same scheme as the MiSTer C64 probe board).
     MISTER_1541_BACKEND : integer := 0;
     MISTER_1541_BAUD : integer := 230400;
     -- Legacy KERNAL-hook transport at $DE00/$DE01. Disable when the physical
@@ -76,6 +91,26 @@ entity c64_core is
     -- Host disk link: UART to a PC running a 1541 server (LOAD over serial).
     uart_tx : out std_logic;
     uart_rx : in  std_logic := '1';  -- idle high; default so the TB can leave it open
+
+    -- SD raw-sector port for MISTER_1541_BACKEND = 3 (wired to the board's
+    -- sd_card_top through the top-level SD arbiter, like the MiSTer probe).
+    sd_init_done           : in  std_logic := '0';
+    sd_sec_read            : out std_logic;
+    sd_sec_read_addr       : out std_logic_vector(31 downto 0);
+    sd_sec_read_data       : in  std_logic_vector(7 downto 0) := (others => '0');
+    sd_sec_read_data_valid : in  std_logic := '0';
+    sd_sec_read_end        : in  std_logic := '0';
+    sd_mount_lba           : in  std_logic_vector(31 downto 0) := (others => '0');
+    sd_mount_strobe        : in  std_logic := '0';
+    drive_act_led          : out std_logic;
+
+    -- Expansion I/O2 window ($DF00-$DFFF): the board top implements the SD
+    -- disk/fastload registers here (identical map to the MiSTer probe).
+    exp2_cs    : out std_logic;
+    exp2_we    : out std_logic;                       -- 1-clk strobe per write
+    exp2_addr  : out std_logic_vector(7 downto 0);
+    exp2_wdata : out std_logic_vector(7 downto 0);
+    exp2_rdata : in  std_logic_vector(7 downto 0) := (others => '1');
 
     -- External UART monitor/loader. While active, the CPU is parked via RDY and
     -- the monitor gets safe byte-wise access to the 64K RAM under ROM/I/O.
@@ -206,10 +241,17 @@ architecture rtl of c64_core is
   signal vic_addr  : std_logic_vector(15 downto 0);
   signal vic_data  : std_logic_vector(7 downto 0);
   signal vic_ba    : std_logic;
+  -- Bus-steal view of BA for the RAM/colour mux + write FIFOs. With the XL VIC
+  -- the CPU never loses its RAM port, so this is tied '1' and vic_ba only
+  -- stalls the CPU via RDY (real 6510 semantics: reads freeze, writes finish
+  -- and go straight to RAM).
+  signal ram_ba    : std_logic;
   signal vic_bank  : std_logic_vector(1 downto 0);
   signal vic_col_addr : std_logic_vector(9 downto 0);
   signal vic_col_data : std_logic_vector(3 downto 0);
   signal vic_char_addr: std_logic_vector(11 downto 0);
+  signal vic_char_busy: std_logic;
+  signal cg_b_addr    : std_logic_vector(11 downto 0);
 
   -- ---- colour RAM ----
   signal col_a_dout : std_logic_vector(3 downto 0);
@@ -261,6 +303,7 @@ architecture rtl of c64_core is
   signal uart_dout : std_logic_vector(7 downto 0);
   signal legacy_uart_tx : std_logic;
   signal m1541_uart_tx : std_logic := '1';
+  signal m1541_led_s   : std_logic := '0';
   signal urx_data  : std_logic_vector(7 downto 0);
   signal urx_valid : std_logic;
   constant RX_FIFO_DEPTH : integer := 256;
@@ -373,7 +416,7 @@ begin
       vic_ba_d4 <= vic_ba_d3;
       if core_reset_n = '0' then
         ram_settle <= 7;
-      elsif vic_ba = '0' or wq_cnt > 0 or cwq_cnt > 0 or mon_owner = '1' then
+      elsif ram_ba = '0' or wq_cnt > 0 or cwq_cnt > 0 or mon_owner = '1' then
         ram_settle <= 7;
       elsif ram_settle > 0 then
         ram_settle <= ram_settle - 1;
@@ -387,13 +430,18 @@ begin
   -- and rarely corrupted control flow. With RDY the CPU timeline keeps advancing
   -- during the steal (halted but counted), in lockstep with the CIA -- as on real
   -- hardware. RDY stays low while the RAM port is stolen/draining/settling.
-  monitor_safe <= '1' when monitor_hold = '1' and vic_ba = '1' and
-                           vic_ba_d = '1' and vic_ba_d2 = '1' and
-                           vic_ba_d3 = '1' and vic_ba_d4 = '1' and
+  -- With the XL VIC the CPU RAM port is never stolen (BA only stalls the CPU
+  -- via RDY), so the monitor need not wait for BA-high windows -- important for
+  -- the SD boot loader, whose byte stream must not stall behind badlines.
+  monitor_safe <= '1' when monitor_hold = '1' and
+                           (VIC_XL or (vic_ba = '1' and
+                            vic_ba_d = '1' and vic_ba_d2 = '1' and
+                            vic_ba_d3 = '1' and vic_ba_d4 = '1')) and
                            wq_cnt = 0 and cwq_cnt = 0 and ram_settle = 0 and
                            cpu_we = '0'
                   else '0';
 
+  ram_ba  <= '1' when VIC_XL else vic_ba;
   cpu_en  <= phi2_en;
   cpu_rdy <= '1' when (vic_ba = '1' and vic_ba_d = '1' and vic_ba_d2 = '1'
                        and vic_ba_d3 = '1' and vic_ba_d4 = '1'
@@ -408,13 +456,13 @@ begin
     if rising_edge(clk) then
       if core_reset_n = '0' then
         wq_cnt <= 0;
-      elsif vic_ba = '1' and wq_cnt > 0 then
+      elsif ram_ba = '1' and wq_cnt > 0 then
         for i in 0 to WQ_DEPTH-2 loop
           wq_addr(i) <= wq_addr(i+1);
           wq_data(i) <= wq_data(i+1);
         end loop;
         wq_cnt <= wq_cnt - 1;
-      elsif phi2_en = '1' and cpu_we = '1' and vic_ba = '0' and sel /= SEL_IO
+      elsif phi2_en = '1' and cpu_we = '1' and ram_ba = '0' and sel /= SEL_IO
             and wq_cnt < WQ_DEPTH then
         wq_addr(wq_cnt) <= cpu_addr;
         wq_data(wq_cnt) <= cpu_dout;
@@ -428,13 +476,13 @@ begin
     if rising_edge(clk) then
       if core_reset_n = '0' then
         cwq_cnt <= 0;
-      elsif vic_ba = '1' and cwq_cnt > 0 then
+      elsif ram_ba = '1' and cwq_cnt > 0 then
         for i in 0 to WQ_DEPTH-2 loop
           cwq_addr(i) <= cwq_addr(i+1);
           cwq_data(i) <= cwq_data(i+1);
         end loop;
         cwq_cnt <= cwq_cnt - 1;
-      elsif phi2_en = '1' and cpu_we = '1' and cs_col = '1' and vic_ba = '0'
+      elsif phi2_en = '1' and cpu_we = '1' and cs_col = '1' and ram_ba = '0'
             and cwq_cnt < WQ_DEPTH then
         cwq_addr(cwq_cnt) <= cpu_addr(9 downto 0);
         cwq_data(cwq_cnt) <= cpu_dout(3 downto 0);
@@ -534,73 +582,139 @@ begin
     end if;
   end process;
 
-  -- ---- 64K main RAM: single-port, time-shared CPU <-> VIC (steal) ----
+  -- ---- 64K main RAM ----
+  -- Small VIC: single-port, time-shared CPU <-> VIC via the steal mux below
+  -- (ram_ba = vic_ba). XL VIC: ram_ba is tied '1', so the mux reduces to
+  -- cold-scrub/monitor/write-queue-bypass/CPU and the VIC reads over its own
+  -- port B of c64_ram_dp.
   ram_addr <= std_logic_vector(cold_ram_addr) when cold_reset = '1' and cold_ram_done = '0' else
               mon_addr_lat when mon_owner = '1' else
-              vic_addr   when vic_ba = '0' else
+              vic_addr   when ram_ba = '0' else
               wq_addr(0) when wq_cnt > 0  else
               cpu_addr;
   dram_we  <= '1' when cold_reset = '1' and cold_ram_done = '0' else
               '1' when (mon_owner = '1' and mon_we_lat = '1') else
-              '1' when (vic_ba = '1' and wq_cnt > 0) else
-              '1' when (vic_ba = '1' and wq_cnt = 0 and phi2_en = '1'
+              '1' when (ram_ba = '1' and wq_cnt > 0) else
+              '1' when (ram_ba = '1' and wq_cnt = 0 and phi2_en = '1'
                         and cpu_we = '1' and sel /= SEL_IO) else
               '0';
   dram_din <= (others => '0') when cold_reset = '1' and cold_ram_done = '0' else
               mon_wdata_lat when mon_owner = '1' else
               wq_data(0) when wq_cnt > 0 else cpu_dout;
 
-  ram_i : entity work.c64_ram
-    generic map (INIT_FILE => RAM_INIT)
-    port map (clk => clk, addr => ram_addr, we => dram_we,
-              din => dram_din, dout => dram_dout);
-  vic_data <= dram_dout;     -- VIC reads screen codes from RAM during the steal
+  gen_ram_sp : if not VIC_XL generate
+    ram_i : entity work.c64_ram
+      generic map (INIT_FILE => RAM_INIT)
+      port map (clk => clk, addr => ram_addr, we => dram_we,
+                din => dram_din, dout => dram_dout);
+    vic_data <= dram_dout;   -- VIC reads screen codes from RAM during the steal
+  end generate;
+
+  gen_ram_dp : if VIC_XL generate
+    ram_i : entity work.c64_ram_dp
+      generic map (INIT_FILE => RAM_INIT)
+      port map (clk => clk,
+                a_addr => ram_addr, a_we => dram_we,
+                a_din => dram_din, a_dout => dram_dout,
+                b_addr => vic_addr, b_dout => vic_data);
+  end generate;
 
   -- ---- ROMs ----
   basic_i : entity work.basic_rom
     port map (clk => clk, addr => cpu_addr(12 downto 0), dout => basic_dout);
   kernal_i : entity work.kernal_rom
     port map (clk => clk, addr => cpu_addr(12 downto 0), dout => kernal_dout);
-  chargen_i : entity work.chargen_rom
-    port map (clk => clk,
-              a_addr => cpu_addr(11 downto 0), a_dout => cg_cpu_dout,
-              b_addr => vic_char_addr,         b_dout => cg_vic_dout);
+
+  -- CHARGEN. Small VIC: true dual port (CPU on A, VIC on B). XL VIC: ONE
+  -- shared port -- the XL VIC owns it only during its fetch window (char_busy,
+  -- ph 0..9 of each PHI2 cycle) while the CPU samples its read at the END of
+  -- the cycle, long after the address mux has switched back. This halves the
+  -- LUT cost of the ROM (a 2-port LUT ROM is duplicated by synthesis).
+  gen_cg_dual : if not VIC_XL generate
+    chargen_i : entity work.chargen_rom
+      port map (clk => clk,
+                a_addr => cpu_addr(11 downto 0), a_dout => cg_cpu_dout,
+                b_addr => vic_char_addr,         b_dout => cg_vic_dout);
+  end generate;
+
+  gen_cg_shared : if VIC_XL generate
+    cg_b_addr <= vic_char_addr when vic_char_busy = '1' else
+                 cpu_addr(11 downto 0);
+    chargen_i : entity work.chargen_rom
+      port map (clk => clk,
+                a_addr => (others => '0'), a_dout => open,
+                b_addr => cg_b_addr,       b_dout => cg_vic_dout);
+    cg_cpu_dout <= cg_vic_dout;
+  end generate;
 
   -- ---- colour RAM ----
-  -- Colour RAM: single-port, time-shared like main RAM (VIC during the steal, CPU
-  -- otherwise) so there is no dual-port collision.
+  -- Small VIC: single-port, time-shared like main RAM (VIC during the steal,
+  -- CPU otherwise). XL VIC: CPU keeps port A, the VIC reads port B.
   cs_col   <= '1' when io = IO_COLOR else '0';
   col_we   <= '1' when cold_reset = '1' and cold_col_done = '0' else
-              '1' when (vic_ba = '1' and cwq_cnt > 0) else
-              '1' when (vic_ba = '1' and cwq_cnt = 0 and phi2_en = '1'
+              '1' when (ram_ba = '1' and cwq_cnt > 0) else
+              '1' when (ram_ba = '1' and cwq_cnt = 0 and phi2_en = '1'
                         and cs_col = '1' and cpu_we = '1') else
               '0';
   col_addr <= std_logic_vector(cold_col_addr) when cold_reset = '1' and cold_col_done = '0' else
-              vic_col_addr when vic_ba = '0' else
+              vic_col_addr when ram_ba = '0' else
               cwq_addr(0)  when cwq_cnt > 0  else
               cpu_addr(9 downto 0);
   col_din  <= (others => '0') when cold_reset = '1' and cold_col_done = '0' else
               cwq_data(0) when cwq_cnt > 0 else cpu_dout(3 downto 0);
-  colram_i : entity work.colour_ram
-    port map (clk => clk, addr => col_addr, we => col_we,
-              din => col_din, dout => col_dout);
-  vic_col_data <= col_dout;     -- VIC reads colour during the steal
-  col_a_dout   <= col_dout;     -- CPU reads colour otherwise
+
+  gen_col_sp : if not VIC_XL generate
+    colram_i : entity work.colour_ram
+      port map (clk => clk, addr => col_addr, we => col_we,
+                din => col_din, dout => col_dout);
+    vic_col_data <= col_dout;   -- VIC reads colour during the steal
+    col_a_dout   <= col_dout;   -- CPU reads colour otherwise
+  end generate;
+
+  gen_col_dp : if VIC_XL generate
+    colram_i : entity work.colour_ram_dp
+      port map (clk => clk,
+                a_addr => col_addr, a_we => col_we,
+                a_din => col_din, a_dout => col_a_dout,
+                b_addr => vic_col_addr, b_dout => vic_col_data);
+  end generate;
 
   -- ---- VIC-II ----
   cs_vic <= '1' when io = IO_VIC else '0';
-  vic_i : entity work.vic_ii
-    port map (
-      clk => clk, reset_n => core_reset_n,
-      cs => cs_vic, we => io_we, addr => cpu_addr(5 downto 0),
-      din => cpu_dout, dout => vic_dout, irq_n => vic_irq_n,
-      vic_addr => vic_addr, vic_data => vic_data, ba => vic_ba,
-      vic_bank => vic_bank,
-      color_addr => vic_col_addr, color_data => vic_col_data,
-      char_addr => vic_char_addr, char_data => cg_vic_dout,
-      vga_hs => s_hs, vga_vs => s_vs, vga_de => s_de,
-      vga_r => s_r, vga_g => s_g, vga_b => s_b
-    );
+
+  gen_vic_small : if not VIC_XL generate
+    vic_i : entity work.vic_ii
+      port map (
+        clk => clk, reset_n => core_reset_n,
+        cs => cs_vic, we => io_we, addr => cpu_addr(5 downto 0),
+        din => cpu_dout, dout => vic_dout, irq_n => vic_irq_n,
+        vic_addr => vic_addr, vic_data => vic_data, ba => vic_ba,
+        vic_bank => vic_bank,
+        color_addr => vic_col_addr, color_data => vic_col_data,
+        char_addr => vic_char_addr, char_data => cg_vic_dout,
+        vga_hs => s_hs, vga_vs => s_vs, vga_de => s_de,
+        vga_r => s_r, vga_g => s_g, vga_b => s_b
+      );
+    vic_char_busy <= '1';
+  end generate;
+
+  gen_vic_xl : if VIC_XL generate
+    vic_i : entity work.vic_ii_xl
+      port map (
+        clk => clk, reset_n => core_reset_n,
+        phi2_en => phi2_en,
+        cs => cs_vic, we => io_we, addr => cpu_addr(5 downto 0),
+        din => cpu_dout, dout => vic_dout, irq_n => vic_irq_n,
+        vic_addr => vic_addr, vic_data => vic_data, ba => vic_ba,
+        vic_bank => vic_bank,
+        color_addr => vic_col_addr, color_data => vic_col_data,
+        char_addr => vic_char_addr, char_data => cg_vic_dout,
+        char_busy => vic_char_busy,
+        vga_hs => s_hs, vga_vs => s_vs, vga_de => s_de,
+        vga_r => s_r, vga_g => s_g, vga_b => s_b
+      );
+  end generate;
+
   vic_bank <= not cia2_pa_out(1 downto 0);
 
   -- ---- CIA-1 (keyboard + Timer A jiffy IRQ) ----
@@ -706,7 +820,10 @@ begin
         DRIVE_CPU_HZ => 1000000,
         BAUD         => MISTER_1541_BAUD,
         GCR_TURBO    => 1,
-        D64_BACKEND  => MISTER_1541_BACKEND
+        D64_BACKEND  => MISTER_1541_BACKEND,
+        -- Backend 3: normal contiguous .d64 file on the FAT16 card, mounted
+        -- at runtime via sd_mount_* (same as the MiSTer probe board).
+        SD_PACKED_D64_FILE => true
       )
       port map (
         clk     => clk,
@@ -718,9 +835,25 @@ begin
         drive_data_pull_n => iec_m1541_data_pull_n,
         uart_rx => uart_rx,
         uart_tx => m1541_uart_tx,
-        led => m1541_led
+        sd_init_done           => sd_init_done,
+        sd_sec_read            => sd_sec_read,
+        sd_sec_read_addr       => sd_sec_read_addr,
+        sd_sec_read_data       => sd_sec_read_data,
+        sd_sec_read_data_valid => sd_sec_read_data_valid,
+        sd_sec_read_end        => sd_sec_read_end,
+        sd_mount_lba           => sd_mount_lba,
+        sd_mount_strobe        => sd_mount_strobe,
+        led => m1541_led_s
       );
   end generate;
+
+  gen_no_mister_1541 : if not MISTER_1541_ENABLE generate
+    sd_sec_read      <= '0';
+    sd_sec_read_addr <= (others => '0');
+  end generate;
+
+  m1541_led <= m1541_led_s;
+  drive_act_led <= m1541_led_s;
 
   cia2_i : mos6526
     port map (
@@ -774,6 +907,14 @@ begin
       cs => cs_sid, we => io_we, addr => cpu_addr(4 downto 0),
       din => cpu_dout, dout => sid_dout, sample_out => audio
     );
+
+  -- ---- Expansion I/O2 window ($DF00-$DFFF) ----
+  -- Exported to the board top, which implements the SD disk mount/fastload
+  -- registers there (register map identical to the MiSTer C64 probe).
+  exp2_cs    <= '1' when io = IO_EXP2 else '0';
+  exp2_we    <= '1' when io = IO_EXP2 and cpu_we = '1' and phi2_en = '1' else '0';
+  exp2_addr  <= cpu_addr(7 downto 0);
+  exp2_wdata <= cpu_dout;
 
   -- ---- Host disk UART (I/O area 1, $DE00-$DE01) ----
   -- A PC runs a "1541 server" on this serial link and LOAD is done over UART.
@@ -893,7 +1034,7 @@ begin
   -- multicycled, so its extra depth is harmless.
   process(sel, io, basic_dout, kernal_dout, cg_cpu_dout,
           vic_dout, sid_dout, col_a_dout, cia1_dout, cia2_dout,
-          uart_dout)
+          uart_dout, exp2_rdata)
   begin
     case sel is
       when SEL_BASIC   => other_din <= basic_dout;
@@ -907,6 +1048,7 @@ begin
           when IO_CIA1  => other_din <= cia1_dout;
           when IO_CIA2  => other_din <= cia2_dout;
           when IO_EXP1  => other_din <= uart_dout;   -- $DE00 host disk UART
+          when IO_EXP2  => other_din <= exp2_rdata;  -- $DF00 SD disk window
           when others   => other_din <= x"FF";
         end case;
       when others => other_din <= x"FF";

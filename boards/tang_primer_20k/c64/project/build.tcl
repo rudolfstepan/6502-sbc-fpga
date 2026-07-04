@@ -16,6 +16,8 @@ add_file -type vhdl {../../../../rtl/c64/c64_roms.vhd}
 # C64 memories
 add_file -type vhdl {../../../../rtl/c64/c64_ram.vhd}
 add_file -type vhdl {../../../../rtl/c64/colour_ram.vhd}
+add_file -type vhdl {../../../../rtl/c64/c64_ram_dp.vhd}
+add_file -type vhdl {../../../../rtl/c64/colour_ram_dp.vhd}
 
 # C64 chips
 add_file -type vhdl {../../../../rtl/c64/cpu6510.vhd}
@@ -30,9 +32,19 @@ add_file -type vhdl {../../mister_c64_probe/rtl/c1541_d64_sector_source.vhd}
 add_file -type vhdl {../../mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd}
 add_file -type verilog {../../mister_c64_probe/rtl/c1541_static_d64_image.sv}
 add_file -type verilog {../../mister_c64_probe/rtl/c1541_static_dir_gcr.sv}
+
+# SD floppy (same stack as the MiSTer C64 probe board)
+add_file -type vhdl {../../../../rtl/core/peripherals/d64_sector_map.vhd}
+add_file -type verilog {../../../../third_party/alinx_sd/spi_master.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_cmd.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_sec_read_write.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_top.v}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_sd_d64_sector_source.vhd}
+add_file -type vhdl {../../mister_c64_probe/rtl/c64_sd_hook_boot_loader.vhd}
 add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
 add_file -type vhdl {../../../../rtl/c64/c64_keyboard_matrix.vhd}
 add_file -type vhdl {../../../../rtl/c64/vic_ii.vhd}
+add_file -type vhdl {../../../../rtl/c64/vic_ii_xl.vhd}
 add_file -type vhdl {../../../../rtl/core/audio/sid/sid6581.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/math_copro.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
@@ -40,7 +52,9 @@ add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
 # Host disk UART (PC runs a 1541 server over the CH340 link)
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_tx_ser.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_rx_ser.vhd}
-add_file -type vhdl {../../../../rtl/core/boot/uart_debug_monitor.vhd}
+# Small PRG upload monitor (L/./G subset), shared with the MiSTer probe board.
+# The full FLAT_64K uart_debug_monitor no longer fits next to the SD floppy.
+add_file -type vhdl {../../mister_c64_probe/rtl/c64_prg_upload_monitor.vhd}
 
 # C64 core
 add_file -type vhdl {../../../../rtl/c64/c64_core.vhd}

@@ -21,6 +21,8 @@
         <!-- C64 memories -->
         <File path="../../../../rtl/c64/c64_ram.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/colour_ram.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/c64_ram_dp.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/colour_ram_dp.vhd" type="file.vhdl" enable="1"/>
 
         <!-- C64 chips -->
         <File path="../../../../rtl/c64/cpu6510.vhd" type="file.vhdl" enable="1"/>
@@ -35,9 +37,19 @@
         <File path="../../mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../../mister_c64_probe/rtl/c1541_static_d64_image.sv" type="file.verilog" enable="1"/>
         <File path="../../mister_c64_probe/rtl/c1541_static_dir_gcr.sv" type="file.verilog" enable="1"/>
+
+        <!-- SD floppy (same stack as the MiSTer C64 probe board) -->
+        <File path="../../../../rtl/core/peripherals/d64_sector_map.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/spi_master.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_cmd.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_sec_read_write.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_top.v" type="file.verilog" enable="1"/>
+        <File path="../../mister_c64_probe/rtl/c1541_sd_d64_sector_source.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../mister_c64_probe/rtl/c64_sd_hook_boot_loader.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/mister_c1541_iec.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/c64_keyboard_matrix.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/vic_ii.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/c64/vic_ii_xl.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/audio/sid/sid6581.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/math_copro.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
@@ -45,7 +57,9 @@
         <!-- Host disk UART (PC runs a 1541 server over the CH340 link) -->
         <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
-        <File path="../../../../rtl/core/boot/uart_debug_monitor.vhd" type="file.vhdl" enable="1"/>
+        <!-- Small PRG upload monitor (L/./G subset), shared with the MiSTer probe.
+             The full FLAT_64K uart_debug_monitor no longer fits next to the SD floppy. -->
+        <File path="../../mister_c64_probe/rtl/c64_prg_upload_monitor.vhd" type="file.vhdl" enable="1"/>
 
         <!-- C64 core (board independent) -->
         <File path="../../../../rtl/c64/c64_core.vhd" type="file.vhdl" enable="1"/>
