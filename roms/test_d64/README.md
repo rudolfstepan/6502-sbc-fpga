@@ -4,6 +4,10 @@
 (see `docs/D64_DRIVE.md`).  It holds **runnable RAM PRGs**: SID-player programs
 built from real `.sid` tunes, plus the Mandelbrot coprocessor demo.
 
+For the native Tang Primer 20K C64 SD-floppy write path, use
+`writetest.d64` as a disposable image. It is a real C64-style test disk, not an
+SBC GoDrive application disk.
+
 ## Contents
 
 Every program is built as a RAM PRG whose **entry point is its load address**
@@ -68,6 +72,31 @@ Either way the entry point is the PRG's load address, so it runs with
 
 The intermediate per-tune `.prg` files (`prg/`, `sid/prg/`) are build products
 and are not committed; the `.d64` images are.
+
+## Native C64 writeback test disk
+
+`writetest.d64` contains one C64 BASIC V2 program named `WRITETEST`. It fills
+the `$DF0x` direct sector buffer, writes track 35 sector 16 through `$DF0E`,
+reads the sector back from SD, and checks that the partner sector in the same
+512-byte SD block was preserved by the read-modify-write flush.
+
+Regenerate it with:
+
+```powershell
+python tools/d64/make_write_testdisk.py
+```
+
+Use it on the native C64 SD-floppy build:
+
+```basic
+LOAD"@",8
+LOAD"WRITETEST",8
+RUN
+```
+
+The program intentionally overwrites track 35 sector 16 of the mounted image.
+Keep it on a disposable card/image; do not run it against a disk image you want
+to preserve.
 
 ## On hardware
 

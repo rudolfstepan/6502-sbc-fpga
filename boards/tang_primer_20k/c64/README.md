@@ -5,9 +5,10 @@ ROMs, kept entirely separate from the 6502 SBC so the existing system is
 untouched. Reuses the SBC's proven board plumbing (T65 CPU, HDMI TX, PT8211 DAC,
 PS/2 front-end concepts) and adds the C64-specific chips natively.
 
-> Status: **Milestone 1+ in progress** — boots to `READY.` in simulation, has
-> keyboard/IRQ plumbing, SID hooks, UART PRG upload, and first VIC-II graphics
-> modes. On-hardware bring-up and the D64 `LOAD` path are still active work.
+> Status: **Milestone 1+ in progress** — boots to `READY.` on hardware, has
+> keyboard/IRQ plumbing, SID hooks, UART PRG upload, first VIC-II graphics modes,
+> and an SD-backed 1541 path for normal D64 `LOAD`/`SAVE`. Cycle-exact VIC/1541
+> edge cases, copy protection and custom fastloaders are still active work.
 
 ## Layout
 
@@ -82,16 +83,16 @@ Tested bitstreams live in `bitstream/` with a date+version suffix; see
 
 ### SD floppy
 
-The native core carries the same SD floppy as the MiSTer C64 probe board
-(`boards/tang_primer_20k/mister_c64_probe`), so the same FAT16 card, resident
-SD hook and disk menu work unchanged:
+The native core carries the SD-backed MiSTer 1541 drive used during probe-board
+bring-up, but the native C64 top also wires the SD write channel and enables
+write-back (`MISTER_1541_SD_WRITE => true`). The same FAT16 card, resident SD
+hook and disk menu are used for loading:
 
 * `mister_c1541_iec` runs with `D64_BACKEND => 3` (contiguous .d64 file on the
-  card, mounted at runtime).
+  card, mounted at runtime) and `SD_PACKED_D64_FILE => true`.
 * The board top implements the identical register window in C64 I/O2
-  ($DF00-$DF0D): mount LBA + strobe, status, hook-boot status, and the
-  fastload sector window incl. the raw-block read that lets the C64 parse the
-  FAT16 filesystem itself.
+  (`$DF00-$DF1F`): mount LBA + strobe, status, hook-boot status, fastload sector
+  window, raw-block read/write helpers, and write-diagnostic counters.
 * `c64_sd_hook_boot_loader` pulls the resident hook ("C64HOOK1" header at
   LBA 8, written by `tools/d64/make_fat16_d64_card.py`) into C64 RAM at
   power-up. In this core the CPU is parked through the monitor RDY path while
@@ -102,6 +103,63 @@ SD hook and disk menu work unchanged:
 
 The SD arbiter grants whole 512-byte transfers to one owner at a time
 (boot loader, then 1541 drive, then fastload window), exactly like the probe.
+
+Normal C64 disk commands work through the SD-backed 1541 after a disk is mounted
+with the resident hook:
+
+```basic
+LOAD"@",8       : REM FAT16 disk menu / mount .d64
+LOAD"$",8
+LIST
+LOAD"*",8,1
+SAVE"NAME",8
+```
+
+`SAVE` modifies the mounted `.d64` in place. Keep a backup or use a disposable
+image while testing; the FPGA does not create FAT files and does not protect the
+card from saving over a disk image you care about. The write path decodes the
+1541 GCR write burst, stalls the virtual drive while the SD card is flushed, and
+updates the containing 512-byte card block with a read-modify-write so the other
+256-byte D64 sector half is preserved.
+
+Supported and verified path: normal BASIC/KERNAL `SAVE` into a standard
+35-track D64 stored as one contiguous FAT16 file. Not a supported target yet:
+1541 formatting commands such as `OPEN 15,8,15,"N:..."`, scratch/rename
+workflows, copy-protected disks, custom fastloaders and non-standard D64
+variants.
+
+Board LEDs are active-low and held long enough to see short events:
+
+| LED | Meaning |
+| --- | --- |
+| LED0 | 1541 head/read mode active |
+| LED1 | 1541 head/write mode active |
+| LED2 | drive-owned SD read transfer |
+| LED3 | drive-owned SD write flush |
+
+Write diagnostics are exposed in the same I/O2 page for hardware bring-up:
+
+| Address | Meaning |
+| --- | --- |
+| `$DF07` | high nibble = accepted drive SD writes, low nibble = granted drive SD writes |
+| `$DF0D` | high nibble = GCR checksum failures, low nibble = decoded GCR block completions |
+| `$DF0E` | high nibble = SD write errors, low nibble = SD write-end pulses |
+| `$DF0F` | high nibble = GCR checksum commits, low nibble = decoded GCR data bytes seen |
+| `$DF10-$DF14` | captured write trace: count plus four bytes selected by writing the trace index to `$DF10` |
+
+The UART-loadable SAVE diagnostic is:
+
+```powershell
+python tools/build_c64_save_diagnose_prg.py
+python tools/c64_uart_prg_loader.py roms/diagnostics/diagnose.prg --port COM15
+```
+
+There is also a standalone board project for testing only the floppy write path
+without the C64 core: `boards/tang_primer_20k/c1541_selftest`.
+
+For a direct `$DF0E` sector-write test from C64 BASIC, mount
+`roms/test_d64/writetest.d64` and run `LOAD"WRITETEST",8` / `RUN`. That disk is
+deliberately disposable and overwrites track 35 sector 16.
 
 Reset = KEY[0] (T10). A short press is a normal C64 reset and leaves RAM
 contents intact, matching the real machine. Hold KEY[0] for about one second to
@@ -203,10 +261,11 @@ RAM-fetch window, which removes BA/RDY stalls from the single-port RAM path and
 keeps playback stable for heavy SID players. The HDMI output is blank while the
 tune plays by design.
 
-### D64 game PRG upload
+### D64 game PRG upload fallback
 
-For ready-made `.d64` game collections, the current practical path is to extract
-a PRG on the PC and upload it through the native C64 UART monitor:
+For quick one-file tests, a ready-made `.d64` can still be handled entirely on
+the PC by extracting one PRG and uploading it through the native C64 UART
+monitor:
 
 ```powershell
 python tools/c64_d64_prg_loader.py --folder E:\Emulatoren\C64\Games --find 1942 --first-match --port COM15
@@ -221,10 +280,13 @@ RUN
 ```
 
 Pass `--program "NAME"` when a disk has several PRGs and the first entry is not
-the desired starter. This is for single-load/cracked games; multi-load games,
-fastloaders, and copy-protected disks still need the later KERNAL/IEC/1541 load
-path. After testing large games, use a long KEY[0] reset if BASIC/KERNAL should
-restart with clean RAM instead of preserving the uploaded program bytes.
+the desired starter. This bypasses the SD-backed 1541 completely and is useful
+when debugging the UART monitor or trying a single-load/cracked game without
+touching the SD card. Multi-load games that use normal KERNAL `LOAD` should use
+the SD floppy path above; custom fastloaders and copy protection still need
+deeper 1541/IEC compatibility work. After testing large uploads, use a long
+KEY[0] reset if BASIC/KERNAL should restart with clean RAM instead of preserving
+the uploaded program bytes.
 
 ### Virtual 1541 UART transport (superseded by the SD floppy)
 
@@ -478,10 +540,10 @@ sprite rendering, and sprite collision latches.
   prints the full banner + `38911 BASIC BYTES FREE` + `READY.`. On hardware
   expect the blue screen, border, banner, blinking cursor, PS/2 typing, and the
   UART-upload graphics PRG above.
-- **M1b — D64 game loading** ⏳ in progress
-  Current practical path: PC extracts a PRG from a D64 and uploads it through
-  the C64 UART monitor. Next: a KERNAL/IEC/1541 path for `LOAD"*",8,1`, `RUN`,
-  multi-load games, and fastloader-aware compatibility work.
+- **M1b — SD D64 loading and SAVE** ✅ normal KERNAL/IEC `LOAD`/`SAVE`
+  through the SD-backed MiSTer 1541 path works with a contiguous FAT16 D64.
+  Remaining: formatting/scratch workflows, copy protection, custom fastloaders
+  and more exact 1541/VIC timing compatibility.
 - **M2 — full VIC-II**
   Hires/multicolour bitmap, ECM, multicolour text, RAM charsets, and first-pass
   sprites including collision latches are in place. Remaining: per-cycle

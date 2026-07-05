@@ -16,7 +16,7 @@ These PRGs isolate READY/IRQ/stack hangs without using the virtual drive:
 | `rti_diag.prg` | Manual RTI stack-frame diagnostic. |
 | `hang_raw_irq_diag.prg` | KERNAL CINV heartbeat; validates the ROM IRQ entry calling convention. |
 | `hang_diag.prg` | READY/IRQ hang diagnostic with on-screen state. |
-| `diagnose.prg` | BASIC SAVE diagnostic; asks for a filename, runs `SAVE`, then prints `$DF07` write counters before/after. |
+| `diagnose.prg` | BASIC SAVE diagnostic; asks for a filename, runs `SAVE`, then prints the 1541/D64 write counters before and after. |
 
 Build them with:
 
@@ -37,12 +37,29 @@ Upload `diagnose.prg` with:
 python tools/c64_uart_prg_loader.py roms/diagnostics/diagnose.prg --port COM15
 ```
 
-After `RUN`, enter a new, unique filename. The program prints `DF07` as the raw
-SD write-back byte, plus `SG` for granted drive SD writes and `SD` for completed
-drive SD writes. It also prints `DF0F`: `GB` saturates when the GCR decoder sees
-write data bytes, and `GC` counts GCR checksum commits. It does not run `VERIFY`
-automatically, because BASIC V2 cannot catch the expected `FILE NOT FOUND` /
-`VERIFY` failures while the write path is broken.
+After `RUN`, enter a new, unique filename on a mounted, disposable D64. The
+program clears the write counters, runs `SAVE N$,8`, prints the counter values
+before/after, then dumps the short write trace. It does not run `VERIFY`
+automatically; check the result manually with `LOAD"$",8`, `LIST`, and then
+`LOAD"NAME",8`.
+
+Counter legend:
+
+| Field | Meaning |
+| --- | --- |
+| `DF07` / `SG` | low nibble: drive SD write grants |
+| `DF07` / `SD` | high nibble: drive SD writes accepted by the SD card |
+| `DF0D` / `BL` | low nibble: decoded GCR data blocks |
+| `DF0D` / `CF` | high nibble: GCR checksum failures |
+| `DF0E` / `WE` | low nibble: SD write-end pulses |
+| `DF0E` / `ER` | high nibble: SD CMD24/data-response/busy errors |
+| `DF0F` / `GB` | low nibble: decoded GCR data bytes seen |
+| `DF0F` / `GC` | high nibble: GCR checksum commits |
+
+Healthy SAVE runs show at least one GCR block/commit and matching SD grants and
+accepted writes. The trace lines are selected through `$DF10` and print the
+four captured bytes at `$DF11-$DF14`; they are mainly useful when the GCR
+decoder sees bytes but never reaches the sector commit marker.
 
 Upload scripts live in `roms/upload/` and point back to this folder.
 

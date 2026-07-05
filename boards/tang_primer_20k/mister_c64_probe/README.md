@@ -12,7 +12,7 @@ Current scope:
 - internal 64K RAM
 - fixed PAL/default configuration
 - PS/2 keyboard bridge plus a Tang-proven C64 matrix feeding CIA1
-- MiSTer 1541 IEC drive logic with a read-only D64 sector backend
+- MiSTer 1541 IEC drive logic with an SD-backed D64 sector backend
 - SID output through the native PT8211 path
 - Tang HDMI/audio output reused from the native C64 project
 
@@ -40,10 +40,23 @@ boards\tang_primer_20k\mister_c64_probe\project\tang_mister_c64_probe.gprj
 
 ## SD-card 1541 backend
 
-The simplest SD backend mode is intentionally raw and read-only to keep the full
-MiSTer C64 + SID + 1541 design fitting on the Tang 20K.  It does not parse FAT32
-yet.  In raw mode, the D64 image must start at SD LBA 0 in the expanded layout
-used by `c1541_sd_d64_sector_source.vhd`.
+The probe target uses the same compact SD-backed 1541 sector source as the
+native Tang C64 build.  The sector source supports two layouts: the original
+expanded raw image and the current packed mode where a normal contiguous `.d64`
+file starts at a mounted LBA.  The shared backend can also flush decoded 1541
+write bursts back to SD when `SD_WRITE_ENABLE` is enabled and the board top wires
+the SD write channel.
+
+Current status by top-level:
+
+- `boards/tang_primer_20k/mister_c64_probe`: read path only; the SD write port
+  is intentionally left unwired in this older probe top.
+- `boards/tang_primer_20k/c64`: write path enabled; normal BASIC/KERNAL
+  `SAVE"NAME",8` writes back into the mounted FAT16 `.d64`.
+
+In expanded raw mode, the D64 image must start at SD LBA 0 in the layout used by
+`c1541_sd_d64_sector_source.vhd`.  In packed mode, the C64-side selector mounts
+the start LBA of a contiguous `.d64` file.
 
 The SD card is connected through the external PMOD1/GPIO microSD breakout, not
 the Tang Primer's on-board SDIO slot:
@@ -145,6 +158,11 @@ transfer at a time; a fastload request issued while the 1541 is reading is
 simply queued instead of corrupting the drive's sector stream.  A hung
 transfer sets the error bit after roughly half a second instead of freezing
 the port.
+
+The native C64 top extends this window with the write helper at `$DF0E` and
+write diagnostics at `$DF07`, `$DF0D-$DF0F` and `$DF10-$DF14`; see
+`boards/tang_primer_20k/c64/README.md`.  This probe README documents the
+read/mount path because this top-level still leaves the SD write channel open.
 
 The smoke-test loader uses that port to bypass IEC transfer for the first PRG
 on the mounted disk:
@@ -384,6 +402,11 @@ Build status:
   failed attempt turned out to be a stale generated `c64_roms.vhd` in the
   build tree, i.e. an old KERNAL without the `$C000` stub - see the build
   notes at the top.
+- Hardware/debug 2026-07-05: the shared GCR/D64 backend now supports write-back
+  when a board top enables `SD_WRITE_ENABLE` and wires CMD24.  Verified on the
+  native Tang C64 build with normal `SAVE`, plus GHDL write tests and the
+  standalone `boards/tang_primer_20k/c1541_selftest` project.  The probe top
+  itself still keeps the SD write channel disconnected.
 - Tooling 2026-07-02: `tools\d64\d64_to_sd_image_gui.py` and
   `tools\d64\make_raw_sd_d64_image.py` generate the expanded raw image format
   used by the FPGA backend.

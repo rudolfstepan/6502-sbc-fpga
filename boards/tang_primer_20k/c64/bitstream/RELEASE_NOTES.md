@@ -6,6 +6,30 @@ Arbeitskopie ohne Garantie. Die `.fs`-Dateien liegen nur lokal (nicht in git):
 sie enthalten die einsynthetisierten Commodore-ROMs und das Repo ist
 oeffentlich. Die SHA256-Summen hier identifizieren die lokalen Dateien.
 
+## Arbeitsstand 2026-07-05 (nicht versionierter `tang_c64.fs`)
+
+- 1541/D64-Writeback im nativen Tang-C64-Build aktiviert:
+  `MISTER_1541_BACKEND=3`, `MISTER_1541_SD_WRITE=true`,
+  `SD_PACKED_D64_FILE=true`.
+- Auf Hardware verifiziert: normales BASIC/KERNAL `SAVE"NAME",8` schreibt in
+  die aktuell gemountete zusammenhaengende FAT16-`.d64`; danach erscheint der
+  Directory-Eintrag sauber und die Datei laedt wieder.
+- Die SD-Floppy schreibt nur innerhalb der gemounteten D64-Datei. Sie legt keine
+  FAT-Dateien an und sollte mit Backup/disposable Images benutzt werden.
+- Drive-LEDs am Board zeigen 1541 Head Read, 1541 Head Write, drive-owned SD
+  Read und drive-owned SD Write Flush.
+- Neue Diagnosepfade:
+  - `roms/diagnostics/diagnose.prg` fuer SAVE auf echter Hardware
+  - `$DF07`, `$DF0D-$DF0F`, `$DF10-$DF14` als Write-Counter/Trace
+  - `make test-c1541-sd-write` fuer GHDL
+  - `boards/tang_primer_20k/c1541_selftest` als standalone Floppy-Selftest ohne
+    C64-Core
+- Wichtige Fixes gegenueber dem defekten Zwischenstand: GCR-Write-Bitfolge und
+  Commit-Marker korrigiert, 512-Byte-SD-Block per Read-Modify-Write erhalten,
+  SD-CMD24 wartet auf Data-Response und Card-Busy-Ende.
+- Noch nicht als stabiler Support deklariert: 1541-Formatierung, Scratch/Rename,
+  Non-Standard-D64s, Copy Protection und Custom Fastloader.
+
 ## tang_c64_20260704_v1.fs (2026-07-04)
 
 - SHA256: `F748418AE34B33F7AC88C8E08797429B0049DC40426DA31BA415462B1AFDE14A`

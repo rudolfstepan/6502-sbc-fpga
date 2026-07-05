@@ -7,6 +7,11 @@ believes it is talking to a simple block device and never parses FAT32.
 
 > Version 1 is **read-only** (directory listing + PRG loading). Write/SAVE is out
 > of scope. This is a practical D64 block device, not a cycle-accurate 1541.
+>
+> Do not confuse this SBC-only GoDrive with the Tang Primer 20K native C64 SD
+> floppy. The native C64 target uses the MiSTer 1541 DOS/IEC path and now
+> supports normal D64 `SAVE` write-back; see
+> `boards/tang_primer_20k/c64/README.md`.
 
 ## A borrowed format, not C64 compatibility
 
@@ -338,7 +343,7 @@ Hardware-verified on the Tang Primer 20K: a Windows-formatted (superfloppy)
 
 ## Limitations / not yet done
 
-- **No write support / SAVE** (read-only).  `SAVE` returns "not implemented";
+- **No write support / SAVE in this SBC GoDrive** (read-only).  `SAVE` returns "not implemented";
   adding it needs BAM allocation + directory write in the kernel.
 - **No fabric boot menu:** the 6502 issues `MOUNT`; the engine mounts the first
   `.d64` found.  Runtime image selection / multiple drives are future work.
