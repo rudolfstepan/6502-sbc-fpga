@@ -46,6 +46,58 @@ else:
         a, o, s = seg["address"], seg["offset"], seg["size"]
         ram[a:a + s] = prg[o:o + s]
 
+# --- FAT16 card reference parse ---
+def le16(off):
+    return image[off] | (image[off + 1] << 8)
+
+def le32(off):
+    return le16(off) | (le16(off + 2) << 16)
+
+def fat16_d64_files():
+    """Independent FAT16 root parse: list of mounted-D64 candidates."""
+    part_lba = 0
+    if image[510:512] == b"\x55\xaa":
+        ptype = image[446 + 4]
+        if ptype in (0x04, 0x06, 0x0E):
+            part_lba = le32(446 + 8)
+
+    bs = part_lba * 512
+    if le16(bs + 11) != 512:
+        raise SystemExit("FAT16 reference parser: unsupported bytes/sector")
+    spc = image[bs + 13]
+    reserved = le16(bs + 14)
+    nfats = image[bs + 16]
+    root_entries = le16(bs + 17)
+    spf = le16(bs + 22)
+    root_secs = (root_entries * 32 + 511) // 512
+    root_lba = part_lba + reserved + nfats * spf
+    data_lba = root_lba + root_secs
+
+    out = []
+    root = root_lba * 512
+    for idx in range(root_entries):
+        off = root + idx * 32
+        first = image[off]
+        if first == 0:
+            break
+        if first == 0xE5 or (image[off + 11] & 0x18):
+            continue
+        if image[off + 8:off + 11] != b"D64":
+            continue
+        short = image[off:off + 11].decode("ascii", "replace")
+        stem = short[:8].rstrip()
+        ext = short[8:11].rstrip()
+        cluster = le16(off + 26)
+        out.append({
+            "name": f"{stem}.{ext}" if ext else stem,
+            "start_lba": data_lba + (cluster - 2) * spc,
+        })
+    return out
+
+card_d64s = fat16_d64_files()
+if len(card_d64s) < 2:
+    raise SystemExit("test image must contain at least two D64 files")
+
 # --- D64 geometry ---
 SPT = [0] + [21]*17 + [19]*7 + [18]*6 + [17]*5   # SPT[track], tracks 1..35
 
@@ -362,7 +414,8 @@ keys[:] = [ord("1")]
 res = call_load("@", 0)
 flush_output("LOAD\"@\",8 menu, key 1")
 check(res[0] == "rts" and res[4] is False, "menu returns clean")
-check(sd.mounted == 2083, f"mounted LBA 2083 (got {sd.mounted})")
+check(sd.mounted == card_d64s[0]["start_lba"],
+      f"mounted {card_d64s[0]['name']} at LBA {card_d64s[0]['start_lba']} (got {sd.mounted})")
 check((res[2] | (res[3] << 8)) == 0x0803, "menu preserves VARTAB in X/Y")
 
 files = d64_first_prg_and_names(sd.mounted)
@@ -408,7 +461,8 @@ check(res[1] == 1, f"fallback preserves A=1 (got {res[1]})")
 keys[:] = [ord("2")]
 res = call_load("@", 0)
 flush_output("LOAD\"@\",8 menu, key 2")
-check(sd.mounted == 2427, f"second disk mounted at 2427 (got {sd.mounted})")
+check(sd.mounted == card_d64s[1]["start_lba"],
+      f"second disk mounted at {card_d64s[1]['start_lba']} (got {sd.mounted})")
 files2 = d64_first_prg_and_names(sd.mounted)
 print("D64 #2 directory:", files2)
 n2, t2, s2 = files2[0]
@@ -417,6 +471,16 @@ la3 = exp3[0] | (exp3[1] << 8)
 res = call_load("*", 1)
 flush_output("LOAD\"*\",8,1 from disk 2")
 check(bytes(ram[la3:la3 + len(exp3) - 2]) == exp3[2:], "disk-2 payload matches")
+
+# 9) Optional paging regression: cursor down/right shows the next 16-image page.
+if len(card_d64s) > 16:
+    keys[:] = [0x11, ord("1")]   # C64 cursor down, then first key on page 2
+    res = call_load("@", 0)
+    flush_output("LOAD\"@\",8 menu, cursor next page, key 1")
+    check(res[0] == "rts" and res[4] is False, "paged menu returns clean")
+    check(sd.mounted == card_d64s[16]["start_lba"],
+          f"paged menu mounted {card_d64s[16]['name']} at {card_d64s[16]['start_lba']} "
+          f"(got {sd.mounted})")
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILURES: {fails}")

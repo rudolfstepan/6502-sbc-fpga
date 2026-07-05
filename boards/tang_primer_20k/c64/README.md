@@ -115,6 +115,10 @@ LOAD"*",8,1
 SAVE"NAME",8
 ```
 
+The `LOAD"@",8` selector shows 16 `.d64` files per page. Use cursor
+right/down for the next page and cursor left/up for the previous page, then
+choose an entry with `1-9` or `A-G`.
+
 `SAVE` modifies the mounted `.d64` in place. Keep a backup or use a disposable
 image while testing; the FPGA does not create FAT files and does not protect the
 card from saving over a disk image you care about. The write path decodes the
@@ -153,6 +157,17 @@ The UART-loadable SAVE diagnostic is:
 python tools/build_c64_save_diagnose_prg.py
 python tools/c64_uart_prg_loader.py roms/diagnostics/diagnose.prg --port COM15
 ```
+
+After resident-hook changes, an already formatted FAT16 SD card can be updated
+without rebuilding the image or deleting `.d64` files:
+
+```powershell
+make mister64-sd-hook-block
+tools/write_sd_hook_block.ps1 -DriveLetter G    # elevated PowerShell
+```
+
+The script writes only the `C64HOOK1` boot block at LBA 8, below the FAT16
+partition, and verifies it afterwards.
 
 There is also a standalone board project for testing only the floppy write path
 without the C64 core: `boards/tang_primer_20k/c1541_selftest`.

@@ -48,7 +48,7 @@ FL_STAT   = $DF0B
 FL_DATA   = $DF0C
 RAW_CMD   = $DF0D
 
-MAX_ENTRIES = 16                 ; menu keys 1-9 then A-G
+MAX_ENTRIES = 16                 ; menu page size: keys 1-9 then A-G
 
 .segment "LOADADDR"
         .word LOAD_ADDR
@@ -524,6 +524,9 @@ menu_entry:
         bcc :+
         jmp menu_scan_fail
 :
+        lda #$00
+        sta PAGE_START
+menu_scan_page:
         jsr scan_root_dir
         bcc :+
         jmp menu_scan_fail
@@ -544,6 +547,14 @@ menu_key_loop:
         bne :+
         jmp menu_exit
 :
+        cmp #$11                 ; cursor down/right -> next page
+        beq menu_next_page
+        cmp #$1D
+        beq menu_next_page
+        cmp #$91                 ; cursor up/left -> previous page
+        beq menu_prev_page
+        cmp #$9D
+        beq menu_prev_page
         jsr key_to_index
         bcs menu_key_loop
         sta SEL
@@ -553,6 +564,23 @@ menu_key_loop:
         ldy #>frag_msg
         jsr print_z
         jmp menu_key_loop
+
+menu_next_page:
+        lda PAGE_MORE
+        beq menu_key_loop
+        clc
+        lda PAGE_START
+        adc #MAX_ENTRIES
+        sta PAGE_START
+        jmp menu_scan_page
+
+menu_prev_page:
+        lda PAGE_START
+        beq menu_key_loop
+        sec
+        sbc #MAX_ENTRIES
+        sta PAGE_START
+        jmp menu_scan_page
 
 menu_mount:
         jsr meta_ptr
@@ -875,6 +903,9 @@ scan_root_dir:
         lda #$00
         sta ENTRY_CNT
         sta SCAN_DONE
+        sta PAGE_MORE
+        lda PAGE_START
+        sta SKIP_LEFT
         lda ROOT_SECT
         sta SEC_LEFT
         lda ROOT_SECT+1
@@ -906,9 +937,6 @@ root_entry_loop:
         jsr scan_one_entry
         lda SCAN_DONE
         bne root_scan_end
-        lda ENTRY_CNT
-        cmp #MAX_ENTRIES
-        bcs root_scan_end
         clc
         lda ENT_OFF
         adc #32
@@ -970,7 +998,19 @@ entry_skip:
         rts
 
 entry_record:
+        lda SKIP_LEFT
+        beq entry_not_skipped
+        dec SKIP_LEFT
+        rts
+entry_not_skipped:
         lda ENTRY_CNT
+        cmp #MAX_ENTRIES
+        bcc entry_store
+        lda #$01
+        sta PAGE_MORE
+        sta SCAN_DONE
+        rts
+entry_store:
         sta SEL
 
         ; display name: stem without trailing blanks + ".D64"
@@ -1227,6 +1267,11 @@ fat_cached:
 ; ---------------------------------------------------------------------------
 
 show_menu:
+        lda #$93
+        jsr CHROUT
+        lda #<menu_title
+        ldy #>menu_title
+        jsr print_z
         lda #<found_msg
         ldy #>found_msg
         jsr print_z
@@ -1411,7 +1456,7 @@ frag_msg:
 found_msg:
         .byte $0D, "D64 IMAGES:", $0D, 0
 prompt_msg:
-        .byte $0D, "SELECT 1-9/A-G, RUN/STOP = EXIT", $0D, 0
+        .byte $0D, "1-9/A-G SELECT, CRSR PAGE, STOP EXIT", $0D, 0
 mounted_msg:
         .byte $0D, "MOUNTED: ", 0
 usage_msg:
@@ -1460,6 +1505,9 @@ HALF:       .res 1
 ENT_OFF:    .res 1
 SCAN_DONE:  .res 1
 ENTRY_CNT:  .res 1
+PAGE_START: .res 1
+SKIP_LEFT:  .res 1
+PAGE_MORE:  .res 1
 SEL:        .res 1
 CLUS:       .res 2
 NCLUS:      .res 2

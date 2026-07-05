@@ -234,6 +234,10 @@ make mister64-sd-hook-block
 powershell tools\write_sd_hook_block.ps1 -DriveLetter G     (elevated)
 ```
 
+That is also the safe update path after rebuilding `sd_fastload_hook.prg`: it
+rewrites only the `C64HOOK1` block at LBA 8 and leaves the FAT16 filesystem plus
+existing `.d64` files untouched.
+
 The write script resolves the drive letter to its physical disk, refuses
 boot/system disks and non-USB/SD buses, checks that the block ends below the
 first partition, and verifies the sectors after writing.  The loader writes
@@ -278,8 +282,9 @@ byte-for-byte against an independent Python D64 parse.
 The disk selector runs entirely on the C64: `sw\c64_sd_fat16_select.s` parses
 the FAT16 filesystem itself through the `$DF0D` raw-block window.  It handles
 both an MBR card with one FAT16 partition and the `--superfloppy` layout,
-scans the root directory for `*.D64` entries (up to 16, keys `1-9`/`A-G`),
-walks the FAT chain of the selected file to make sure it is stored
+scans the root directory for `*.D64` entries, shows 16 entries per page
+(`1-9`/`A-G`, cursor right/down for next page, cursor left/up for previous
+page), walks the FAT chain of the selected file to make sure it is stored
 contiguously — fragmented files are refused because the packed-D64 backend
 computes sector LBAs arithmetically — and then mounts the file's start LBA
 through `$DF00-$DF04`:

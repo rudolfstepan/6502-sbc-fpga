@@ -18,6 +18,12 @@ oeffentlich. Die SHA256-Summen hier identifizieren die lokalen Dateien.
   FAT-Dateien an und sollte mit Backup/disposable Images benutzt werden.
 - Drive-LEDs am Board zeigen 1541 Head Read, 1541 Head Write, drive-owned SD
   Read und drive-owned SD Write Flush.
+- D64-Selector: `LOAD"@",8` und der standalone FAT16-Selector zeigen nun 16
+  Images pro Seite; Cursor rechts/runter blaettert vor, Cursor links/hoch
+  zurueck.
+- Hook-Update fuer bestehende FAT16-Karten: `make mister64-sd-hook-block` plus
+  `tools/write_sd_hook_block.ps1 -DriveLetter G` schreibt nur den C64HOOK1-Block
+  bei LBA 8 und laesst FAT/D64-Daten unveraendert.
 - Neue Diagnosepfade:
   - `roms/diagnostics/diagnose.prg` fuer SAVE auf echter Hardware
   - `$DF07`, `$DF0D-$DF0F`, `$DF10-$DF14` als Write-Counter/Trace

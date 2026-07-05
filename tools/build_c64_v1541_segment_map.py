@@ -56,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     args.prg.with_suffix(args.prg.suffix + ".segments.json").write_text(
         json.dumps(meta, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     return 0
 
