@@ -36,7 +36,7 @@
         <File path="../../mister_c64_probe/rtl/c1541_d64_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../../mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../../mister_c64_probe/rtl/c1541_static_d64_image.sv" type="file.verilog" enable="1"/>
-        <File path="../../mister_c64_probe/rtl/c1541_static_dir_gcr.sv" type="file.verilog" enable="1"/>
+        <File path="../../mister_c64_probe/rtl/c1541_static_dir_gcr.vhd" type="file.vhdl" enable="1"/>
 
         <!-- SD floppy (same stack as the MiSTer C64 probe board) -->
         <File path="../../../../rtl/core/peripherals/d64_sector_map.vhd" type="file.vhdl" enable="1"/>

@@ -36,9 +36,12 @@ entity tang20k_c64_top is
     sd_mosi    : out std_logic;
     sd_miso    : in  std_logic;
 
-    -- DIAG heartbeat LEDs -- disabled (placement experiment); re-enable with the
-    -- block below, the led pins in the .cst, and dbg_cia1_irq in c64_core.
-    -- led     : out std_logic_vector(1 downto 0);
+    -- Board LEDs, active-low:
+    --   LED0 = 1541 read/head-read mode
+    --   LED1 = 1541 write/head-write mode
+    --   LED2 = drive SD read transfer
+    --   LED3 = drive SD write flush
+    led        : out std_logic_vector(3 downto 0);
 
     -- CH340 USB-UART. In normal C64 mode this is the host-disk UART used by
     -- the virtual 1541 server. Sending the monitor wake sequence from the PC
@@ -152,7 +155,60 @@ architecture rtl of tang20k_c64_top is
   signal drive_sd_sec_read_addr  : std_logic_vector(31 downto 0);
   signal drive_sd_sec_read_valid : std_logic;
   signal drive_sd_sec_read_end   : std_logic;
+  -- Drive (1541 backend) write channel, same request/grant scheme as reads.
+  signal drive_sd_sec_write      : std_logic;
+  signal drive_sd_sec_write_addr : std_logic_vector(31 downto 0);
+  signal drive_sd_sec_write_data : std_logic_vector(7 downto 0);
+  signal drive_sd_wr_data_req    : std_logic;
+  signal drive_sd_wr_end         : std_logic;
   signal drive_led      : std_logic;
+  signal drive_read_active  : std_logic;
+  signal drive_write_active : std_logic;
+  signal drive_write_byte_pulse   : std_logic;
+  signal drive_write_commit_pulse : std_logic;
+  signal drive_write_block_done_pulse : std_logic;
+  signal drive_write_checksum_error_pulse : std_logic;
+  signal drive_write_checksum_calc : std_logic_vector(7 downto 0);
+  signal drive_write_checksum_recv : std_logic_vector(7 downto 0);
+  signal drive_write_prev_data : std_logic_vector(7 downto 0);
+  signal drive_write_last_data : std_logic_vector(7 downto 0);
+  signal drive_write_debug : std_logic_vector(7 downto 0);
+  signal drive_write_trace_addr : std_logic_vector(4 downto 0) := (others => '0');
+  signal drive_write_trace_data : std_logic_vector(31 downto 0);
+  signal drive_write_trace_count : std_logic_vector(5 downto 0);
+  signal drive_write_trace_clear : std_logic := '0';
+  signal led_hold_read      : unsigned(21 downto 0) := (others => '0');
+  signal led_hold_write     : unsigned(21 downto 0) := (others => '0');
+  signal led_hold_sd_read   : unsigned(21 downto 0) := (others => '0');
+  signal led_hold_sd_write  : unsigned(21 downto 0) := (others => '0');
+  constant LED_HOLD_CYCLES  : unsigned(21 downto 0) := to_unsigned(2_700_000, 22);
+
+  -- Debug counters for the 1541 write-back path, readable at $DF07
+  -- (bits 7:4 card-accepted drive writes, bits 3:0 granted drive writes).
+  -- Deliberately NOT cleared by reset_n so a hung SAVE can be diagnosed
+  -- after a short reset: 0x00 = no flush was ever requested (GCR decode
+  -- never committed), grants>done = the SD write hangs or the card
+  -- rejected the block (sd_cmd_error), grants=done but climbing = the
+  -- DOS is stuck in a write/verify retry loop.
+  signal dbg_wr_grant : unsigned(3 downto 0) := (others => '0');
+  signal dbg_wr_done  : unsigned(3 downto 0) := (others => '0');
+  signal dbg_gcr_byte_seen : unsigned(3 downto 0) := (others => '0');
+  signal dbg_gcr_commit    : unsigned(3 downto 0) := (others => '0');
+  signal dbg_gcr_block_done : unsigned(3 downto 0) := (others => '0');
+  signal dbg_gcr_checksum_error : unsigned(3 downto 0) := (others => '0');
+  signal dbg_sd_wr_end_any : unsigned(3 downto 0) := (others => '0');
+  signal dbg_sd_wr_error   : unsigned(3 downto 0) := (others => '0');
+
+  -- Raw write channel of sd_card_top (shared, granted by the arbiter).
+  signal sd_wr_data_req : std_logic;
+  signal sd_wr_end      : std_logic;
+  -- cmd_req_error from sd_card_cmd; during the sd_wr_end pulse it still holds
+  -- the just-finished block write's status (no data-response token, rejected
+  -- data or busy timeout), so it is sampled exactly then.
+  signal sd_cmd_error   : std_logic;
+  signal sd_wr_data     : std_logic_vector(7 downto 0);
+  signal sd_issue_write : std_logic := '0';
+  signal sd_xfer_write  : std_logic := '0';   -- current transfer is a write
 
   signal exp2_cs    : std_logic;
   signal exp2_we    : std_logic;
@@ -163,9 +219,14 @@ architecture rtl of tang20k_c64_top is
 
   signal sd_mount_lba_reg : std_logic_vector(31 downto 0) := (others => '0');
   signal sd_mount_strobe  : std_logic := '0';
+  -- Mount LBA LATCHED at the $DF04 strobe.  $DF00-$DF03 double as the raw
+  -- block-read/-write LBA ($DF0D/$DF0E bit1), so the hook/menu overwrites the
+  -- live register while parsing FAT16; every mounted-D64 track/sector access
+  -- must use this latched copy (the 1541 backend latches likewise).
+  signal fast_mount_lba   : std_logic_vector(31 downto 0) := (others => '0');
   type fast_buf_t is array(0 to 255) of std_logic_vector(7 downto 0);
   signal fast_buf : fast_buf_t := (others => (others => '0'));
-  type fast_state_t is (FAST_IDLE, FAST_WAIT);
+  type fast_state_t is (FAST_IDLE, FAST_WAIT, FW_WRITE);
   signal fast_state : fast_state_t := FAST_IDLE;
   signal fast_track_reg  : std_logic_vector(7 downto 0) := x"12";
   signal fast_sector_reg : std_logic_vector(4 downto 0) := "00001";
@@ -182,8 +243,34 @@ architecture rtl of tang20k_c64_top is
   signal fast_wait_cnt   : unsigned(23 downto 0) := (others => '0');
   signal fast_req_pend   : std_logic := '0';
   signal fast_req_addr   : std_logic_vector(31 downto 0) := (others => '0');
+  -- $DF0x write path: the RMW pre-read fills rmw_buf with the untouched half
+  -- of the 512-byte block, then FW_WRITE streams fast_buf/rmw_buf back out.
+  signal rmw_buf         : fast_buf_t := (others => (others => '0'));
+  signal fast_rmw        : std_logic := '0';  -- FAST_WAIT read is an RMW pre-read
+  signal fast_wrreq_pend : std_logic := '0';
+  signal fast_wr_idx     : unsigned(9 downto 0) := (others => '0');
+  signal fast_wr_byte    : std_logic_vector(7 downto 0) := (others => '0');
+  -- Single async read port per buffer (a second read port stops Gowin from
+  -- extracting the 256x8 arrays as SSRAM and costs >1.5k LUTs each): during
+  -- FW_WRITE the streaming index borrows fast_buf's port; the $DF0C readback
+  -- is meaningless then anyway (window is busy).
+  signal fast_rd_addr    : unsigned(7 downto 0);
+  signal fast_buf_rd     : std_logic_vector(7 downto 0);
+  signal rmw_buf_rd      : std_logic_vector(7 downto 0);
+  -- Single write port per buffer: enable/address/data are fully muxed
+  -- combinationally and each array has exactly ONE write statement.  Multiple
+  -- textual writes (CPU store + SD capture) make the synthesizer fall back
+  -- from SSRAM to registers+muxes (~2k LUTs for a 256x8 array).
+  signal fb_cpu_we       : std_logic;
+  signal fb_sd_we        : std_logic;
+  signal fb_we           : std_logic;
+  signal fb_addr         : unsigned(7 downto 0);
+  signal fb_data         : std_logic_vector(7 downto 0);
+  signal rmw_we          : std_logic;
   signal drive_req_pend  : std_logic := '0';
   signal drive_req_addr  : std_logic_vector(31 downto 0) := (others => '0');
+  signal drive_wrreq_pend : std_logic := '0';
+  signal drive_wrreq_addr : std_logic_vector(31 downto 0) := (others => '0');
   signal sd_mounted      : std_logic := '0';
   signal sd_owner_fast   : std_logic := '0';
   signal sd_owner_boot   : std_logic := '0';
@@ -237,6 +324,48 @@ architecture rtl of tang20k_c64_top is
   -- signal irq_stuck    : std_logic := '0';
 begin
   pa_en <= '1';   -- enable dock audio power amplifier
+  led(0) <= '0' when led_hold_read     /= 0 else '1';
+  led(1) <= '0' when led_hold_write    /= 0 else '1';
+  led(2) <= '0' when led_hold_sd_read  /= 0 else '1';
+  led(3) <= '0' when led_hold_sd_write /= 0 else '1';
+
+  process(clk_pix)
+  begin
+    if rising_edge(clk_pix) then
+      if reset_n = '0' then
+        led_hold_read     <= (others => '0');
+        led_hold_write    <= (others => '0');
+        led_hold_sd_read  <= (others => '0');
+        led_hold_sd_write <= (others => '0');
+      else
+        if drive_read_active = '1' then
+          led_hold_read <= LED_HOLD_CYCLES;
+        elsif led_hold_read /= 0 then
+          led_hold_read <= led_hold_read - 1;
+        end if;
+
+        if drive_write_active = '1' then
+          led_hold_write <= LED_HOLD_CYCLES;
+        elsif led_hold_write /= 0 then
+          led_hold_write <= led_hold_write - 1;
+        end if;
+
+        if (sd_xfer_busy = '1' and sd_owner_fast = '0' and sd_owner_boot = '0'
+            and sd_xfer_write = '0') or drive_sd_sec_read = '1' then
+          led_hold_sd_read <= LED_HOLD_CYCLES;
+        elsif led_hold_sd_read /= 0 then
+          led_hold_sd_read <= led_hold_sd_read - 1;
+        end if;
+
+        if (sd_xfer_busy = '1' and sd_owner_fast = '0' and sd_owner_boot = '0'
+            and sd_xfer_write = '1') or drive_sd_sec_write = '1' then
+          led_hold_sd_write <= LED_HOLD_CYCLES;
+        elsif led_hold_sd_write /= 0 then
+          led_hold_sd_write <= led_hold_sd_write - 1;
+        end if;
+      end if;
+    end if;
+  end process;
 
   -- process(clk_pix)
   -- begin
@@ -305,7 +434,12 @@ begin
   -- hook and disk menu work unchanged.
   --
   -- SD D64 mount register window in C64 I/O2:
-  --   $DF00-$DF03  selected .d64 start LBA, little-endian
+  --   $DF00-$DF03  selected .d64 start LBA, little-endian.  NOTE: this is a
+  --                live scratch register (also the raw-read/-write LBA for
+  --                $DF0D/$DF0E bit1); the mount base used by the $DF08-$DF0B
+  --                track/sector window and the $DF0E sector write is LATCHED
+  --                from here at the $DF04 strobe (fast_mount_lba), so later
+  --                raw accesses cannot silently move the mounted image.
   --   $DF04        write bit0=1 to mount/invalidate the cached sector
   --   $DF05        status: bit0 SD init done, bit1 drive active,
   --                bit2 D64 mounted, bit7 packed-D64 mode
@@ -325,29 +459,92 @@ begin
   --                $DF00-$DF03 LBA (no mount required), bit1 selects the
   --                buffered 256-byte half; poll $DF0B, read via $DF0A/$DF0C.
   --                Lets the C64 parse the FAT16 filesystem itself.
-  exp2_rdata <= disk_io_data when exp2_addr(7 downto 4) = "0000" else x"FF";
+  --   $DF0C  W     store a byte at offset $DF0A into the sector buffer
+  --                (fill the buffer before a $DF0E write command).
+  --   $DF0E  W     bit0=1: write the buffered 256 bytes to the mounted D64
+  --                at track/sector $DF08/$DF09 (read-modify-write of the
+  --                512-byte SD block, the other half is preserved).
+  --                bit1=1: raw write of the buffered 256 bytes into the SD
+  --                block at the $DF00-$DF03 LBA, bit2 selects the half
+  --                (no mount required; counterpart of the $DF0D raw read).
+  --                Poll $DF0B: busy bit1, done bit2 (fast_ready), error bit3.
+  exp2_rdata <= disk_io_data when exp2_addr(7 downto 4) = "0000"
+                              or exp2_addr(7 downto 4) = "0001"
+                else x"FF";
+
+  fast_rd_addr <= fast_wr_idx(7 downto 0) when fast_state = FW_WRITE
+                  else fast_offset_reg;
+  fast_buf_rd  <= fast_buf(to_integer(fast_rd_addr));
+  rmw_buf_rd   <= rmw_buf(to_integer(fast_wr_idx(7 downto 0)));
+
+  -- fast_buf write port: CPU store to $DF0C, or the SD capture of a normal
+  -- fastload/raw read (the RMW pre-read goes to rmw_buf instead).
+  fb_cpu_we <= '1' when exp2_we = '1' and exp2_addr(7 downto 4) = "0000"
+                    and to_integer(unsigned(exp2_addr(3 downto 0))) = 12
+               else '0';
+  fb_sd_we  <= '1' when fast_state = FAST_WAIT and fast_rmw = '0'
+                    and sd_owner_fast = '1' and sd_xfer_busy = '1'
+                    and sd_sec_read_valid = '1'
+                    and fast_raw_pos(8) = fast_upper_half
+               else '0';
+  fb_we   <= fb_cpu_we or fb_sd_we;
+  fb_addr <= fast_offset_reg when fb_cpu_we = '1' else fast_raw_pos(7 downto 0);
+  fb_data <= exp2_wdata      when fb_cpu_we = '1' else sd_sec_read_data;
+
+  -- rmw_buf write port: the RMW pre-read parks the untouched block half here.
+  rmw_we <= '1' when fast_state = FAST_WAIT and fast_rmw = '1'
+                 and sd_owner_fast = '1' and sd_xfer_busy = '1'
+                 and sd_sec_read_valid = '1'
+                 and fast_raw_pos(8) /= fast_upper_half
+            else '0';
+
   process(exp2_addr, sd_mount_lba_reg, sd_init_done, drive_led, sd_mounted,
           fast_track_reg, fast_sector_reg, fast_offset_reg, fast_ready,
-          fast_error, fast_state, fast_buf, boot_status)
+          fast_error, fast_state, fast_buf_rd, boot_status,
+          dbg_wr_grant, dbg_wr_done, dbg_gcr_byte_seen, dbg_gcr_commit,
+          dbg_gcr_block_done, dbg_gcr_checksum_error,
+          dbg_sd_wr_end_any, dbg_sd_wr_error,
+          drive_write_checksum_calc, drive_write_checksum_recv,
+          drive_write_prev_data, drive_write_last_data, drive_write_debug,
+          drive_write_trace_data, drive_write_trace_count)
   begin
-    case to_integer(unsigned(exp2_addr(3 downto 0))) is
-      when 0 => disk_io_data <= sd_mount_lba_reg(7 downto 0);
-      when 1 => disk_io_data <= sd_mount_lba_reg(15 downto 8);
-      when 2 => disk_io_data <= sd_mount_lba_reg(23 downto 16);
-      when 3 => disk_io_data <= sd_mount_lba_reg(31 downto 24);
-      when 5 => disk_io_data <= "1" & "0000" & sd_mounted & drive_led & sd_init_done;
-      when 6 => disk_io_data <= boot_status;
-      when 8 => disk_io_data <= fast_track_reg;
-      when 9 => disk_io_data <= "000" & fast_sector_reg;
-      when 10 => disk_io_data <= std_logic_vector(fast_offset_reg);
-      when 11 =>
-        if fast_state = FAST_IDLE then
-          disk_io_data <= "1" & "00" & sd_mounted & fast_error & fast_ready & "0" & sd_init_done;
-        else
-          disk_io_data <= "1" & "00" & sd_mounted & fast_error & fast_ready & "1" & sd_init_done;
-        end if;
-      when 12 => disk_io_data <= fast_buf(to_integer(fast_offset_reg));
-      when others => disk_io_data <= (others => '0');
+    case exp2_addr(7 downto 4) is
+      when "0000" =>
+        case to_integer(unsigned(exp2_addr(3 downto 0))) is
+          when 0 => disk_io_data <= drive_write_checksum_calc;
+          when 1 => disk_io_data <= drive_write_checksum_recv;
+          when 2 => disk_io_data <= drive_write_prev_data;
+          when 3 => disk_io_data <= drive_write_last_data;
+          when 4 => disk_io_data <= drive_write_debug;
+          when 5 => disk_io_data <= "1" & "0000" & sd_mounted & drive_led & sd_init_done;
+          when 6 => disk_io_data <= boot_status;
+          when 7 => disk_io_data <= std_logic_vector(dbg_wr_done) & std_logic_vector(dbg_wr_grant);
+          when 8 => disk_io_data <= fast_track_reg;
+          when 9 => disk_io_data <= "000" & fast_sector_reg;
+          when 10 => disk_io_data <= std_logic_vector(fast_offset_reg);
+          when 11 =>
+            if fast_state = FAST_IDLE then
+              disk_io_data <= "1" & "00" & sd_mounted & fast_error & fast_ready & "0" & sd_init_done;
+            else
+              disk_io_data <= "1" & "00" & sd_mounted & fast_error & fast_ready & "1" & sd_init_done;
+            end if;
+          when 12 => disk_io_data <= fast_buf_rd;
+          when 13 => disk_io_data <= std_logic_vector(dbg_gcr_checksum_error) & std_logic_vector(dbg_gcr_block_done);
+          when 14 => disk_io_data <= std_logic_vector(dbg_sd_wr_error) & std_logic_vector(dbg_sd_wr_end_any);
+          when 15 => disk_io_data <= std_logic_vector(dbg_gcr_commit) & std_logic_vector(dbg_gcr_byte_seen);
+          when others => disk_io_data <= (others => '0');
+        end case;
+      when "0001" =>
+        case to_integer(unsigned(exp2_addr(3 downto 0))) is
+          when 0 => disk_io_data <= "00" & drive_write_trace_count;
+          when 1 => disk_io_data <= drive_write_trace_data(31 downto 24);
+          when 2 => disk_io_data <= drive_write_trace_data(23 downto 16);
+          when 3 => disk_io_data <= drive_write_trace_data(15 downto 8);
+          when 4 => disk_io_data <= drive_write_trace_data(7 downto 0);
+          when others => disk_io_data <= x"FF";
+        end case;
+      when others =>
+        disk_io_data <= x"FF";
     end case;
   end process;
 
@@ -366,18 +563,49 @@ begin
   -- complete transfer, so no side can steal another's data stream mid-sector.
   sd_card_sec_read      <= sd_issue_read;
   sd_card_sec_read_addr <= sd_issue_addr;
-  drive_sd_sec_read_valid <= sd_sec_read_valid when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' else '0';
-  drive_sd_sec_read_end   <= sd_sec_read_end   when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' else '0';
-  boot_sd_valid <= sd_sec_read_valid when sd_owner_boot = '1' and sd_xfer_busy = '1' else '0';
-  boot_sd_end   <= sd_sec_read_end   when sd_owner_boot = '1' and sd_xfer_busy = '1' else '0';
+  drive_sd_sec_read_valid <= sd_sec_read_valid when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' and sd_xfer_write = '0' else '0';
+  drive_sd_sec_read_end   <= sd_sec_read_end   when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' and sd_xfer_write = '0' else '0';
+  boot_sd_valid <= sd_sec_read_valid when sd_owner_boot = '1' and sd_xfer_busy = '1' and sd_xfer_write = '0' else '0';
+  boot_sd_end   <= sd_sec_read_end   when sd_owner_boot = '1' and sd_xfer_busy = '1' and sd_xfer_write = '0' else '0';
+
+  -- Write-channel routing: the drive and the $DF0x window share sd_card_top's
+  -- byte-request/byte handshake; only the granted owner sees it.
+  drive_sd_wr_data_req <= sd_wr_data_req when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' and sd_xfer_write = '1' else '0';
+  drive_sd_wr_end      <= sd_wr_end      when sd_owner_fast = '0' and sd_owner_boot = '0' and sd_xfer_busy = '1' and sd_xfer_write = '1' else '0';
+  sd_wr_data <= fast_wr_byte when sd_owner_fast = '1' else drive_sd_sec_write_data;
 
   process(clk_pix)
   begin
     if rising_edge(clk_pix) then
       sd_mount_strobe <= '0';
       sd_issue_read <= '0';
+      sd_issue_write <= '0';
+      drive_write_trace_clear <= '0';
+
+      -- Registered read of the outgoing write byte.  fast_wr_idx points at the
+      -- byte the NEXT data request will transmit; the controller samples the
+      -- byte one cycle after its request, which matches this one-cycle-late
+      -- registered mux exactly (spi_master latches data once per byte).
+      -- (fast_buf_rd follows fast_wr_idx in FW_WRITE via fast_rd_addr.)
+      if fast_wr_idx(8) = fast_upper_half then
+        fast_wr_byte <= fast_buf_rd;
+      else
+        fast_wr_byte <= rmw_buf_rd;
+      end if;
+
+      -- Single write port per buffer (see fb_*/rmw_we above).
+      if fb_we = '1' then
+        fast_buf(to_integer(fb_addr)) <= fb_data;
+      end if;
+      if rmw_we = '1' then
+        rmw_buf(to_integer(fast_raw_pos(7 downto 0))) <= sd_sec_read_data;
+      end if;
+
       if reset_n = '0' then
         sd_mount_lba_reg <= (others => '0');
+        drive_write_trace_addr <= (others => '0');
+        drive_write_trace_clear <= '1';
+        fast_mount_lba <= (others => '0');
         sd_mounted <= '0';
         fast_state <= FAST_IDLE;
         fast_track_reg <= x"12";
@@ -390,13 +618,19 @@ begin
         fast_upper_half <= '0';
         fast_raw_pos <= (others => '0');
         fast_wait_cnt <= (others => '0');
+        fast_rmw <= '0';
+        fast_wrreq_pend <= '0';
+        fast_wr_idx <= (others => '0');
         drive_req_pend <= '0';
         drive_req_addr <= (others => '0');
+        drive_wrreq_pend <= '0';
+        drive_wrreq_addr <= (others => '0');
         boot_req_pend <= '0';
         boot_req_addr <= (others => '0');
         sd_owner_fast <= '0';
         sd_owner_boot <= '0';
         sd_xfer_busy <= '0';
+        sd_xfer_write <= '0';
       else
         -- Latch drive and boot-loader sector requests so they survive a
         -- running transfer; each requester waits on sd_sec_read_end and
@@ -404,6 +638,22 @@ begin
         if drive_sd_sec_read = '1' then
           drive_req_pend <= '1';
           drive_req_addr <= drive_sd_sec_read_addr;
+        end if;
+        if drive_sd_sec_write = '1' then
+          drive_wrreq_pend <= '1';
+          drive_wrreq_addr <= drive_sd_sec_write_addr;
+        end if;
+        if drive_write_byte_pulse = '1' and dbg_gcr_byte_seen /= 15 then
+          dbg_gcr_byte_seen <= dbg_gcr_byte_seen + 1;
+        end if;
+        if drive_write_commit_pulse = '1' and dbg_gcr_commit /= 15 then
+          dbg_gcr_commit <= dbg_gcr_commit + 1;
+        end if;
+        if drive_write_block_done_pulse = '1' and dbg_gcr_block_done /= 15 then
+          dbg_gcr_block_done <= dbg_gcr_block_done + 1;
+        end if;
+        if drive_write_checksum_error_pulse = '1' and dbg_gcr_checksum_error /= 15 then
+          dbg_gcr_checksum_error <= dbg_gcr_checksum_error + 1;
         end if;
         if boot_sd_sec_read = '1' then
           boot_req_pend <= '1';
@@ -415,25 +665,64 @@ begin
             null;
 
           when FAST_WAIT =>
+            -- (the byte captures themselves go through the single fast_buf /
+            -- rmw_buf write ports above, gated by fb_sd_we / rmw_we)
             fast_wait_cnt <= fast_wait_cnt + 1;
             if sd_owner_fast = '1' and sd_xfer_busy = '1' then
               if sd_sec_read_valid = '1' then
-                if fast_raw_pos(8) = fast_upper_half then
-                  fast_buf(to_integer(fast_raw_pos(7 downto 0))) <= sd_sec_read_data;
-                end if;
                 fast_raw_pos <= fast_raw_pos + 1;
               end if;
               if sd_sec_read_end = '1' then
-                fast_ready <= '1';
-                fast_state <= FAST_IDLE;
+                if fast_rmw = '1' then
+                  -- Both halves assembled; request the block write.
+                  fast_wrreq_pend <= '1';
+                  fast_wr_idx <= (others => '0');
+                  fast_wait_cnt <= (others => '0');
+                  fast_state <= FW_WRITE;
+                else
+                  fast_ready <= '1';
+                  fast_state <= FAST_IDLE;
+                end if;
               end if;
             end if;
             if fast_wait_cnt = FAST_TIMEOUT then
               fast_error <= '1';
               fast_req_pend <= '0';
+              fast_rmw <= '0';
+              fast_state <= FAST_IDLE;
+            end if;
+
+          when FW_WRITE =>
+            fast_wait_cnt <= fast_wait_cnt + 1;
+            if sd_owner_fast = '1' and sd_xfer_busy = '1' and sd_xfer_write = '1' then
+              if sd_wr_data_req = '1' then
+                fast_wr_idx <= fast_wr_idx + 1;
+              end if;
+              if sd_wr_end = '1' then
+                fast_ready <= '1';
+                fast_rmw <= '0';
+                -- Card refused the block (no data-response token, data
+                -- rejected or busy timeout) -> report it on $DF0B bit3.
+                if sd_cmd_error = '1' then
+                  fast_error <= '1';
+                end if;
+                fast_state <= FAST_IDLE;
+              end if;
+            end if;
+            if fast_wait_cnt = FAST_TIMEOUT then
+              fast_error <= '1';
+              fast_wrreq_pend <= '0';
+              fast_rmw <= '0';
               fast_state <= FAST_IDLE;
             end if;
         end case;
+
+        if exp2_we = '1' and exp2_addr = x"10" then
+          drive_write_trace_addr <= exp2_wdata(4 downto 0);
+          if exp2_wdata(7) = '1' then
+            drive_write_trace_clear <= '1';
+          end if;
+        end if;
 
         if exp2_we = '1' and exp2_addr(7 downto 4) = "0000" then
           case to_integer(unsigned(exp2_addr(3 downto 0))) is
@@ -445,6 +734,20 @@ begin
               if exp2_wdata(0) = '1' then
                 sd_mount_strobe <= '1';
                 sd_mounted <= '1';
+                -- Latch the mount base: $DF00-$DF03 keeps changing afterwards
+                -- (raw-read/-write LBA), the mounted image must not move.
+                fast_mount_lba <= sd_mount_lba_reg;
+              end if;
+            when 15 =>
+              if exp2_wdata(0) = '1' then
+                dbg_wr_grant <= (others => '0');
+                dbg_wr_done <= (others => '0');
+                dbg_gcr_byte_seen <= (others => '0');
+                dbg_gcr_commit <= (others => '0');
+                dbg_gcr_block_done <= (others => '0');
+                dbg_gcr_checksum_error <= (others => '0');
+                dbg_sd_wr_end_any <= (others => '0');
+                dbg_sd_wr_error <= (others => '0');
               end if;
             when 8 =>
               fast_track_reg <= exp2_wdata;
@@ -464,7 +767,7 @@ begin
                 if sd_init_done = '1' and sd_mounted = '1'
                    and fast_map_valid = '1'
                    and not (sd_xfer_busy = '1' and sd_owner_fast = '1') then
-                  fast_req_addr <= std_logic_vector(unsigned(sd_mount_lba_reg)
+                  fast_req_addr <= std_logic_vector(unsigned(fast_mount_lba)
                                  + resize(unsigned(fast_map_index(9 downto 1)), 32));
                   fast_upper_half <= fast_map_index(0);
                   fast_req_pend <= '1';
@@ -476,6 +779,11 @@ begin
                   fast_error <= '1';
                 end if;
               end if;
+            when 12 =>
+              -- Fill the sector buffer for a following $DF0E write command
+              -- (the actual store goes through the fast_buf write port above,
+              -- gated by fb_cpu_we).
+              null;
             when 13 =>
               -- Raw block read: LBA straight from $DF00-$DF03 instead of the
               -- track/sector map, so the mount guard does not apply here.
@@ -494,6 +802,49 @@ begin
                   fast_error <= '1';
                 end if;
               end if;
+            when 14 =>
+              -- Sector/raw block write.  Both variants start with the RMW
+              -- pre-read (fast_rmw='1'): the block is read once to capture the
+              -- untouched 256-byte half, then written back with fast_buf in
+              -- the selected half.
+              if fast_state = FAST_IDLE then
+                if exp2_wdata(0) = '1' then
+                  -- write fast_buf to the mounted D64 at $DF08/$DF09
+                  fast_ready <= '0';
+                  if sd_init_done = '1' and sd_mounted = '1'
+                     and fast_map_valid = '1'
+                     and not (sd_xfer_busy = '1' and sd_owner_fast = '1') then
+                    fast_req_addr <= std_logic_vector(unsigned(fast_mount_lba)
+                                   + resize(unsigned(fast_map_index(9 downto 1)), 32));
+                    fast_upper_half <= fast_map_index(0);
+                    fast_rmw <= '1';
+                    fast_req_pend <= '1';
+                    fast_raw_pos <= (others => '0');
+                    fast_wait_cnt <= (others => '0');
+                    fast_error <= '0';
+                    fast_state <= FAST_WAIT;
+                  else
+                    fast_error <= '1';
+                  end if;
+                elsif exp2_wdata(1) = '1' then
+                  -- raw write of fast_buf into the block at $DF00-$DF03,
+                  -- bit2 selects the half (counterpart of the $DF0D raw read)
+                  fast_ready <= '0';
+                  if sd_init_done = '1'
+                     and not (sd_xfer_busy = '1' and sd_owner_fast = '1') then
+                    fast_req_addr <= sd_mount_lba_reg;
+                    fast_upper_half <= exp2_wdata(2);
+                    fast_rmw <= '1';
+                    fast_req_pend <= '1';
+                    fast_raw_pos <= (others => '0');
+                    fast_wait_cnt <= (others => '0');
+                    fast_error <= '0';
+                    fast_state <= FAST_WAIT;
+                  else
+                    fast_error <= '1';
+                  end if;
+                end if;
+              end if;
             when others =>
               null;
           end case;
@@ -509,6 +860,7 @@ begin
             sd_issue_addr <= boot_req_addr;
             sd_owner_fast <= '0';
             sd_owner_boot <= '1';
+            sd_xfer_write <= '0';
             sd_xfer_busy <= '1';
             boot_req_pend <= '0';
           elsif drive_req_pend = '1' then
@@ -516,18 +868,55 @@ begin
             sd_issue_addr <= drive_req_addr;
             sd_owner_fast <= '0';
             sd_owner_boot <= '0';
+            sd_xfer_write <= '0';
             sd_xfer_busy <= '1';
             drive_req_pend <= '0';
+          elsif drive_wrreq_pend = '1' then
+            sd_issue_write <= '1';
+            sd_issue_addr <= drive_wrreq_addr;
+            sd_owner_fast <= '0';
+            sd_owner_boot <= '0';
+            sd_xfer_write <= '1';
+            sd_xfer_busy <= '1';
+            drive_wrreq_pend <= '0';
+            if dbg_wr_grant /= 15 then
+              dbg_wr_grant <= dbg_wr_grant + 1;
+            end if;
           elsif fast_req_pend = '1' then
             sd_issue_read <= '1';
             sd_issue_addr <= fast_req_addr;
             sd_owner_fast <= '1';
             sd_owner_boot <= '0';
+            sd_xfer_write <= '0';
             sd_xfer_busy <= '1';
             fast_req_pend <= '0';
+          elsif fast_wrreq_pend = '1' then
+            sd_issue_write <= '1';
+            sd_issue_addr <= fast_req_addr;
+            sd_owner_fast <= '1';
+            sd_owner_boot <= '0';
+            sd_xfer_write <= '1';
+            sd_xfer_busy <= '1';
+            fast_wrreq_pend <= '0';
           end if;
-        elsif sd_sec_read_end = '1' then
+        elsif (sd_xfer_write = '0' and sd_sec_read_end = '1')
+           or (sd_xfer_write = '1' and sd_wr_end = '1') then
           sd_xfer_busy <= '0';
+          -- Count only writes the card actually accepted; a rejected block
+          -- (sd_cmd_error) keeps done behind grant, so $DF07 exposes it.
+          if sd_xfer_write = '1' and sd_owner_fast = '0' and sd_owner_boot = '0'
+             then
+            if dbg_sd_wr_end_any /= 15 then
+              dbg_sd_wr_end_any <= dbg_sd_wr_end_any + 1;
+            end if;
+            if sd_cmd_error = '1' then
+              if dbg_sd_wr_error /= 15 then
+                dbg_sd_wr_error <= dbg_sd_wr_error + 1;
+              end if;
+            elsif dbg_wr_done /= 15 then
+              dbg_wr_done <= dbg_wr_done + 1;
+            end if;
+          end if;
         end if;
       end if;
     end if;
@@ -628,14 +1017,14 @@ begin
       sd_sec_read_data       => sd_sec_read_data,
       sd_sec_read_data_valid => sd_sec_read_valid,
       sd_sec_read_end        => sd_sec_read_end,
-      sd_sec_write           => '0',
-      sd_sec_write_addr      => (others => '0'),
-      sd_sec_write_data      => (others => '0'),
-      sd_sec_write_data_req  => open,
-      sd_sec_write_end       => open,
+      sd_sec_write           => sd_issue_write,
+      sd_sec_write_addr      => sd_issue_addr,
+      sd_sec_write_data      => sd_wr_data,
+      sd_sec_write_data_req  => sd_wr_data_req,
+      sd_sec_write_end       => sd_wr_end,
       debug_sec_state        => open,
       debug_cmd_state        => open,
-      debug_cmd_error        => open
+      debug_cmd_error        => sd_cmd_error
     );
 
   -- HDMI TX also generates the system/pixel clocks from the 27 MHz oscillator.
@@ -683,6 +1072,7 @@ begin
       MISTER_1541_ENABLE => true,
       MISTER_1541_BACKEND => 3,      -- SD-card D64 (was 2 = virtual 1541 UART)
       MISTER_1541_BAUD => 230400,
+      MISTER_1541_SD_WRITE => true,  -- flush 1541 writes back to the card
       HOST_UART_ENABLE => false
     )
     port map (
@@ -695,9 +1085,29 @@ begin
       sd_sec_read_data       => sd_sec_read_data,
       sd_sec_read_data_valid => drive_sd_sec_read_valid,
       sd_sec_read_end        => drive_sd_sec_read_end,
+      sd_sec_write           => drive_sd_sec_write,
+      sd_sec_write_addr      => drive_sd_sec_write_addr,
+      sd_sec_write_data      => drive_sd_sec_write_data,
+      sd_sec_write_data_req  => drive_sd_wr_data_req,
+      sd_sec_write_end       => drive_sd_wr_end,
       sd_mount_lba           => sd_mount_lba_reg,
       sd_mount_strobe        => sd_mount_strobe,
       drive_act_led          => drive_led,
+      drive_read_active      => drive_read_active,
+      drive_write_active     => drive_write_active,
+      drive_write_byte_pulse   => drive_write_byte_pulse,
+      drive_write_commit_pulse => drive_write_commit_pulse,
+      drive_write_block_done_pulse => drive_write_block_done_pulse,
+      drive_write_checksum_error_pulse => drive_write_checksum_error_pulse,
+      drive_write_checksum_calc => drive_write_checksum_calc,
+      drive_write_checksum_recv => drive_write_checksum_recv,
+      drive_write_prev_data => drive_write_prev_data,
+      drive_write_last_data => drive_write_last_data,
+      drive_write_debug => drive_write_debug,
+      drive_write_trace_addr => drive_write_trace_addr,
+      drive_write_trace_data => drive_write_trace_data,
+      drive_write_trace_count => drive_write_trace_count,
+      drive_write_trace_clear => drive_write_trace_clear,
       exp2_cs    => exp2_cs,
       exp2_we    => exp2_we,
       exp2_addr  => exp2_addr,

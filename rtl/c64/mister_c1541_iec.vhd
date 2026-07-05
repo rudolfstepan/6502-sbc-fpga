@@ -16,7 +16,10 @@ entity mister_c1541_iec is
     -- original expanded raw layout; true reads a normal contiguous .d64 file
     -- starting at SD_D64_LBA.
     SD_D64_LBA : std_logic_vector(31 downto 0) := x"00000000";
-    SD_PACKED_D64_FILE : boolean := false
+    SD_PACKED_D64_FILE : boolean := false;
+    -- Write-back of 1541 writes to the card (D64_BACKEND = 3 only).  Leave
+    -- false on boards that do not wire the sd_sec_write channel.
+    SD_WRITE_ENABLE : boolean := false
   );
   port (
     clk     : in  std_logic;
@@ -49,11 +52,34 @@ entity mister_c1541_iec is
     sd_sec_read_data_valid : in  std_logic := '0';
     sd_sec_read_end        : in  std_logic := '0';
 
+    -- SD raw sector write port (driven only when D64_BACKEND = 3 and
+    -- SD_WRITE_ENABLE; inputs default so other boards may omit them).
+    sd_sec_write           : out std_logic;
+    sd_sec_write_addr      : out std_logic_vector(31 downto 0);
+    sd_sec_write_data      : out std_logic_vector(7 downto 0);
+    sd_sec_write_data_req  : in  std_logic := '0';
+    sd_sec_write_end       : in  std_logic := '0';
+
     -- Runtime SD mount control (used only when D64_BACKEND = 3).
     sd_mount_lba    : in std_logic_vector(31 downto 0) := (others => '0');
     sd_mount_strobe : in std_logic := '0';
 
-    led : out std_logic
+    led : out std_logic;
+    read_active  : out std_logic;
+    write_active : out std_logic;
+    write_byte_pulse   : out std_logic;
+    write_commit_pulse : out std_logic;
+    write_block_done_pulse : out std_logic;
+    write_checksum_error_pulse : out std_logic;
+    write_checksum_calc : out std_logic_vector(7 downto 0);
+    write_checksum_recv : out std_logic_vector(7 downto 0);
+    write_prev_data : out std_logic_vector(7 downto 0);
+    write_last_data : out std_logic_vector(7 downto 0);
+    write_debug : out std_logic_vector(7 downto 0);
+    write_trace_addr : in  std_logic_vector(4 downto 0) := (others => '0');
+    write_trace_data : out std_logic_vector(31 downto 0);
+    write_trace_count : out std_logic_vector(5 downto 0);
+    write_trace_clear : in  std_logic := '0'
   );
 end entity;
 
@@ -140,7 +166,22 @@ architecture rtl of mister_c1541_iec is
       sync_n : out std_logic;
       byte_n : out std_logic;
       track  : in  std_logic_vector(6 downto 0);
-      we     : out std_logic;
+      we        : out std_logic;
+      wr_data   : out std_logic_vector(7 downto 0);
+      wr_offset : out std_logic_vector(7 downto 0);
+      wr_commit : out std_logic;
+      wr_block_done : out std_logic;
+      wr_checksum_error : out std_logic;
+      wr_checksum_calc : out std_logic_vector(7 downto 0);
+      wr_checksum_recv : out std_logic_vector(7 downto 0);
+      wr_prev_data : out std_logic_vector(7 downto 0);
+      wr_last_data : out std_logic_vector(7 downto 0);
+      wr_debug : out std_logic_vector(7 downto 0);
+      wr_trace_addr : in  std_logic_vector(4 downto 0);
+      wr_trace_data : out std_logic_vector(31 downto 0);
+      wr_trace_count : out std_logic_vector(5 downto 0);
+      wr_trace_clear : in  std_logic;
+      wr_stall  : in  std_logic;
       img_track  : out std_logic_vector(7 downto 0);
       img_sector : out std_logic_vector(4 downto 0);
       img_offset : out std_logic_vector(7 downto 0);
@@ -167,8 +208,38 @@ architecture rtl of mister_c1541_iec is
   signal img_offset : std_logic_vector(7 downto 0);
   signal img_dout   : std_logic_vector(7 downto 0);
   signal img_valid  : std_logic;
+
+  -- Decoded write stream GCR engine -> backend (consumed by backend 3 only).
+  signal gcr_wr_data   : std_logic_vector(7 downto 0);
+  signal gcr_wr_offset : std_logic_vector(7 downto 0);
+  signal gcr_wr_commit : std_logic;
+  signal gcr_wr_block_done : std_logic;
+  signal gcr_wr_checksum_error : std_logic;
+  signal gcr_wr_checksum_calc : std_logic_vector(7 downto 0);
+  signal gcr_wr_checksum_recv : std_logic_vector(7 downto 0);
+  signal gcr_wr_prev_data : std_logic_vector(7 downto 0);
+  signal gcr_wr_last_data : std_logic_vector(7 downto 0);
+  signal gcr_wr_debug : std_logic_vector(7 downto 0);
+  signal gcr_wr_trace_data : std_logic_vector(31 downto 0);
+  signal gcr_wr_trace_count : std_logic_vector(5 downto 0);
+  signal gcr_wr_stall  : std_logic;
+  signal drive_hold    : std_logic;
 begin
   drive_reset <= not reset_n;
+  drive_hold  <= gcr_wr_stall;
+  read_active  <= mtr and mode;
+  write_active <= mtr and not mode;
+  write_byte_pulse <= gcr_we;
+  write_commit_pulse <= gcr_wr_commit;
+  write_block_done_pulse <= gcr_wr_block_done;
+  write_checksum_error_pulse <= gcr_wr_checksum_error;
+  write_checksum_calc <= gcr_wr_checksum_calc;
+  write_checksum_recv <= gcr_wr_checksum_recv;
+  write_prev_data <= gcr_wr_prev_data;
+  write_last_data <= gcr_wr_last_data;
+  write_debug <= gcr_wr_debug;
+  write_trace_data <= gcr_wr_trace_data;
+  write_trace_count <= gcr_wr_trace_count;
   tr00_sense_n <= '1' when track_num /= 0 else '0';
   drive_clk_pull_n  <= '1' when drive_reset = '1' else raw_drive_clk_pull_n;
   drive_data_pull_n <= '1' when drive_reset = '1' else raw_drive_data_pull_n;
@@ -191,6 +262,10 @@ begin
         iec_atn_s     <= '1';
         iec_clk_s     <= '1';
         iec_data_s    <= '1';
+      elsif drive_hold = '1' then
+        -- A write-back flush can take far longer than one 1541 byte time.
+        -- Hold the drive CPU/VIAs and the synthetic disk rotation together;
+        -- byte_n/SO is an event input, not a CPU wait signal.
       elsif div_cnt = PHI2_DIV - 1 then
         div_cnt <= 0;
         ph2_r <= '1';
@@ -290,7 +365,22 @@ begin
       sync_n => gcr_sync_n,
       byte_n => gcr_byte_n,
       track  => std_logic_vector(track_num),
-      we     => gcr_we,
+      we        => gcr_we,
+      wr_data   => gcr_wr_data,
+      wr_offset => gcr_wr_offset,
+      wr_commit => gcr_wr_commit,
+      wr_block_done => gcr_wr_block_done,
+      wr_checksum_error => gcr_wr_checksum_error,
+      wr_checksum_calc => gcr_wr_checksum_calc,
+      wr_checksum_recv => gcr_wr_checksum_recv,
+      wr_prev_data => gcr_wr_prev_data,
+      wr_last_data => gcr_wr_last_data,
+      wr_debug => gcr_wr_debug,
+      wr_trace_addr => write_trace_addr,
+      wr_trace_data => gcr_wr_trace_data,
+      wr_trace_count => gcr_wr_trace_count,
+      wr_trace_clear => write_trace_clear,
+      wr_stall  => gcr_wr_stall,
       img_track  => img_track,
       img_sector => img_sector,
       img_offset => img_offset,
@@ -313,6 +403,10 @@ begin
     sdram_rd   <= '0';
     sd_sec_read <= '0';
     sd_sec_read_addr <= (others => '0');
+    gcr_wr_stall <= '0';
+    sd_sec_write <= '0';
+    sd_sec_write_addr <= (others => '0');
+    sd_sec_write_data <= (others => '0');
   end generate;
 
   gen_sdram : if D64_BACKEND = 1 generate
@@ -334,6 +428,10 @@ begin
     uart_tx <= '1';
     sd_sec_read <= '0';
     sd_sec_read_addr <= (others => '0');
+    gcr_wr_stall <= '0';
+    sd_sec_write <= '0';
+    sd_sec_write_addr <= (others => '0');
+    sd_sec_write_data <= (others => '0');
   end generate;
 
   gen_uart : if D64_BACKEND = 2 generate
@@ -357,6 +455,10 @@ begin
     sdram_rd   <= '0';
     sd_sec_read <= '0';
     sd_sec_read_addr <= (others => '0');
+    gcr_wr_stall <= '0';
+    sd_sec_write <= '0';
+    sd_sec_write_addr <= (others => '0');
+    sd_sec_write_data <= (others => '0');
   end generate;
 
   gen_sd : if D64_BACKEND = 3 generate
@@ -364,6 +466,7 @@ begin
       generic map (
         RAW_D64_LBA => SD_D64_LBA,
         PACKED_D64_FILE => SD_PACKED_D64_FILE,
+        SD_WRITE_ENABLE => SD_WRITE_ENABLE,
         CLK_HZ => CLK_HZ,
         BAUD   => BAUD
       )
@@ -375,12 +478,22 @@ begin
         offset  => img_offset,
         dout    => img_dout,
         valid   => img_valid,
+        wr_en     => gcr_we,
+        wr_offset => gcr_wr_offset,
+        wr_data   => gcr_wr_data,
+        wr_commit => gcr_wr_commit,
+        wr_busy   => gcr_wr_stall,
         sd_init_done           => sd_init_done,
         sd_sec_read            => sd_sec_read,
         sd_sec_read_addr       => sd_sec_read_addr,
         sd_sec_read_data       => sd_sec_read_data,
         sd_sec_read_data_valid => sd_sec_read_data_valid,
         sd_sec_read_end        => sd_sec_read_end,
+        sd_sec_write           => sd_sec_write,
+        sd_sec_write_addr      => sd_sec_write_addr,
+        sd_sec_write_data      => sd_sec_write_data,
+        sd_sec_write_data_req  => sd_sec_write_data_req,
+        sd_sec_write_end       => sd_sec_write_end,
         mount_lba              => sd_mount_lba,
         mount_strobe           => sd_mount_strobe,
         uart_tx                => uart_tx

@@ -16,6 +16,7 @@ These PRGs isolate READY/IRQ/stack hangs without using the virtual drive:
 | `rti_diag.prg` | Manual RTI stack-frame diagnostic. |
 | `hang_raw_irq_diag.prg` | KERNAL CINV heartbeat; validates the ROM IRQ entry calling convention. |
 | `hang_diag.prg` | READY/IRQ hang diagnostic with on-screen state. |
+| `diagnose.prg` | BASIC SAVE diagnostic; asks for a filename, runs `SAVE`, then prints `$DF07` write counters before/after. |
 
 Build them with:
 
@@ -23,6 +24,25 @@ Build them with:
 make c64-spin-diag-prg c64-hang-loop-diag-prg c64-cli-noirq-diag-prg
 make c64-rti-diag-prg c64-hang-raw-irq-diag-prg c64-hang-diag-prg
 ```
+
+Rebuild the SAVE diagnostic with:
+
+```powershell
+python tools/build_c64_save_diagnose_prg.py
+```
+
+Upload `diagnose.prg` with:
+
+```powershell
+python tools/c64_uart_prg_loader.py roms/diagnostics/diagnose.prg --port COM15
+```
+
+After `RUN`, enter a new, unique filename. The program prints `DF07` as the raw
+SD write-back byte, plus `SG` for granted drive SD writes and `SD` for completed
+drive SD writes. It also prints `DF0F`: `GB` saturates when the GCR decoder sees
+write data bytes, and `GC` counts GCR checksum commits. It does not run `VERIFY`
+automatically, because BASIC V2 cannot catch the expected `FILE NOT FOUND` /
+`VERIFY` failures while the write path is broken.
 
 Upload scripts live in `roms/upload/` and point back to this folder.
 

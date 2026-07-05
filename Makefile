@@ -66,7 +66,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-c1541-d64-source test-c1541-d64-sdram \
-        test-c1541-v1541-uart test-fat32 test-d64-subsystem tunes-d64 \
+        test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem tunes-d64 \
         sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
         c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
         c64-graphics-test-prg c64-sprite-test-prg c64-d016-scroll-test-prg \
@@ -413,6 +413,16 @@ test-c1541-d64-sdram:
 	  sim/tb/tb_mister_c64_sdram_read_adapter.vhd
 	$(GHDL) -e $(GHDL_FLAGS) tb_mister_c64_sdram_read_adapter
 	$(GHDL) -r $(GHDL_FLAGS) tb_mister_c64_sdram_read_adapter $(GHDL_RUN_FLAGS) --stop-time=20ms
+
+## Native C64 / probe: SD D64 write-back path (GCR write burst -> RMW flush).
+test-c1541-sd-write:
+	$(GHDL) -a $(GHDL_FLAGS) \
+	  rtl/core/peripherals/d64_sector_map.vhd \
+	  rtl/core/peripherals/uart_rx_ser.vhd rtl/core/peripherals/uart_tx_ser.vhd \
+	  boards/tang_primer_20k/mister_c64_probe/rtl/c1541_sd_d64_sector_source.vhd \
+	  sim/tb/tb_c1541_sd_write.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_c1541_sd_write
+	$(GHDL) -r $(GHDL_FLAGS) tb_c1541_sd_write $(GHDL_RUN_FLAGS) --stop-time=500ms
 
 ## MiSTer C64 probe: virtual-1541 UART sector backend (CMD_SECTOR round trip).
 test-c1541-v1541-uart:

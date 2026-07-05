@@ -49,7 +49,7 @@ add_file -type vhdl {../rtl/mister_c64_sdram_read_adapter.vhd}
 add_file -type vhdl {../rtl/c1541_v1541_uart_sector_source.vhd}
 add_file -type vhdl {../rtl/c1541_sd_d64_sector_source.vhd}
 add_file -type verilog {../rtl/c1541_static_d64_image.sv}
-add_file -type verilog {../rtl/c1541_static_dir_gcr.sv}
+add_file -type vhdl {../rtl/c1541_static_dir_gcr.vhd}
 add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
 
 # Tang probe top.

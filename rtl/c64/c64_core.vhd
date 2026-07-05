@@ -49,6 +49,9 @@ entity c64_core is
     -- the sd_mount_* ports -- same scheme as the MiSTer C64 probe board).
     MISTER_1541_BACKEND : integer := 0;
     MISTER_1541_BAUD : integer := 230400;
+    -- Backend-3 write-back: 1541 writes are flushed to the SD card (needs the
+    -- sd_sec_write channel wired by the board top).  Leave false otherwise.
+    MISTER_1541_SD_WRITE : boolean := false;
     -- Legacy KERNAL-hook transport at $DE00/$DE01. Disable when the physical
     -- UART is owned by the IEC/1541 backend.
     HOST_UART_ENABLE : boolean := true;
@@ -100,9 +103,29 @@ entity c64_core is
     sd_sec_read_data       : in  std_logic_vector(7 downto 0) := (others => '0');
     sd_sec_read_data_valid : in  std_logic := '0';
     sd_sec_read_end        : in  std_logic := '0';
+    sd_sec_write           : out std_logic;
+    sd_sec_write_addr      : out std_logic_vector(31 downto 0);
+    sd_sec_write_data      : out std_logic_vector(7 downto 0);
+    sd_sec_write_data_req  : in  std_logic := '0';
+    sd_sec_write_end       : in  std_logic := '0';
     sd_mount_lba           : in  std_logic_vector(31 downto 0) := (others => '0');
     sd_mount_strobe        : in  std_logic := '0';
     drive_act_led          : out std_logic;
+    drive_read_active      : out std_logic;
+    drive_write_active     : out std_logic;
+    drive_write_byte_pulse   : out std_logic;
+    drive_write_commit_pulse : out std_logic;
+    drive_write_block_done_pulse : out std_logic;
+    drive_write_checksum_error_pulse : out std_logic;
+    drive_write_checksum_calc : out std_logic_vector(7 downto 0);
+    drive_write_checksum_recv : out std_logic_vector(7 downto 0);
+    drive_write_prev_data : out std_logic_vector(7 downto 0);
+    drive_write_last_data : out std_logic_vector(7 downto 0);
+    drive_write_debug : out std_logic_vector(7 downto 0);
+    drive_write_trace_addr : in  std_logic_vector(4 downto 0) := (others => '0');
+    drive_write_trace_data : out std_logic_vector(31 downto 0);
+    drive_write_trace_count : out std_logic_vector(5 downto 0);
+    drive_write_trace_clear : in  std_logic := '0';
 
     -- Expansion I/O2 window ($DF00-$DFFF): the board top implements the SD
     -- disk/fastload registers here (identical map to the MiSTer probe).
@@ -304,6 +327,19 @@ architecture rtl of c64_core is
   signal legacy_uart_tx : std_logic;
   signal m1541_uart_tx : std_logic := '1';
   signal m1541_led_s   : std_logic := '0';
+  signal m1541_read_s  : std_logic := '0';
+  signal m1541_write_s : std_logic := '0';
+  signal m1541_wr_byte_s   : std_logic := '0';
+  signal m1541_wr_commit_s : std_logic := '0';
+  signal m1541_wr_block_done_s : std_logic := '0';
+  signal m1541_wr_checksum_error_s : std_logic := '0';
+  signal m1541_wr_checksum_calc_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_checksum_recv_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_prev_data_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_last_data_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_debug_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_trace_data_s : std_logic_vector(31 downto 0) := (others => '0');
+  signal m1541_wr_trace_count_s : std_logic_vector(5 downto 0) := (others => '0');
   signal urx_data  : std_logic_vector(7 downto 0);
   signal urx_valid : std_logic;
   constant RX_FIFO_DEPTH : integer := 256;
@@ -823,7 +859,8 @@ begin
         D64_BACKEND  => MISTER_1541_BACKEND,
         -- Backend 3: normal contiguous .d64 file on the FAT16 card, mounted
         -- at runtime via sd_mount_* (same as the MiSTer probe board).
-        SD_PACKED_D64_FILE => true
+        SD_PACKED_D64_FILE => true,
+        SD_WRITE_ENABLE    => MISTER_1541_SD_WRITE
       )
       port map (
         clk     => clk,
@@ -841,19 +878,55 @@ begin
         sd_sec_read_data       => sd_sec_read_data,
         sd_sec_read_data_valid => sd_sec_read_data_valid,
         sd_sec_read_end        => sd_sec_read_end,
+        sd_sec_write           => sd_sec_write,
+        sd_sec_write_addr      => sd_sec_write_addr,
+        sd_sec_write_data      => sd_sec_write_data,
+        sd_sec_write_data_req  => sd_sec_write_data_req,
+        sd_sec_write_end       => sd_sec_write_end,
         sd_mount_lba           => sd_mount_lba,
         sd_mount_strobe        => sd_mount_strobe,
-        led => m1541_led_s
+        led => m1541_led_s,
+        read_active  => m1541_read_s,
+        write_active => m1541_write_s,
+        write_byte_pulse   => m1541_wr_byte_s,
+        write_commit_pulse => m1541_wr_commit_s,
+        write_block_done_pulse => m1541_wr_block_done_s,
+        write_checksum_error_pulse => m1541_wr_checksum_error_s,
+        write_checksum_calc => m1541_wr_checksum_calc_s,
+        write_checksum_recv => m1541_wr_checksum_recv_s,
+        write_prev_data => m1541_wr_prev_data_s,
+        write_last_data => m1541_wr_last_data_s,
+        write_debug => m1541_wr_debug_s,
+        write_trace_addr => drive_write_trace_addr,
+        write_trace_data => m1541_wr_trace_data_s,
+        write_trace_count => m1541_wr_trace_count_s,
+        write_trace_clear => drive_write_trace_clear
       );
   end generate;
 
   gen_no_mister_1541 : if not MISTER_1541_ENABLE generate
     sd_sec_read      <= '0';
     sd_sec_read_addr <= (others => '0');
+    sd_sec_write      <= '0';
+    sd_sec_write_addr <= (others => '0');
+    sd_sec_write_data <= (others => '0');
   end generate;
 
   m1541_led <= m1541_led_s;
   drive_act_led <= m1541_led_s;
+  drive_read_active <= m1541_read_s;
+  drive_write_active <= m1541_write_s;
+  drive_write_byte_pulse <= m1541_wr_byte_s;
+  drive_write_commit_pulse <= m1541_wr_commit_s;
+  drive_write_block_done_pulse <= m1541_wr_block_done_s;
+  drive_write_checksum_error_pulse <= m1541_wr_checksum_error_s;
+  drive_write_checksum_calc <= m1541_wr_checksum_calc_s;
+  drive_write_checksum_recv <= m1541_wr_checksum_recv_s;
+  drive_write_prev_data <= m1541_wr_prev_data_s;
+  drive_write_last_data <= m1541_wr_last_data_s;
+  drive_write_debug <= m1541_wr_debug_s;
+  drive_write_trace_data <= m1541_wr_trace_data_s;
+  drive_write_trace_count <= m1541_wr_trace_count_s;
 
   cia2_i : mos6526
     port map (

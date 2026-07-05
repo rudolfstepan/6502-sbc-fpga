@@ -75,6 +75,8 @@ reg[15:0]                     byte_cnt;
 reg[7:0]                      send_data;
 wire[7:0]                     data_recv;
 reg[9:0]                      wr_data_cnt;
+reg                           write_resp_seen;
+reg[17:0]                     busy_cnt;
 reg                           block_read_valid_pending;
 
 assign debug_state = state;
@@ -97,6 +99,8 @@ begin
 		state <= S_IDLE;
 		cmd_req_error <= 1'b0;
 		wr_data_cnt <= 10'd0;
+		write_resp_seen <= 1'b0;
+		busy_cnt <= 18'd0;
 	end
 	else
 		case(state)
@@ -131,6 +135,9 @@ begin
 			begin
 				cmd_req_error <= 1'b0;
 				wr_data_cnt <= 10'd0;
+				write_resp_seen <= 1'b0;
+				busy_cnt <= 18'd0;
+				byte_cnt <= 16'd0;
 				//wait for  instruction
 				if(cmd_req == 1'b1)
 					state <= S_CMD_PRE;
@@ -160,7 +167,13 @@ begin
 			begin
 				if(spi_wr_ack == 1'b1)
 				begin
-					if((byte_cnt == 16'hffff) || (data_recv != cmd_r1 && data_recv[7] == 1'b0))
+					// Bytes 0-5 clock out the command itself; whatever
+					// appears on MISO meanwhile is stale (e.g. all-zero
+					// busy bytes of a still-programming card) and must
+					// not be mistaken for the R1 response.
+					if(byte_cnt < 16'd6)
+						byte_cnt <= byte_cnt + 16'd1;
+					else if((byte_cnt == 16'hffff) || (data_recv != cmd_r1 && data_recv[7] == 1'b0))
 					begin
 						state <= S_ERR;
 						spi_wr_req <= 1'b0;
@@ -256,15 +269,26 @@ begin
 				end
 			end
 			S_WRITE_TOKEN:
+				// One 0xff gap byte before the start-block token: the spec
+				// requires at least one byte between the CMD24 R1 response
+				// and the token (Nwr >= 1).  Cards that enforce this ignore
+				// a token sent back-to-back and the whole block is lost.
 				if(spi_wr_ack == 1'b1)
 				begin
-					state <= S_WRITE_DATA_0;
-					spi_wr_req <= 1'b0;
+					if(byte_cnt == 16'd0)
+						byte_cnt <= 16'd1;
+					else
+					begin
+						state <= S_WRITE_DATA_0;
+						spi_wr_req <= 1'b0;
+						byte_cnt <= 16'd0;
+						write_resp_seen <= 1'b0;
+					end
 				end
 				else
 				begin
 					spi_wr_req <= 1'b1;
-					send_data <= 8'hfe;
+					send_data <= (byte_cnt == 16'd0) ? 8'hff : 8'hfe;
 				end
 			S_WRITE_DATA_0:
 			begin
@@ -293,15 +317,65 @@ begin
 			begin
 				if(spi_wr_ack == 1'b1)
 				begin
-					if(byte_cnt == 16'd2)
+					// Two CRC bytes, then the data-response token, then busy
+					// polling.  Only 0bxxx00101 means "data accepted"; 0xff is
+					// the final idle byte after programming, not the response.
+					if(write_resp_seen == 1'b0)
+					begin
+						if(byte_cnt == 16'hffff)
+						begin
+							// no data-response token: the card never
+							// accepted the block
+							state <= S_WRITE_ACK;
+							spi_wr_req <= 1'b0;
+							byte_cnt <= 16'd0;
+							cmd_req_error <= 1'b1;
+						end
+						else if(byte_cnt < 16'd2)
+						begin
+							byte_cnt <= byte_cnt + 16'd1;
+						end
+						else if(data_recv[4:0] == 5'b00101)
+						begin
+							write_resp_seen <= 1'b1;
+							byte_cnt <= 16'd0;
+							busy_cnt <= 18'd0;
+						end
+						else if(data_recv != 8'hff)
+						begin
+							state <= S_WRITE_ACK;
+							spi_wr_req <= 1'b0;
+							byte_cnt <= 16'd0;
+							write_resp_seen <= 1'b0;
+							cmd_req_error <= 1'b1;
+						end
+						else
+						begin
+							byte_cnt <= byte_cnt + 16'd1;
+						end
+					end
+					else if(data_recv == 8'hff)
 					begin
 						state <= S_WRITE_ACK;
 						spi_wr_req <= 1'b0;
 						byte_cnt <= 16'd0;
+						write_resp_seen <= 1'b0;
+					end
+					else if(busy_cnt == 18'h3ffff)
+					begin
+						// Busy far longer than the spec's 250 ms write
+						// timeout (2^18 byte times) - the old shared
+						// 16-bit limit could fire while a slow card was
+						// still legally programming.
+						state <= S_WRITE_ACK;
+						spi_wr_req <= 1'b0;
+						byte_cnt <= 16'd0;
+						write_resp_seen <= 1'b0;
+						cmd_req_error <= 1'b1;
 					end
 					else
 					begin
-						byte_cnt <= byte_cnt + 16'd1;
+						busy_cnt <= busy_cnt + 18'd1;
 					end
 				end
 				else

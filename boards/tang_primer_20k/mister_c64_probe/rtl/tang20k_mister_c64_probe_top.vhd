@@ -706,9 +706,29 @@ begin
       sd_sec_read_data       => sd_sec_read_data,
       sd_sec_read_data_valid => drive_sd_sec_read_valid,
       sd_sec_read_end        => drive_sd_sec_read_end,
+      sd_sec_write           => open,
+      sd_sec_write_addr      => open,
+      sd_sec_write_data      => open,
+      sd_sec_write_data_req  => '0',
+      sd_sec_write_end       => '0',
       sd_mount_lba           => sd_mount_lba_reg,
       sd_mount_strobe        => sd_mount_strobe,
-      led => drive_led
+      led => drive_led,
+      read_active  => open,
+      write_active => open,
+      write_byte_pulse   => open,
+      write_commit_pulse => open,
+      write_block_done_pulse => open,
+      write_checksum_error_pulse => open,
+      write_checksum_calc => open,
+      write_checksum_recv => open,
+      write_prev_data => open,
+      write_last_data => open,
+      write_debug => open,
+      write_trace_addr => (others => '0'),
+      write_trace_data => open,
+      write_trace_count => open,
+      write_trace_clear => '0'
     );
 
   mon_rx_i : entity work.uart_rx_ser

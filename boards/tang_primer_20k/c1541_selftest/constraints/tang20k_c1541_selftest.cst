@@ -1,0 +1,39 @@
+// Tang Primer 20K -- standalone 1541/D64 selftest pin constraints.
+
+// 27 MHz board oscillator
+IO_LOC "clk_27mhz" H11;
+IO_PORT "clk_27mhz" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// Reset button (KEY[0])
+IO_LOC "key[0]" T10;
+IO_PORT "key[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// Board LEDs (active-low)
+IO_LOC "led[0]" L16;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "led[1]" L14;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "led[2]" N14;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "led[3]" N16;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// SD card in SPI mode on the PMOD1 breakout:
+//   sd_dclk -> breakout SCK   (PMOD1 pin 5 / T11)
+//   sd_ncs  -> breakout CS    (PMOD1 pin 6 / P11)
+//   sd_mosi -> breakout MOSI  (PMOD1 pin 7 / T12)
+//   sd_miso -> breakout MISO  (PMOD1 pin 8 / R11)
+IO_LOC "sd_dclk" T11;
+IO_PORT "sd_dclk" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "sd_ncs" P11;
+IO_PORT "sd_ncs" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd_mosi" T12;
+IO_PORT "sd_mosi" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "sd_miso" R11;
+IO_PORT "sd_miso" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// CH340 USB-UART status output (115200 8N1)
+IO_LOC "uart_tx" M11;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC "uart_rx" T13;
+IO_PORT "uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;

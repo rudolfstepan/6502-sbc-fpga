@@ -9,7 +9,8 @@ entity mister_c1541_iec is
     GCR_TURBO    : integer := 1;
     D64_BACKEND  : integer := 0;
     SD_D64_LBA : std_logic_vector(31 downto 0) := x"00000000";
-    SD_PACKED_D64_FILE : boolean := false
+    SD_PACKED_D64_FILE : boolean := false;
+    SD_WRITE_ENABLE : boolean := false
   );
   port (
     clk     : in  std_logic;
@@ -32,9 +33,29 @@ entity mister_c1541_iec is
     sd_sec_read_data       : in  std_logic_vector(7 downto 0) := (others => '0');
     sd_sec_read_data_valid : in  std_logic := '0';
     sd_sec_read_end        : in  std_logic := '0';
+    sd_sec_write           : out std_logic;
+    sd_sec_write_addr      : out std_logic_vector(31 downto 0);
+    sd_sec_write_data      : out std_logic_vector(7 downto 0);
+    sd_sec_write_data_req  : in  std_logic := '0';
+    sd_sec_write_end       : in  std_logic := '0';
     sd_mount_lba    : in std_logic_vector(31 downto 0) := (others => '0');
     sd_mount_strobe : in std_logic := '0';
-    led : out std_logic
+    led : out std_logic;
+    read_active  : out std_logic;
+    write_active : out std_logic;
+    write_byte_pulse   : out std_logic;
+    write_commit_pulse : out std_logic;
+    write_block_done_pulse : out std_logic;
+    write_checksum_error_pulse : out std_logic;
+    write_checksum_calc : out std_logic_vector(7 downto 0);
+    write_checksum_recv : out std_logic_vector(7 downto 0);
+    write_prev_data : out std_logic_vector(7 downto 0);
+    write_last_data : out std_logic_vector(7 downto 0);
+    write_debug : out std_logic_vector(7 downto 0);
+    write_trace_addr : in  std_logic_vector(4 downto 0) := (others => '0');
+    write_trace_data : out std_logic_vector(31 downto 0);
+    write_trace_count : out std_logic_vector(5 downto 0);
+    write_trace_clear : in  std_logic := '0'
   );
 end entity;
 
@@ -47,5 +68,21 @@ begin
   uart_tx <= '1';
   sd_sec_read <= '0';
   sd_sec_read_addr <= (others => '0');
+  sd_sec_write <= '0';
+  sd_sec_write_addr <= (others => '0');
+  sd_sec_write_data <= (others => '0');
   led <= '0';
+  read_active <= '0';
+  write_active <= '0';
+  write_byte_pulse <= '0';
+  write_commit_pulse <= '0';
+  write_block_done_pulse <= '0';
+  write_checksum_error_pulse <= '0';
+  write_checksum_calc <= (others => '0');
+  write_checksum_recv <= (others => '0');
+  write_prev_data <= (others => '0');
+  write_last_data <= (others => '0');
+  write_debug <= (others => '0');
+  write_trace_data <= (others => '0');
+  write_trace_count <= (others => '0');
 end architecture;

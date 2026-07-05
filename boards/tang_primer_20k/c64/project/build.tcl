@@ -31,7 +31,7 @@ add_file -type vhdl {../../../../rtl/c64/c1541_rom.vhd}
 add_file -type vhdl {../../mister_c64_probe/rtl/c1541_d64_sector_source.vhd}
 add_file -type vhdl {../../mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd}
 add_file -type verilog {../../mister_c64_probe/rtl/c1541_static_d64_image.sv}
-add_file -type verilog {../../mister_c64_probe/rtl/c1541_static_dir_gcr.sv}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_static_dir_gcr.vhd}
 
 # SD floppy (same stack as the MiSTer C64 probe board)
 add_file -type vhdl {../../../../rtl/core/peripherals/d64_sector_map.vhd}

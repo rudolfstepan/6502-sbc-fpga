@@ -9,6 +9,12 @@ use ieee.numeric_std.all;
 -- 256-byte D64 sector in the lower half of each 512-byte SD block starting at
 -- RAW_D64_LBA.  PACKED_D64_FILE instead treats RAW_D64_LBA as the start of a
 -- normal contiguous .d64 file and selects the lower/upper SD-block half.
+--
+-- With SD_WRITE_ENABLE the source also flushes decoded 1541 write bursts back
+-- to the card: the GCR engine streams the 256 data bytes into wr_buf, then
+-- wr_commit triggers a read-modify-write of the containing 512-byte block
+-- (the untouched half is preserved).  wr_busy freezes the GCR engine while
+-- the flush is in flight.
 entity c1541_sd_d64_sector_source is
   generic (
     RAW_D64_LBA       : std_logic_vector(31 downto 0) := x"00000000";
@@ -16,6 +22,11 @@ entity c1541_sd_d64_sector_source is
     -- true:  normal contiguous .d64 file, two 256-byte D64 sectors per SD block.
     PACKED_D64_FILE    : boolean := false;
     SD_BYTE_ADDRESSING : boolean := false;
+    -- true enables the write-back path (decoded 1541 writes are flushed to the
+    -- card as a read-modify-write of the 512-byte block).  Boards that do not
+    -- wire the sd_sec_write channel MUST leave this false: commits are then
+    -- silently dropped instead of hanging the drive on a dead write channel.
+    SD_WRITE_ENABLE    : boolean := false;
     CLK_HZ             : integer := 32000000;
     BAUD               : integer := 230400;
     DEBUG_UART         : boolean := false
@@ -30,12 +41,28 @@ entity c1541_sd_d64_sector_source is
     dout    : out std_logic_vector(7 downto 0);
     valid   : out std_logic;
 
+    -- Decoded write-byte stream from the GCR engine.  Bytes are collected in
+    -- a separate 256-byte buffer; wr_commit (after byte 255) flushes it to
+    -- the card.  wr_busy='1' while flushing -> freeze the GCR engine.
+    wr_en     : in  std_logic := '0';
+    wr_offset : in  std_logic_vector(7 downto 0) := (others => '0');
+    wr_data   : in  std_logic_vector(7 downto 0) := (others => '0');
+    wr_commit : in  std_logic := '0';
+    wr_busy   : out std_logic;
+
     sd_init_done           : in  std_logic;
     sd_sec_read            : out std_logic;
     sd_sec_read_addr       : out std_logic_vector(31 downto 0);
     sd_sec_read_data       : in  std_logic_vector(7 downto 0);
     sd_sec_read_data_valid : in  std_logic;
     sd_sec_read_end        : in  std_logic;
+
+    -- Raw SD write channel (wired only when SD_WRITE_ENABLE).
+    sd_sec_write           : out std_logic;
+    sd_sec_write_addr      : out std_logic_vector(31 downto 0);
+    sd_sec_write_data      : out std_logic_vector(7 downto 0);
+    sd_sec_write_data_req  : in  std_logic := '0';
+    sd_sec_write_end       : in  std_logic := '0';
 
     mount_lba    : in std_logic_vector(31 downto 0);
     mount_strobe : in std_logic;
@@ -62,7 +89,15 @@ architecture rtl of c1541_sd_d64_sector_source is
     S_DRV_WAIT,
     S_COPY_ADDR,
     S_COPY_WAIT,
-    S_COPY_STORE
+    S_COPY_STORE,
+    -- Write-back flush: map the written track/sector, read the 512-byte block
+    -- to capture the untouched half, then write the block back with wr_buf in
+    -- the written half.
+    S_WR_MAP,
+    S_WR_RMW_START,
+    S_WR_RMW_WAIT,
+    S_WR_ISSUE,
+    S_WR_STREAM
   );
   signal state : state_t := S_WAIT_SD;
 
@@ -83,6 +118,22 @@ architecture rtl of c1541_sd_d64_sector_source is
   signal sd_read_r : std_logic := '0';
   signal copy_idx : unsigned(7 downto 0) := (others => '0');
   signal raw_valid_count : unsigned(9 downto 0) := (others => '0');
+
+  -- Write-back path.  wr_buf collects the decoded data block; during the flush
+  -- the RMW pre-read parks the untouched half of the SD block in sec_buf
+  -- (whose loaded sector is invalidated afterwards, so a following DOS verify
+  -- refetches the freshly written data from the card).
+  type wr_buf_t is array(0 to 255) of std_logic_vector(7 downto 0);
+  signal wr_buf : wr_buf_t := (others => (others => '0'));
+  signal wr_commit_pend : std_logic := '0';
+  signal wr_track  : std_logic_vector(7 downto 0) := (others => '0');
+  signal wr_sector : std_logic_vector(4 downto 0) := (others => '0');
+  signal wr_upper_half : std_logic := '0';
+  signal wr_widx   : unsigned(9 downto 0) := (others => '0');
+  signal wr_out    : std_logic_vector(7 downto 0) := (others => '0');
+  signal sd_write_r : std_logic := '0';
+  -- ~0.62 s at 27 MHz, well above a worst-case SPI block write incl. card busy.
+  signal wr_guard  : unsigned(23 downto 0) := (others => '0');
 
   type dbg_buf_t is array(0 to 15) of std_logic_vector(7 downto 0);
   signal dbg_buf : dbg_buf_t := (others => (others => '0'));
@@ -139,9 +190,32 @@ architecture rtl of c1541_sd_d64_sector_source is
     end case;
     return x"00";
   end function;
+  -- Single async read port per buffer (a second read port stops Gowin from
+  -- extracting the 256x8 arrays as SSRAM and costs >1.5k LUTs each).  The
+  -- flush states borrow sec_buf's port via the address mux; dout is unused
+  -- then (the GCR engine is frozen and valid is low).
+  signal sec_rd_addr : std_logic_vector(7 downto 0);
+  signal sec_buf_rd  : std_logic_vector(7 downto 0);
+  signal wr_buf_rd   : std_logic_vector(7 downto 0);
+
+  -- Single write port for sec_buf.  Both capture paths (sector fetch and the
+  -- RMW pre-read of a flush) store sd_sec_read_data at raw_pos and differ only
+  -- in which block half they keep, so the write is one statement gated by this
+  -- enable.  Two textual writes in different FSM branches made the synthesizer
+  -- fall back from SSRAM to registers+muxes (~2k LUTs).
+  signal sec_wr_en : std_logic;
 begin
+  sec_wr_en <= '1' when sd_sec_read_data_valid = '1'
+                    and ((state = S_DRV_WAIT     and raw_pos(8) = fetch_upper_half)
+                      or (state = S_WR_RMW_WAIT and raw_pos(8) /= wr_upper_half))
+               else '0';
+  sec_rd_addr <= std_logic_vector(wr_widx(7 downto 0))
+                 when (state = S_WR_ISSUE or state = S_WR_STREAM) else offset;
+  sec_buf_rd <= sec_buf(to_integer(unsigned(sec_rd_addr)));
+  wr_buf_rd  <= wr_buf(to_integer(wr_widx(7 downto 0)));
+
   dout <= (others => '0') when blank_sector = '1'
-          else sec_buf(to_integer(unsigned(offset)));
+          else sec_buf_rd;
   req_change <= '0' when (track = loaded_track and sector = loaded_sector) else '1';
   valid <= '1' when state = S_READY and req_change = '0' and mounted = '1' else '0';
 
@@ -157,6 +231,18 @@ begin
   sd_sec_read <= sd_read_r;
   sd_sec_read_addr <= std_logic_vector(target_lba(22 downto 0)) & "000000000" when SD_BYTE_ADDRESSING
                       else std_logic_vector(target_lba);
+
+  sd_sec_write <= sd_write_r;
+  sd_sec_write_addr <= std_logic_vector(target_lba(22 downto 0)) & "000000000" when SD_BYTE_ADDRESSING
+                       else std_logic_vector(target_lba);
+  sd_sec_write_data <= wr_out;
+
+  -- Freeze the GCR engine (write mode) while a flush is pending or running.
+  wr_busy <= '1' when wr_commit_pend = '1'
+                   or state = S_WR_MAP or state = S_WR_RMW_START
+                   or state = S_WR_RMW_WAIT or state = S_WR_ISSUE
+                   or state = S_WR_STREAM
+             else '0';
 
   gen_debug_uart : if DEBUG_UART generate
     tx_i : entity work.uart_tx_ser
@@ -188,6 +274,14 @@ begin
         state <= S_WAIT_SD;
         mounted <= '0';
         sd_read_r <= '0';
+        sd_write_r <= '0';
+        wr_commit_pend <= '0';
+        wr_track <= (others => '0');
+        wr_sector <= (others => '0');
+        wr_upper_half <= '0';
+        wr_widx <= (others => '0');
+        wr_out <= (others => '0');
+        wr_guard <= (others => '0');
         loaded_track <= (others => '1');
         loaded_sector <= (others => '1');
         fetch_track <= (others => '0');
@@ -207,12 +301,41 @@ begin
         utx_valid <= '0';
       else
         sd_read_r <= '0';
+        sd_write_r <= '0';
         utx_valid <= '0';
 
+        -- sec_buf single write port (see sec_wr_en above).
+        if sec_wr_en = '1' then
+          sec_buf(to_integer(raw_pos(7 downto 0))) <= sd_sec_read_data;
+        end if;
+
+        -- Collect decoded write bytes (independent of the FSM: the burst runs
+        -- in real time against the virtual head, never against the SD card).
+        if wr_en = '1' then
+          wr_buf(to_integer(unsigned(wr_offset))) <= wr_data;
+        end if;
+        if SD_WRITE_ENABLE and wr_commit = '1' then
+          wr_commit_pend <= '1';
+          wr_track  <= track;
+          wr_sector <= sector;
+        end if;
+
+        -- Registered read of the outgoing flush byte; the SD controller
+        -- samples one cycle after its request, matching this 1-cycle mux.
+        -- (sec_buf_rd follows wr_widx in the flush states via sec_rd_addr.)
+        if wr_widx(8) = wr_upper_half then
+          wr_out <= wr_buf_rd;
+        else
+          wr_out <= sec_buf_rd;
+        end if;
+
         if mount_strobe = '1' then
+          -- Remount aborts any pending/running flush (the freshly selected
+          -- image should not receive a write burst aimed at the old one).
           active_d64_lba <= unsigned(mount_lba);
           mounted <= '1';
           sd_read_r <= '0';
+          wr_commit_pend <= '0';
           loaded_track <= (others => '1');
           loaded_sector <= (others => '1');
           if sd_init_done = '1' then
@@ -234,7 +357,17 @@ begin
             state <= S_READY;
 
           when S_READY =>
-            if mounted = '1' and req_change = '1' then
+            -- A pending write flush beats a new fetch: the freshly written
+            -- data must reach the card before any reread of that sector.
+            if wr_commit_pend = '1' then
+              wr_commit_pend <= '0';
+              if mounted = '1' then
+                fetch_track  <= wr_track;
+                fetch_sector <= wr_sector;
+                wr_guard <= (others => '0');
+                state <= S_WR_MAP;
+              end if;
+            elsif mounted = '1' and req_change = '1' then
               fetch_track <= track;
               fetch_sector <= sector;
               state <= S_DRV_REQ;
@@ -270,9 +403,10 @@ begin
             state <= S_DRV_WAIT;
 
           when S_DRV_WAIT =>
+            -- (the sec_buf capture itself happens through the shared single
+            -- write port above, gated by sec_wr_en)
             if sd_sec_read_data_valid = '1' then
               if raw_pos(8) = fetch_upper_half then
-                sec_buf(to_integer(raw_pos(7 downto 0))) <= sd_sec_read_data;
                 if raw_pos(7 downto 0) >= 2 and raw_pos(7 downto 0) < 16 then
                   dbg_buf(to_integer(raw_pos(3 downto 0))) <= sd_sec_read_data;
                 end if;
@@ -283,6 +417,66 @@ begin
             if sd_sec_read_end = '1' then
               loaded_track <= fetch_track;
               loaded_sector <= fetch_sector;
+              state <= S_READY;
+            end if;
+
+          -- ── Write-back flush ─────────────────────────────────────────────
+          when S_WR_MAP =>
+            wr_guard <= wr_guard + 1;
+            if map_valid = '1' then
+              if PACKED_D64_FILE then
+                target_lba <= active_d64_lba
+                            + resize(unsigned(map_index(9 downto 1)), 32);
+                wr_upper_half <= map_index(0);
+              else
+                target_lba <= active_d64_lba + resize(unsigned(map_index), 32);
+                wr_upper_half <= '0';
+              end if;
+              raw_pos <= (others => '0');
+              state <= S_WR_RMW_START;
+            else
+              -- The DOS never writes an illegal track/sector; drop defensively.
+              state <= S_READY;
+            end if;
+
+          when S_WR_RMW_START =>
+            sd_read_r <= '1';
+            state <= S_WR_RMW_WAIT;
+
+          when S_WR_RMW_WAIT =>
+            -- Park only the half we do NOT overwrite (via the shared sec_buf
+            -- write port, gated by sec_wr_en); sec_buf is repurposed as
+            -- scratch and its loaded sector invalidated after the flush.
+            wr_guard <= wr_guard + 1;
+            if sd_sec_read_data_valid = '1' then
+              raw_pos <= raw_pos + 1;
+            end if;
+            if sd_sec_read_end = '1' then
+              wr_widx <= (others => '0');
+              state <= S_WR_ISSUE;
+            elsif wr_guard = (wr_guard'range => '1') then
+              loaded_track  <= (others => '1');
+              loaded_sector <= (others => '1');
+              state <= S_READY;
+            end if;
+
+          when S_WR_ISSUE =>
+            sd_write_r <= '1';
+            state <= S_WR_STREAM;
+
+          when S_WR_STREAM =>
+            wr_guard <= wr_guard + 1;
+            if sd_sec_write_data_req = '1' then
+              wr_widx <= wr_widx + 1;
+            end if;
+            if sd_sec_write_end = '1'
+               or wr_guard = (wr_guard'range => '1') then
+              -- Invalidate the buffered sector: a following DOS verify then
+              -- refetches the sector from the card (which now holds the new
+              -- data), instead of reading a stale buffer.
+              loaded_track  <= (others => '1');
+              loaded_sector <= (others => '1');
+              blank_sector  <= '0';
               state <= S_READY;
             end if;
 

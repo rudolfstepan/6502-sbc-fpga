@@ -45,7 +45,7 @@
         <File path="../rtl/c1541_v1541_uart_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/c1541_sd_d64_sector_source.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/c1541_static_d64_image.sv" type="file.verilog" enable="1"/>
-        <File path="../rtl/c1541_static_dir_gcr.sv" type="file.verilog" enable="1"/>
+        <File path="../rtl/c1541_static_dir_gcr.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/c64/mister_c1541_iec.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/ps2_to_mister_key.vhd" type="file.vhdl" enable="1"/>
         <File path="../rtl/c64_prg_upload_monitor.vhd" type="file.vhdl" enable="1"/>
