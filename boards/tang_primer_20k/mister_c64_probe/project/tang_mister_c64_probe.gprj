@@ -10,7 +10,7 @@
         <File path="../../../../rtl/core/hdmi/hdmi_data_island_576p_pkg.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/hdmi/hdmi_encoder.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
-        <File path="../../rtl/tang20k_hdmi_tx.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/tang20k_hdmi_tx.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/t65/T65_Pack.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/t65/T65_ALU.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../third_party/mister_c64/rtl/t65/T65_MCode.vhd" type="file.vhdl" enable="1"/>

@@ -7,7 +7,7 @@ add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd}
 add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_data_island_576p_pkg.vhd}
 add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_encoder.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
-add_file -type vhdl {../../rtl/tang20k_hdmi_tx.vhd}
+add_file -type vhdl {../rtl/tang20k_hdmi_tx.vhd}
 
 # MiSTer C64 core files vendored under third_party/mister_c64.
 add_file -type vhdl {../../../../third_party/mister_c64/rtl/t65/T65_Pack.vhd}

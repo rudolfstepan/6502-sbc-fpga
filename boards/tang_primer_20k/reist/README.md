@@ -55,7 +55,7 @@ that off the synthesis resource/timing report after building.
 | `rtl/reist/ip_divider_ip.vhd` | **hardware** wrapper binding the Gowin IP (`work.ip_divider`) |
 | `rtl/reist/seq_divider.vhd` | a plain restoring divider (used only by the unit testbench) |
 | `src/integer_division/…` | the generated Gowin Integer Division soft IP |
-| `boards/tang_primer_20k/rtl/reist_top.vhd` | board top: clock, reset, LEDs |
+| `boards/tang_primer_20k/reist/rtl/reist_top.vhd` | board top: clock, reset, LEDs |
 | `reist_bench.gprj` / `.cst` / `.sdc` / `build.tcl` | this Gowin project |
 
 `ip_divider.vhd` and `ip_divider_ip.vhd` both declare entity `ip_divider`;

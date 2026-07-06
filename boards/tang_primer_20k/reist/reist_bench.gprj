@@ -7,7 +7,7 @@
     <FileList>
         <File path="src/integer_division/integer_division.v" type="file.verilog" enable="1"/>
         <File path="D:/Development/6502-sbc-fpga/rtl/reist/ip_divider_ip.vhd" type="file.vhdl" enable="1"/>
-        <File path="D:/Development/6502-sbc-fpga/boards/tang_primer_20k/rtl/reist_top.vhd" type="file.vhdl" enable="1"/>
+        <File path="rtl/reist_top.vhd" type="file.vhdl" enable="1"/>
         <File path="D:/Development/6502-sbc-fpga/rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="D:/Development/6502-sbc-fpga/rtl/reist/bench_report.vhd" type="file.vhdl" enable="1"/>
         <File path="D:/Development/6502-sbc-fpga/rtl/reist/reist_bench_engine.vhd" type="file.vhdl" enable="1"/>

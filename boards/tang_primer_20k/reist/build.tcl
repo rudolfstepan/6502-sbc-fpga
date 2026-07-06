@@ -15,7 +15,7 @@ add_file -type vhdl {../../../rtl/reist/reist_core.vhd}
 add_file -type vhdl {../../../rtl/reist/reist_bench_engine.vhd}
 add_file -type vhdl {../../../rtl/core/peripherals/uart_tx_ser.vhd}
 add_file -type vhdl {../../../rtl/reist/bench_report.vhd}
-add_file -type vhdl {../rtl/reist_top.vhd}
+add_file -type vhdl {rtl/reist_top.vhd}
 
 add_file -type cst {reist_bench.cst}
 add_file -type sdc {reist_bench.sdc}
