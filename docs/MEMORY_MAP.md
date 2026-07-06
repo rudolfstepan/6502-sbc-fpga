@@ -14,7 +14,7 @@ This page describes the **Tang Primer 20K split-ROM map** used by
 | `$0100`–`$01FF` | 256 B | CPU stack | on-chip BSRAM |
 | `$0200`–`$3FFF` | ~15.5 KiB | Program / BASIC working RAM | on-chip BSRAM |
 | `$4000`–`$5FFF` | 8 KiB | RAM (SRAM region, separate from zero-page RAM) | `bram_byte_bridge` 8 KB BSRAM (or DDR3 when `USE_DDR3`) |
-| `$6000`–`$7FFF` | 8 KiB | **VIC bitmap window** (banked into the framebuffer) | `fb_ram` |
+| `$6000`–`$7FFF` | 8 KiB | **VIC bitmap window** (banked into the DDR3 framebuffer; bank via `$9000[7:5]` or `$9006`) | `vic_fb_ddr3` (DDR3) |
 | `$8000`–`$87FF` | 2 KiB | VIC text RAM (char `$8000`+, colour `$8400`+) | BSRAM |
 | `$8800`–`$880F` | 16 B | VIA 6522 (parallel I/O, timers) | — |
 | `$8810`–`$8813` | 4 B | UART 6551 (serial) | — |
@@ -79,14 +79,24 @@ older boot tops.)
 
 ## VIC bitmap window banking (`$6000`–`$7FFF`)
 
-The 8 KiB window is a movable view into the larger framebuffer RAM (`fb_ram`,
-38400 bytes for 320×240 4 bpp). The active bank is chosen via the VIC MODE
-register `$9000`:
+The 8 KiB window is a movable view into the framebuffer. On the Tang Primer 20K SBC
+the framebuffer lives in **DDR3** (`vic_fb_ddr3`, not the old BSRAM `fb_ram`), and
+the VIC MODE register `$9000` selects both the mode and — for the small 320×200
+8bpp mode — the bank:
 
-- **320×240 16-colour** (MODE bit 4): 3 bank bits `$9000[7:5]` select bank 0–4.
-- **legacy 160×100 / 180×120** modes: single bank bit `$9000[2]`.
+- **320×200 8bpp RGB332** (MODE bit 4): 3 bank bits `$9000[7:5]` select bank 0–7
+  (8 × 8 KiB = 64 KiB ≥ 64000 bytes).
+- **640×400 8bpp RGB332** (MODE bit 5): 256000 bytes = 32 banks, so the bank comes
+  from the dedicated **`$9006`** register (bits 4:0) instead — `$9000` has no spare
+  bits for it.
+- **320×200 16bpp RGB565** (MODE bit 6): 65536 colours, 2 bytes/pixel = 128000
+  bytes = 16 banks, also banked via **`$9006`** (bits 4:0).
 
-Pixel/byte addressing for each mode is documented in [VIC](./VIC.md).
+Only one bitmap mode is active at a time; the three frames live in separate DDR3
+regions. Pixel/byte addressing for each mode is documented in [VIC](./VIC.md).
+
+(The old `fb_ram`-backed modes — 320×240 4bpp 16-colour on MODE bit 4, legacy
+160×100 / 180×120 on `$9000[2]` — were retired when the framebuffer moved to DDR3.)
 
 ## See Also
 

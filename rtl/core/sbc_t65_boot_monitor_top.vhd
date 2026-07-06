@@ -64,16 +64,20 @@ entity sbc_t65_boot_monitor_top is
     -- held (cpu_rdy='0') for the whole access; payload latched at fbw_req.
     fbw_req   : out std_logic;                           -- 1-clk pulse: start access
     fbw_we    : out std_logic;                           -- 1=write pixel, 0=read
-    fbw_addr  : out std_logic_vector(16 downto 0);       -- pixel index (latched)
+    fbw_addr  : out std_logic_vector(17 downto 0);       -- pixel index (latched)
     fbw_din   : out data_t;                              -- write byte (latched)
     fbw_dout  : in  data_t := (others => '0');           -- read byte (held)
     fbw_ack   : in  std_logic := '0';                    -- 1-clk pulse: complete
+    -- DDR3 framebuffer geometry selects: fb_hires = 640x400 8bpp, fb_true = 320x200
+    -- 16bpp RGB565 (both feed vic_fb_ddr3 at the board top). 320x200 8bpp = neither.
+    fb_hires  : out std_logic;
+    fb_true   : out std_logic;
     -- Video streaming port: drives vic_fb_ddr3's double-buffer prefetch and reads
-    -- the current scanline's pixels back for display.
+    -- the current scanline's pixels back for display (16-bit: RGB565, or low byte).
     fb_frame_start : out std_logic;                      -- 1-clk pulse, frame top
     fb_line_adv    : out std_logic;                      -- 1-clk pulse per source line
-    fb_rdaddr      : out std_logic_vector(9 downto 0);   -- (line mod 2)*320 + col
-    fb_rddata      : in  std_logic_vector(7 downto 0) := (others => '0');
+    fb_rdaddr      : out std_logic_vector(10 downto 0);  -- (line mod 2)*640 + col
+    fb_rddata      : in  std_logic_vector(15 downto 0) := (others => '0');
 
     -- PT8211 audio DAC (I2S-style serial output)
     dac_bck     : out std_logic;
@@ -250,9 +254,16 @@ architecture rtl of sbc_t65_boot_monitor_top is
   -- Framebuffer read byte (latched from the DDR3 controller on a read/monitor
   -- completion). Consumed by the CPU read mux and the monitor peek path.
   signal bitmap_dout      : data_t := (others => '0');
-  -- CPU/monitor bank into the framebuffer: the DDR3 320x200 mode (mode bit 4)
-  -- uses 3 bank bits (vic_mode_reg(7:5)) -> 8x 8 KiB = 64 KiB >= 64000 pixels.
+  -- CPU/monitor bank into the framebuffer. The 320x200 mode (mode bit 4) uses 3
+  -- bank bits (vic_mode_reg(7:5)) -> 8x 8 KiB = 64 KiB >= 64000 pixels. The 640x400
+  -- hi-res mode (mode bit 5) needs 256000 bytes = 32 banks, so it takes a full
+  -- 5-bit bank from a dedicated register ($9006) instead. fb_pix_bank is the
+  -- effective 5-bit bank feeding the 18-bit pixel index.
   signal bmp_bank         : std_logic_vector(2 downto 0);
+  signal fb_pix_bank      : std_logic_vector(4 downto 0);
+  signal fb_hires_mode    : std_logic;                       -- mode bit5, gated
+  signal fb_true_mode     : std_logic;                       -- mode bit6, gated (16bpp)
+  signal vic_fb_bank      : std_logic_vector(4 downto 0) := (others => '0');  -- $9006
   signal vram_data_sel    : std_logic := '0';
   signal vram_data_mux    : data_t;
 
@@ -264,15 +275,15 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal fbw_serving_mon  : std_logic := '0';
   signal fbw_serving_write : std_logic := '0';
   signal fbw_wr_pending   : std_logic := '0';
-  signal fbw_wr_addr      : std_logic_vector(16 downto 0) := (others => '0');
+  signal fbw_wr_addr      : std_logic_vector(17 downto 0) := (others => '0');
   signal fbw_wr_data      : data_t := (others => '0');
-  signal fbw_rd_addr      : std_logic_vector(16 downto 0) := (others => '0');
+  signal fbw_rd_addr      : std_logic_vector(17 downto 0) := (others => '0');
   signal fbw_stall        : std_logic;
   signal fb_rd_acc        : std_logic;
   signal fb_wr_strobe     : std_logic;
   signal mon_fb_acc       : std_logic;
-  signal fbw_cpu_pix      : std_logic_vector(16 downto 0);
-  signal fbw_mon_pix      : std_logic_vector(16 downto 0);
+  signal fbw_cpu_pix      : std_logic_vector(17 downto 0);
+  signal fbw_mon_pix      : std_logic_vector(17 downto 0);
 
   signal char_addr   : std_logic_vector(9 downto 0);
   signal char_glyph_hi : std_logic;
@@ -442,16 +453,25 @@ begin
 
   -- ── DDR3 framebuffer CPU byte port ($6000-$7FFF window) ───────────────────
   -- The framebuffer lives in DDR3 (vic_fb_ddr3 at the board top). The CPU reaches
-  -- it one pixel byte at a time through this req/ack controller, banked exactly
-  -- like the old fb_ram window: mode bit 4 selects the 3-bank (7:5) 64 KiB map,
-  -- covering the 64000-byte 320x200 8bpp frame.
+  -- it one pixel byte at a time through this req/ack controller, banked through the
+  -- $6000-$7FFF (8 KiB) window. 320x200 (mode bit 4) banks with vic_mode_reg(7:5)
+  -- = 8 banks = 64 KiB >= 64000; 640x400 hi-res (mode bit 5) needs 32 banks, so it
+  -- banks with the full 5-bit $9006 register (vic_fb_bank).
+  fb_hires_mode <= vic_mode_reg(5) and not vic_mode_reg(4);
+  fb_true_mode  <= vic_mode_reg(6) and not vic_mode_reg(5) and not vic_mode_reg(4);
+  fb_hires       <= fb_hires_mode;   -- geometry selects to vic_fb_ddr3 (board top)
+  fb_true        <= fb_true_mode;
   bmp_bank <= vic_mode_reg(7 downto 5) when vic_mode_reg(4) = '1'
               else "00" & vic_mode_reg(2);
+  -- 640x400 (32 banks) and 320x200 16bpp (128000 B = 16 banks) both bank via the
+  -- dedicated $9006 register; only 320x200 8bpp uses the $9000 bits 7:5 window.
+  fb_pix_bank <= vic_fb_bank when (fb_hires_mode = '1' or fb_true_mode = '1')
+                 else "00" & bmp_bank;
 
-  -- 17-bit pixel index = "0" & 3 bank bits & 13-bit offset into the $6000 window.
-  fbw_cpu_pix <= "0" & bmp_bank &
+  -- 18-bit pixel index = 5 bank bits & 13-bit offset into the $6000 window.
+  fbw_cpu_pix <= fb_pix_bank &
                  std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
-  fbw_mon_pix <= "0" & bmp_bank &
+  fbw_mon_pix <= fb_pix_bank &
                  std_logic_vector(resize(unsigned(mon_addr_lat) - ADDR_VIC_BMP_BASE, 13));
 
   -- Access classification (mirrors the sram_ext $4000-$5FFF byte port).
@@ -665,6 +685,7 @@ begin
         vic_cursor_y <= (others => '0');
         vic_mode_reg <= (others => '0');   -- back to text mode
         vic_text_attr <= (others => '0');  -- back to global background
+        vic_fb_bank  <= (others => '0');   -- hi-res framebuffer bank -> 0
       elsif vic_reg_we = '1' then
         case cpu_addr(3 downto 0) is
           when x"0" =>
@@ -683,6 +704,8 @@ begin
             vic_bg_color <= cpu_dout;
           when x"5" =>
             vic_text_attr <= cpu_dout;
+          when x"6" =>
+            vic_fb_bank <= cpu_dout(4 downto 0);   -- 640x400 framebuffer bank 0..31
           when others =>
             null;
         end case;
@@ -691,7 +714,7 @@ begin
   end process;
 
   process(cpu_addr, vic_cursor_x, vic_cursor_y, vic_text_color, vic_bg_color,
-          vic_mode_reg, vic_text_attr)
+          vic_mode_reg, vic_text_attr, vic_fb_bank)
   begin
     case cpu_addr(3 downto 0) is
       when x"0" =>
@@ -706,6 +729,8 @@ begin
         vic_reg_dout <= vic_bg_color;
       when x"5" =>
         vic_reg_dout <= vic_text_attr;
+      when x"6" =>
+        vic_reg_dout <= "000" & vic_fb_bank;
       when others =>
         vic_reg_dout <= x"00";
     end case;
@@ -1237,9 +1262,12 @@ begin
       color256_mode    => vic_mode_reg(1),
       color64_mode     => vic_mode_reg(3),
       -- Mode bit 4 now selects the DDR3 320x200 8bpp framebuffer (was the
-      -- BSRAM-backed 320x240 4bpp color16 mode, retired with fb_ram).
+      -- BSRAM-backed 320x240 4bpp color16 mode, retired with fb_ram); mode bit 5
+      -- selects the 640x400 8bpp hi-res framebuffer (same DDR3 controller).
       color16_mode     => '0',
       fb_ddr3_mode     => vic_mode_reg(4),
+      fb_hires_mode    => fb_hires_mode,
+      fb_true_mode     => fb_true_mode,
       cell_bg_mode     => vic_text_attr(0),
       border_color     => vic2_regs(16#20#)(3 downto 0),
       bg_color         => vic2_regs(16#21#)(3 downto 0),

@@ -17,7 +17,12 @@ KERNEL_ROM = ../../roms/6502/kernel.rom
         soundtest upload-soundtest soundsid upload-soundsid \
         sound-commando upload-sound-commando mandelbrot \
         mandelbrot-bitmap mandelbrot-copro upload-mandelbrot-bitmap \
-        upload-mandelbrot-copro disk-test upload-disk-test
+        upload-mandelbrot-copro mandelbrot-hires upload-mandelbrot-hires \
+        mandelbrot-true upload-mandelbrot-true \
+        mandelbrot-true240 upload-mandelbrot-true240 \
+        disk-test upload-disk-test \
+        test-ddr3-fb upload-test-ddr3-fb test-ddr3-hires upload-test-ddr3-hires \
+        test-ddr3-true upload-test-ddr3-true
 
 all: $(ROM_HEX)
 
@@ -143,6 +148,18 @@ MANDELBROT_COPRO_S   = mandelbrot_copro.s
 MANDELBROT_COPRO_O   = mandelbrot_copro.o
 MANDELBROT_COPRO_ROM = ../../roms/6502/mandelbrot_copro.bin
 
+MANDELBROT_HIRES_S   = mandelbrot_hires.s
+MANDELBROT_HIRES_O   = mandelbrot_hires.o
+MANDELBROT_HIRES_ROM = ../../roms/6502/mandelbrot_hires.bin
+
+MANDELBROT_TRUE_S    = mandelbrot_true.s
+MANDELBROT_TRUE_O    = mandelbrot_true.o
+MANDELBROT_TRUE_ROM  = ../../roms/6502/mandelbrot_true.bin
+
+MANDELBROT_TRUE240_S   = mandelbrot_true240.s
+MANDELBROT_TRUE240_O   = mandelbrot_true240.o
+MANDELBROT_TRUE240_ROM = ../../roms/6502/mandelbrot_true240.bin
+
 $(MANDELBROT_BITMAP_O): $(MANDELBROT_BITMAP_S)
 	$(CA65) --cpu 65c02 -t none -l mandelbrot_bitmap.lst $< -o $@
 
@@ -157,20 +174,95 @@ $(MANDELBROT_COPRO_ROM): $(MANDELBROT_COPRO_O) $(MANDELBROT_CFG)
 	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_copro.map
 	@echo "ROM ready: $(MANDELBROT_COPRO_ROM)  (upload with --split-rom)"
 
+$(MANDELBROT_HIRES_O): $(MANDELBROT_HIRES_S)
+	$(CA65) --cpu 65c02 -t none -l mandelbrot_hires.lst $< -o $@
+
+$(MANDELBROT_HIRES_ROM): $(MANDELBROT_HIRES_O) $(MANDELBROT_CFG)
+	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_hires.map
+	@echo "ROM ready: $(MANDELBROT_HIRES_ROM)  (640x400; upload with --split-rom)"
+
+$(MANDELBROT_TRUE_O): $(MANDELBROT_TRUE_S)
+	$(CA65) --cpu 65c02 -t none -l mandelbrot_true.lst $< -o $@
+
+$(MANDELBROT_TRUE_ROM): $(MANDELBROT_TRUE_O) $(MANDELBROT_CFG)
+	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_true.map
+	@echo "ROM ready: $(MANDELBROT_TRUE_ROM)  (320x200 RGB565; upload with --split-rom)"
+
+$(MANDELBROT_TRUE240_O): $(MANDELBROT_TRUE240_S)
+	$(CA65) --cpu 65c02 -t none -l mandelbrot_true240.lst $< -o $@
+
+$(MANDELBROT_TRUE240_ROM): $(MANDELBROT_TRUE240_O) $(MANDELBROT_CFG)
+	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_true240.map
+	@echo "ROM ready: $(MANDELBROT_TRUE240_ROM)  (320x240 full-screen RGB565; --split-rom)"
+
 mandelbrot-bitmap: $(MANDELBROT_BITMAP_ROM)
 
 mandelbrot-copro: $(MANDELBROT_COPRO_ROM)
 
-mandelbrot: mandelbrot-bitmap mandelbrot-copro
+mandelbrot-hires: $(MANDELBROT_HIRES_ROM)
+
+mandelbrot-true: $(MANDELBROT_TRUE_ROM)
+
+mandelbrot-true240: $(MANDELBROT_TRUE240_ROM)
+
+mandelbrot: mandelbrot-bitmap mandelbrot-copro mandelbrot-hires mandelbrot-true mandelbrot-true240
 
 upload-mandelbrot-bitmap: $(MANDELBROT_BITMAP_ROM)
 	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_BITMAP_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
 
 upload-mandelbrot-copro: $(MANDELBROT_COPRO_ROM)
 	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_COPRO_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
+
+upload-mandelbrot-hires: $(MANDELBROT_HIRES_ROM)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_HIRES_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
+
+upload-mandelbrot-true: $(MANDELBROT_TRUE_ROM)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_TRUE_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
+
+upload-mandelbrot-true240: $(MANDELBROT_TRUE240_ROM)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_TRUE240_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
 mandelbrot-loader: $(MANDELBROT_COPRO_ROM)
 	@echo "ERROR: BASIC sparse loader is incompatible with the split shadow-ROM map; use upload-mandelbrot-copro"
 	@exit 1
+
+# ── DDR3 framebuffer test ROMs (split map @ $A000, upload with --split-rom) ─
+TEST_DDR3_FB_ROM    = ../../roms/6502/test_ddr3_fb.rom
+TEST_DDR3_HIRES_ROM = ../../roms/6502/test_ddr3_hires.rom
+TEST_DDR3_TRUE_ROM  = ../../roms/6502/test_ddr3_true.rom
+
+test_ddr3_fb.o: test_ddr3_fb.s
+	$(CA65) --cpu 65c02 -t none -l test_ddr3_fb.lst $< -o $@
+
+$(TEST_DDR3_FB_ROM): test_ddr3_fb.o test_ddr3_fb.cfg
+	$(LD65) -C test_ddr3_fb.cfg -o $@ $< -m test_ddr3_fb.map
+	@echo "ROM ready: $(TEST_DDR3_FB_ROM)  (320x200; upload with --split-rom)"
+
+test_ddr3_hires.o: test_ddr3_hires.s
+	$(CA65) --cpu 65c02 -t none -l test_ddr3_hires.lst $< -o $@
+
+$(TEST_DDR3_HIRES_ROM): test_ddr3_hires.o test_ddr3_hires.cfg
+	$(LD65) -C test_ddr3_hires.cfg -o $@ $< -m test_ddr3_hires.map
+	@echo "ROM ready: $(TEST_DDR3_HIRES_ROM)  (640x400; upload with --split-rom)"
+
+test_ddr3_true.o: test_ddr3_true.s
+	$(CA65) --cpu 65c02 -t none -l test_ddr3_true.lst $< -o $@
+
+$(TEST_DDR3_TRUE_ROM): test_ddr3_true.o test_ddr3_true.cfg
+	$(LD65) -C test_ddr3_true.cfg -o $@ $< -m test_ddr3_true.map
+	@echo "ROM ready: $(TEST_DDR3_TRUE_ROM)  (320x200 RGB565; upload with --split-rom)"
+
+test-ddr3-fb: $(TEST_DDR3_FB_ROM)
+test-ddr3-hires: $(TEST_DDR3_HIRES_ROM)
+test-ddr3-true: $(TEST_DDR3_TRUE_ROM)
+
+upload-test-ddr3-fb: $(TEST_DDR3_FB_ROM)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(TEST_DDR3_FB_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
+
+upload-test-ddr3-hires: $(TEST_DDR3_HIRES_ROM)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(TEST_DDR3_HIRES_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
+
+upload-test-ddr3-true: $(TEST_DDR3_TRUE_ROM)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(TEST_DDR3_TRUE_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
 
 clean:
 	-del /Q rom_demo.o $(ROM_BIN) rom_demo.lst rom_demo.map 2>NUL || true
@@ -178,3 +270,8 @@ clean:
 	-del /Q soundsid.o $(SOUNDSID_ROM) soundsid.lst soundsid.map 2>NUL || true
 	-del /Q sound_commando.o $(SOUND_COMMANDO_ROM) sound_commando.s sound_commando.lst sound_commando.map 2>NUL || true
 	-del /Q $(MANDELBROT_BITMAP_O) $(MANDELBROT_COPRO_O) $(MANDELBROT_BITMAP_ROM) $(MANDELBROT_COPRO_ROM) mandelbrot_bitmap.lst mandelbrot_bitmap.map mandelbrot_copro.lst mandelbrot_copro.map $(MANDELBROT_BAS) 2>NUL || true
+	-del /Q $(MANDELBROT_HIRES_O) $(MANDELBROT_HIRES_ROM) mandelbrot_hires.lst mandelbrot_hires.map 2>NUL || true
+	-del /Q $(MANDELBROT_TRUE_O) $(MANDELBROT_TRUE_ROM) mandelbrot_true.lst mandelbrot_true.map 2>NUL || true
+	-del /Q $(MANDELBROT_TRUE240_O) $(MANDELBROT_TRUE240_ROM) mandelbrot_true240.lst mandelbrot_true240.map 2>NUL || true
+	-del /Q test_ddr3_true.o test_ddr3_true.lst test_ddr3_true.map 2>NUL || true
+	-del /Q test_ddr3_fb.o test_ddr3_fb.lst test_ddr3_fb.map test_ddr3_hires.o test_ddr3_hires.lst test_ddr3_hires.map 2>NUL || true

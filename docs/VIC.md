@@ -61,13 +61,20 @@ display.
 
 ### MODE bits (`$9000`)
 
+> **Tang Primer 20K SBC:** the framebuffer moved from BSRAM (`fb_ram`) to **DDR3**
+> (`vic_fb_ddr3`), which retired the legacy modes below. The live modes there are
+> **bit 4** = 320×200 8bpp RGB332 (bank `$9000[7:5]`), **bit 5** = 640×400 8bpp
+> (bank `$9006`), **bit 6** = 320×200 16bpp RGB565 (bank `$9006`). See
+> [boards/tang_primer_20k/sbc/README.md](../boards/tang_primer_20k/sbc/README.md).
+> The table below documents the older BSRAM modes (still used by the non-DDR3 tops).
+
 | Bit | Name | Meaning |
 | --- | --- | --- |
 | 0 | BITMAP | Enable bitmap mode (0 = text) |
 | 1 | COLOR256 | 160×100 RGB332 (one byte = one pixel) |
 | 2 | BANK | Legacy 1-bit bitmap bank (COLOR256/COLOR64) |
 | 3 | COLOR64 | 180×120 packed RGB222 |
-| 4 | COLOR16 | **320×240 4 bpp / 16-colour palette** |
+| 4 | COLOR16 | **320×240 4 bpp / 16-colour palette** (legacy BSRAM) |
 | 7:5 | BANK16 | 3-bit framebuffer bank (0–4) for COLOR16 |
 
 Set BITMAP (bit 0) together with exactly one sub-mode bit. COLOR16 has priority in

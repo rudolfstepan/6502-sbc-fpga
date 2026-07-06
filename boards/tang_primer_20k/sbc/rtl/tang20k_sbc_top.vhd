@@ -390,16 +390,19 @@ architecture rtl of tang20k_sbc_top is
   signal sbc_boot_done      : std_logic;
 
   -- DDR3 framebuffer (vic_fb_ddr3): CPU pixel-byte req/ack port + video stream.
+  -- 18-bit pixel index + 11-bit read address cover the 640x400 hi-res frame.
   signal fbw_req        : std_logic;
   signal fbw_we         : std_logic;
-  signal fbw_addr       : std_logic_vector(16 downto 0);
+  signal fbw_addr       : std_logic_vector(17 downto 0);
   signal fbw_din        : data_t;
   signal fbw_dout       : data_t;
   signal fbw_ack        : std_logic;
+  signal fb_hires       : std_logic;
+  signal fb_true        : std_logic;
   signal fb_frame_start : std_logic;
   signal fb_line_adv    : std_logic;
-  signal fb_rdaddr      : std_logic_vector(9 downto 0);
-  signal fb_rddata      : std_logic_vector(7 downto 0);
+  signal fb_rdaddr      : std_logic_vector(10 downto 0);
+  signal fb_rddata      : std_logic_vector(15 downto 0);
 begin
   -- key(0) is the reset button: a short press soft-resets only the CPU (the
   -- running program restarts via its reset vector, ROM/boot/SRAM kept), a long
@@ -711,6 +714,8 @@ begin
       fbw_din        => fbw_din,
       fbw_dout       => fbw_dout,
       fbw_ack        => fbw_ack,
+      fb_hires       => fb_hires,
+      fb_true        => fb_true,
       fb_frame_start => fb_frame_start,
       fb_line_adv    => fb_line_adv,
       fb_rdaddr      => fb_rdaddr,
@@ -907,13 +912,21 @@ begin
   -- The DDR3 IP now backs ONLY the framebuffer. vic_fb_ddr3 is the sole master
   -- on the app interface (no arbiter); the $4000-$5FFF main-RAM window moved back
   -- to the always-on bram_byte_bridge below, which freed the BSRAM the DDR3 IP
-  -- FIFOs need.  320x200 8bpp = 64000 bytes, 1 pixel/byte, BL8 = 16-byte bursts.
+  -- FIFOs need.  One controller serves both geometries (fb_hires selects them):
+  --   320x200 8bpp  = 64000 bytes  at DDR3 byte base 0
+  --   640x400 8bpp  = 256000 bytes at DDR3 byte base 0x40000 (262144)
+  --   320x200 16bpp = 128000 bytes at DDR3 byte base 0x80000 (524288), RGB565
+  -- BL8 = 16-byte bursts.
   fb_ddr3_i : entity work.vic_fb_ddr3
     generic map (FB_BASE_WORD => 0, LINE_PIX => 320, NUM_LINES => 200,
+                 HIRES_BASE_WORD => 262144, HIRES_LINE_PIX => 640,
+                 HIRES_NUM_LINES => 400, TRUE_BASE_WORD => 524288,
                  APP_ADDR_BITS => 27)
     port map (
       clk_sys   => clk_sys,
       rst_sys_n => reset_n,
+      hires     => fb_hires,
+      bpp16     => fb_true,
       fb_frame_start => fb_frame_start,
       fb_line_adv    => fb_line_adv,
       fb_rdaddr      => fb_rdaddr,
