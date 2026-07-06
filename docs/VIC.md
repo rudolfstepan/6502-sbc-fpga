@@ -140,6 +140,11 @@ Colours use the 16-entry palette below.
 - background colour from `$D021`
 - no per-cell colour RAM in this compact mode
 
+The current EhBASIC boot screen uses this mode by default, with a green border,
+black background, and light-blue text:
+
+![6502 Smart Business Computer 80x25 EhBASIC boot screen](../examples/6502-sbc-80x25.jpg)
+
 ## Bitmap Modes
 
 All bitmap pixel data lives in a banked framebuffer RAM addressed through the CPU
