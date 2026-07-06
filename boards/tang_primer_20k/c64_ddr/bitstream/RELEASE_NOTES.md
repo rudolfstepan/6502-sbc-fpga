@@ -25,6 +25,13 @@ oeffentlich. Die SHA256-Summen hier identifizieren die lokalen Dateien.
   danach in `CR_DONE`. Der vorherige Reset-Loop ist damit behoben.
 - Timing im letzten Gowin-Build: 0 Setup- und 0 Hold-Verletzungen. Ressourcen
   grob: 78 % Logic, 39/46 BSRAM.
+- Der gemeinsame Fixed-Point-Math-Coprozessor ist im C64-DDR-Fork wieder in
+  I/O1 unter `$DEB0-$DEBF` gemappt. `$DFxx` bleibt fuer das SD-Disk-Fenster
+  reserviert; der optionale Host-UART ist auf `$DE00-$DE01` eingegrenzt.
+- C64-Mandelbrot-Testprogramme sind getrennt benannt: `mandelbrot.prg` ist die
+  CPU-only-Referenz, `mandelbrot-copo.prg` nutzt den `$DEB0`-Coprozessor. Beide
+  lassen den VIC-Bildschirm waehrend des Rechnens sichtbar; die Copro-Version
+  zeigt per Border Selftest/Zeilenfortschritt/Fertigstatus.
 - Die erzeugte Datei liegt lokal unter
   `project/impl/pnr/tang_c64_ddr.fs`; sie wird wegen eingebetteter
   Commodore-ROM-Daten nicht committed.

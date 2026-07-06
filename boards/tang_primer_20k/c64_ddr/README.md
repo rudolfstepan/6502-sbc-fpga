@@ -65,6 +65,18 @@ The C64 DDR project maps `rtl/core/peripherals/math_copro.vhd` into I/O1:
 The raw signed 64-bit product is readable at `$DEB0-$DEB7`; after writing the
 operands, read `$DEB8-$DEBB` for `(A * B) >> shift`.
 
+The C64 Mandelbrot demo has two separate PRG outputs:
+
+| PRG | Meaning |
+| --- | --- |
+| `roms/c64/prg/mandelbrot.prg` | CPU-only reference renderer, no coprocessor |
+| `roms/c64/prg/mandelbrot-copo.prg` | `$DEB0` coprocessor renderer |
+
+Both keep the bitmap display enabled while rendering. The coprocessor build
+does a small `$DEB0` self-test at startup; a red border means the mapped
+coprocessor did not return the expected 8.24 result, while a changing border
+shows row progress and a green border marks completion.
+
 ## Layout
 
 ```

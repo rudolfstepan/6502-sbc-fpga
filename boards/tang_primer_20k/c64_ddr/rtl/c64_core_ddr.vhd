@@ -404,6 +404,11 @@ architecture rtl of c64_core_ddr is
   signal utx_busy    : std_logic;
   signal utx_send  : std_logic;
 
+  -- ---- Math coprocessor ($DEB0-$DEBF) ----
+  signal cs_math   : std_logic;
+  signal math_we   : std_logic;
+  signal math_dout : std_logic_vector(7 downto 0);
+
   -- Packed for the board debug UART:
   -- 15 phi2_en, 14 VIC cs, 13 CIA1 cs, 12 cwq full, 11 wq full,
   -- 10 cwq non-empty, 9 wq non-empty, 8 CPU we, 7 CPU sync,
@@ -1156,13 +1161,30 @@ begin
   exp2_addr  <= cpu_addr(7 downto 0);
   exp2_wdata <= cpu_dout;
 
+  -- ---- Math coprocessor (I/O area 1, $DEB0-$DEBF) ----
+  cs_math <= '1' when ((io = IO_EXP1) and (cpu_addr(7 downto 4) = x"B")) else '0';
+  math_we <= '1' when cs_math = '1' and cpu_we = '1' and phi2_en = '1' else '0';
+
+  math_i : entity work.math_copro
+    generic map (DEFAULT_SHIFT => 24)
+    port map (
+      clk     => clk,
+      reset_n => core_reset_n,
+      cs      => cs_math,
+      we      => math_we,
+      addr    => cpu_addr(3 downto 0),
+      din     => cpu_dout,
+      dout    => math_dout
+    );
+
   -- ---- Host disk UART (I/O area 1, $DE00-$DE01) ----
   -- A PC runs a "1541 server" on this serial link and LOAD is done over UART.
   --   $DE00 DATA   : write -> transmit a byte; read -> pop one received byte
   --   $DE01 STATUS : bit0 = RX byte available, bit1 = TX busy, bit2 = RX overflow
   -- 115200 8N1 on the CH340 USB-UART; the held-cs C64 bus is handled by pulsing
   -- TX/pop once per CPU access (phi2_en) -- no 27x repeat.
-  cs_uart <= '1' when (HOST_UART_ENABLE and io = IO_EXP1) else '0';
+  cs_uart <= '1' when (HOST_UART_ENABLE and (io = IO_EXP1)
+                       and (cpu_addr(7 downto 1) = "0000000")) else '0';
 
   gen_host_uart : if HOST_UART_ENABLE generate
     utx_i : entity work.uart_tx_ser
@@ -1274,7 +1296,7 @@ begin
   -- multicycled, so its extra depth is harmless.
   process(sel, io, basic_dout, kernal_dout, cg_cpu_dout,
           vic_dout, sid_dout, col_a_dout, cia1_dout, cia2_dout,
-          uart_dout, exp2_rdata)
+          uart_dout, exp2_rdata, cs_math, math_dout)
   begin
     case sel is
       when SEL_BASIC   => other_din <= basic_dout;
@@ -1287,7 +1309,12 @@ begin
           when IO_COLOR => other_din <= "0000" & col_a_dout;
           when IO_CIA1  => other_din <= cia1_dout;
           when IO_CIA2  => other_din <= cia2_dout;
-          when IO_EXP1  => other_din <= uart_dout;   -- $DE00 host disk UART
+          when IO_EXP1  =>
+            if cs_math = '1' then
+              other_din <= math_dout;                -- $DEB0 math coprocessor
+            else
+              other_din <= uart_dout;                -- $DE00 host disk UART
+            end if;
           when IO_EXP2  => other_din <= exp2_rdata;  -- $DF00 SD disk window
           when others   => other_din <= x"FF";
         end case;
