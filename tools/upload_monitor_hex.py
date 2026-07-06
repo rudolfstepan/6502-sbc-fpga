@@ -11,7 +11,7 @@ Default workflow:
   python tools/upload_monitor_hex.py --build-demo --run
 
 EhBASIC workflow (split around the $D000-$DFFF I/O window):
-  python tools/upload_monitor_hex.py --ehbasic --run
+  python tools/upload_monitor_hex.py --ehbasic --build-ehbasic --run
 
 Standalone split-ROM workflow (for example soundsid.rom):
   python tools/upload_monitor_hex.py roms/soundsid.rom --split-rom --run
@@ -40,6 +40,7 @@ WAKE_SEQUENCE = bytes([0xA5, 0x5A, 0xC3, 0x3C])
 MONITOR_BANNER = b"FPGA MONITOR"
 DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "roms" / "6502" / "upload_demo.rom"
 ROMS_DIR = Path(__file__).resolve().parent.parent / "roms" / "6502"
+BUILD_EHBASIC_SCRIPT = Path(__file__).resolve().parent / "build_fpga_ehbasic.py"
 EHBASIC_SEGMENTS = (
     (ROMS_DIR / "fpga_kernel_F000.bin", 0xF000),
     (ROMS_DIR / "fpga_ehbasic_A000.bin", 0xA000),
@@ -59,6 +60,10 @@ def require_pyserial():
 def build_demo() -> None:
     script = Path(__file__).resolve().parent / "make_upload_demo_rom.py"
     subprocess.run([sys.executable, str(script)], check=True)
+
+
+def build_ehbasic() -> None:
+    subprocess.run([sys.executable, str(BUILD_EHBASIC_SCRIPT)], check=True)
 
 
 def hex_lines(data: bytes, bytes_per_line: int) -> list[str]:
@@ -137,6 +142,19 @@ def load_image(image: Path, length: int | None = None) -> bytes:
     return data
 
 
+def load_prg_image(image: Path, length: int | None = None) -> tuple[int, bytes]:
+    raw = image.read_bytes()
+    if len(raw) < 3:
+        raise SystemExit(f"ERROR: PRG is too short: {image}")
+    address = raw[0] | (raw[1] << 8)
+    data = raw[2:]
+    if length is not None:
+        data = data[:length]
+    if not data:
+        raise SystemExit(f"ERROR: PRG payload is empty: {image}")
+    return address, data
+
+
 def upload_segment(
     port, image: Path, address: int, args: argparse.Namespace, data: bytes | None = None
 ) -> None:
@@ -168,15 +186,18 @@ def upload_segment(
 
 
 def upload(args: argparse.Namespace) -> None:
-    serial = require_pyserial()
     if args.ehbasic:
+        if args.build_ehbasic:
+            print("Building current FPGA EhBASIC image before upload ...")
+            build_ehbasic()
         segments = tuple((image, address, None) for image, address in EHBASIC_SEGMENTS)
         run_address = 0xA000
         missing = [str(image) for image, _, _ in segments if not image.is_file()]
         if missing:
             raise SystemExit(
                 "ERROR: EhBASIC segment(s) not found; run "
-                "tools/build_fpga_ehbasic.py first:\n  " + "\n  ".join(missing)
+                "tools/build_fpga_ehbasic.py first, or pass --build-ehbasic:\n  "
+                + "\n  ".join(missing)
             )
     elif args.split_rom:
         image = Path(args.image)
@@ -192,6 +213,11 @@ def upload(args: argparse.Namespace) -> None:
             (image, 0xA000, data[0x0000:0x3000]),
         )
         run_address = 0xA000
+    elif args.prg:
+        image = Path(args.image)
+        load_address, data = load_prg_image(image, args.length)
+        segments = ((image, load_address, data),)
+        run_address = load_address
     else:
         image = Path(args.image)
         if args.address == 0xC000 and image.is_file() and image.stat().st_size == 0x4000:
@@ -202,6 +228,7 @@ def upload(args: argparse.Namespace) -> None:
         segments = ((image, args.address, None),)
         run_address = args.address
 
+    serial = require_pyserial()
     print(f"Opening {args.port} @ {args.baud} baud")
     with serial.Serial(args.port, args.baud, timeout=0.05, write_timeout=2) as port:
         time.sleep(args.settle)
@@ -254,8 +281,16 @@ def parse_args() -> argparse.Namespace:
         help="upload kernel to $F000, then EhBASIC to $A000 (use --run to start at $A000)",
     )
     parser.add_argument(
+        "--build-ehbasic", action="store_true",
+        help="with --ehbasic, rebuild the FPGA EhBASIC ROM/segments before uploading",
+    )
+    parser.add_argument(
         "--split-rom", action="store_true",
         help="upload a 16 KB split-map image to $F000 and $A000, then run at $A000",
+    )
+    parser.add_argument(
+        "--prg", action="store_true",
+        help="treat image as a PRG with two-byte little-endian load address",
     )
     parser.add_argument("--build-demo", action="store_true", help="generate the default demo ROM first")
     parser.add_argument("--verbose", action="store_true", help="print monitor responses")
@@ -266,6 +301,10 @@ def main() -> None:
     args = parse_args()
     if args.ehbasic and args.split_rom:
         raise SystemExit("ERROR: --ehbasic and --split-rom are mutually exclusive")
+    if args.prg and (args.ehbasic or args.split_rom):
+        raise SystemExit("ERROR: --prg cannot be combined with --ehbasic or --split-rom")
+    if args.build_ehbasic and not args.ehbasic:
+        raise SystemExit("ERROR: --build-ehbasic requires --ehbasic")
     if args.build_demo:
         build_demo()
     upload(args)

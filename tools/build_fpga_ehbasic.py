@@ -8,25 +8,26 @@ Pipeline:
      or the emulator EhBASIC build once to populate it).
   2. Patch basic.asm for ca65 + FPGA:
        - remove embedded origin (*= $C000)
-       - Ram_top = $8000   (FPGA SRAM ends at $7FFF; $8000+ is peripherals)
+       - Ram_top = $4000   (BASIC RAM stays in BRAM below video/I/O space)
        - convert bracketed immediates  #[expr] -> #(expr)
        - convert bare label lines to ca65 syntax  LABEL -> LABEL:
        - convert inline data labels  FOO  .byte -> FOO:  .byte
   3. Assemble fpga/sw/ehbasic_fpga.s (which .includes the patched basic.asm).
-  4. Link to a 12 KB binary (ehbasic ROM at $D000-$FFFF).
-  5. Load roms/kernel.rom (4 KB, $C000-$CFFF).
-  6. Combine: kernel (4 KB) || ehbasic (12 KB) -> 16 KB image.
-  7. Write fpga/roms/fpga_ehbasic_16kb.rom.
+  4. Link to a 12 KB binary (EhBASIC at $A000-$CFFF).
+  5. Load roms/6502/kernel.rom (4 KB, mapped at $F000-$FFFF).
+  6. Combine: EhBASIC (12 KB) || kernel (4 KB) -> 16 KB image.
+  7. Write roms/6502/fpga_ehbasic_16kb.rom and split UART segments.
 
 Optional flags:
   --upload          upload via UART monitor after building
   --port <port>     serial port (default COM15)
   --baud <baud>     serial baud rate (default: uploader default)
-  --run             send G C000 after upload to start CPU
+  --run             send G A000 after upload to start EhBASIC
 
 Usage:
-  python fpga/tools/build_fpga_ehbasic.py
+  python tools/build_fpga_ehbasic.py
   python tools/build_fpga_ehbasic.py --upload --port COM15 --baud 115200 --run --verbose
+  python tools/upload_monitor_hex.py --ehbasic --build-ehbasic --port COM15 --baud 115200 --run --verbose
 """
 from __future__ import annotations
 
@@ -123,6 +124,19 @@ def patch_basic_asm(src: Path, dst: Path) -> None:
             sys.exit(f"ERROR: could not patch '{pattern}' in basic.asm")
     print("  patched: VEC_CC/IN/OUT/LD/SV -> ZP BRAM $EA/$E2/$E4/$E6/$E8")
 
+    # 2b.1. The original EhBASIC input line buffer is $47 bytes (~71 chars),
+    # which is too short for an 80-column display.  Keep it below $80 because
+    # EhBASIC uses signed-ish byte tests around the line editor/cruncher.
+    text, n = re.subn(
+        r"Ibuffe\s*=\s*Ibuffs\+\$47\b.*",
+        "Ibuffe\t\t= Ibuffs+$7E; end of input buffer (126 chars for 80-col text)",
+        text,
+        count=1,
+    )
+    if n == 0:
+        sys.exit("ERROR: could not patch 'Ibuffe = Ibuffs+$47' in basic.asm")
+    print("  patched: BASIC input buffer $47 -> $7E bytes")
+
     # 2c. Skip the interactive "Memory size ?" prompt entirely. The FPGA
     # memory map is fixed, so cold start can feed Ram_top straight into the
     # normal LAB_2DB6 setup path instead of waiting for Enter and then probing
@@ -144,7 +158,6 @@ def patch_basic_asm(src: Path, dst: Path) -> None:
         "\t\t\t\t\t; we get here with Y=0 and Itempl/h = Ram_base\n"
     )
     new_mem_prompt = (
-        "\tJSR\tLAB_CRLF\t\t; print CR/LF\n"
         "\tLDA\t#<Ram_top\t\t; fixed FPGA BASIC RAM top low byte\n"
         "\tSTA\tItempl\n"
         "\tLDA\t#>Ram_top\t\t; fixed FPGA BASIC RAM top high byte\n"
@@ -156,6 +169,47 @@ def patch_basic_asm(src: Path, dst: Path) -> None:
         sys.exit("ERROR: could not find memory-size prompt block in basic.asm")
     text = text.replace(old_mem_prompt, new_mem_prompt, 1)
     print("  patched: skipped interactive Memory size prompt (Ram_top=$4000)")
+
+    # 2d. The FPGA header already shows the BASIC version and RAM window, so
+    # remove EhBASIC's own "Bytes free" / "Enhanced BASIC" sign-on block.
+    old_signon_gap = (
+        "LAB_2E05\n"
+        "\tJSR\tLAB_CRLF\t\t; print CR/LF\n"
+        "\tJSR\tLAB_1463\t\t; do \"NEW\" and \"CLEAR\"\n"
+    )
+    new_signon_gap = (
+        "LAB_2E05\n"
+        "\tJSR\tLAB_1463\t\t; do \"NEW\" and \"CLEAR\"\n"
+    )
+    if old_signon_gap not in text:
+        sys.exit("ERROR: could not find cold-start sign-on CR/LF in basic.asm")
+    text = text.replace(old_signon_gap, new_signon_gap, 1)
+
+    old_signon_print = (
+        "\tJSR\tLAB_1463\t\t; do \"NEW\" and \"CLEAR\"\n"
+        "\tLDA\tEmeml\t\t\t; get end of mem low byte\n"
+        "\tSEC\t\t\t\t; set carry for subtract\n"
+        "\tSBC\tSmeml\t\t\t; subtract start of mem low byte\n"
+        "\tTAX\t\t\t\t; copy to X\n"
+        "\tLDA\tEmemh\t\t\t; get end of mem high byte\n"
+        "\tSBC\tSmemh\t\t\t; subtract start of mem high byte\n"
+        "\tJSR\tLAB_295E\t\t; print XA as unsigned integer (bytes free)\n"
+        "\tLDA\t#<LAB_SMSG\t\t; point to sign-on message (low addr)\n"
+        "\tLDY\t#>LAB_SMSG\t\t; point to sign-on message (high addr)\n"
+        "\tJSR\tLAB_18C3\t\t; print null terminated string from memory\n"
+    )
+    new_signon_print = "\tJSR\tLAB_1463\t\t; do \"NEW\" and \"CLEAR\"\n"
+    if old_signon_print not in text:
+        sys.exit("ERROR: could not find free-memory sign-on block in basic.asm")
+    text = text.replace(old_signon_print, new_signon_print, 1)
+    print("  patched: removed BASIC free-memory/sign-on text")
+
+    old_ready_msg = 'LAB_RMSG\t.byte\t$0D,$0A,"Ready",$0D,$0A,$00'
+    new_ready_msg = 'LAB_RMSG\t.byte\t$0D,$0A," Ready",$0D,$0A," ",$00'
+    if old_ready_msg not in text:
+        sys.exit("ERROR: could not find Ready message in basic.asm")
+    text = text.replace(old_ready_msg, new_ready_msg, 1)
+    print("  patched: indented BASIC Ready text")
 
     # 3. Bracketed immediates  #[expr] -> #(expr)
     text, cnt = re.subn(r"#\[([^\]]+)\]", r"#(\1)", text)
@@ -241,7 +295,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--upload",   action="store_true", help="upload ROM via UART monitor")
     p.add_argument("--port",     default="COM15",     help="serial port (default COM15)")
     p.add_argument("--baud",     type=int,            help="serial baud rate (default: uploader default)")
-    p.add_argument("--run",      action="store_true", help="send G C000 after upload")
+    p.add_argument("--run",      action="store_true", help="send G A000 after upload")
     p.add_argument("--verbose",  action="store_true", help="verbose upload output")
     p.add_argument("--sd-image", action="store_true",
                    help="(deprecated: the SD boot image is now always built)")
@@ -331,16 +385,12 @@ def main() -> None:
     print("  Write to SD card (Windows):")
     print(f"    tools\\write_sd.bat {OUT_IMG.name}")
 
-    print("\nUpload (UART monitor) — kernel first, then EhBASIC + run:")
+    print("\nUpload (UART monitor) — rebuild, upload kernel + EhBASIC, then run:")
     print(
-        f"  python tools/upload_monitor_hex.py {OUT_KERNEL.name} "
-        f"--port COM15 --baud 115200 --address 0xF000"
+        "  python tools/upload_monitor_hex.py --ehbasic --build-ehbasic "
+        "--port COM15 --baud 115200 --run --verbose"
     )
-    print(
-        f"  python tools/upload_monitor_hex.py {OUT_BASIC.name}  "
-        f"--port COM15 --baud 115200 --address 0xA000 --run"
-    )
-    print("  (run from roms/; press KEY0 first; G A000 = reset entry, mirrors cold boot)")
+    print("  (already built: omit --build-ehbasic; G A000 mirrors cold boot)")
 
     if args.upload:
         uploader = ROOT / "tools" / "upload_monitor_hex.py"

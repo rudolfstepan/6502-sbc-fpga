@@ -2,7 +2,7 @@
 
 The **VIC** ([`rtl/core/peripherals/vic_vga.vhd`](../rtl/core/peripherals/vic_vga.vhd))
 is the video display controller. It produces an 858×525 (CEA-861 480p / VGA
-640×480-class) raster and supports a 40×25 text mode plus several bitmap graphics
+640×480-class) raster and supports 40×25 and 80×25 text modes plus several bitmap graphics
 modes. It is **bus-stealing** (C64-style): during horizontal blanking it borrows
 a few CPU cycles to pre-fetch the next scanline into an internal line buffer, so
 no dual-port RAM is needed. The CPU is held via `RDY` during the steal.
@@ -40,18 +40,24 @@ Only offsets 0–5 are decoded ([`sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc
 | Address | Offset | Register | Function |
 | --- | --- | --- | --- |
 | `$9000` | +0 | MODE | Display mode select (see bit table) |
-| `$9001` | +1 | CURSOR_X | Text cursor column 0–39 (writes ≥40 ignored) |
+| `$9001` | +1 | CURSOR_X | Text cursor column 0–79 (40-col software should keep this at 0–39) |
 | `$9002` | +2 | CURSOR_Y | Text cursor row 0–24 (writes ≥25 ignored) |
-| `$9003` | +3 | TEXT_COLOR | Default text colour register (legacy, not wired to display) |
+| `$9003` | +3 | TEXT_COLOR | Default text colour register; foreground source in 80-col mode |
 | `$9004` | +4 | BG_COLOR | Default background colour register (legacy, not wired to display) |
-| `$9005` | +5 | TEXT_ATTR | bit0 = per-cell text background (colour-RAM high nibble) |
+| `$9005` | +5 | TEXT_ATTR | bit0 = per-cell text background (colour-RAM high nibble, 40-col); bit1 = 80×25 text |
 
-`TEXT_ATTR` bit 0 switches the text background source: `0` (default) keeps the
+`TEXT_ATTR` bit 0 switches the 40-column text background source: `0` (default) keeps the
 C64 model — global background from `$D021`, per-cell foreground from colour RAM;
 `1` takes the background from each cell's colour-RAM **high** nibble (foreground
 stays the low nibble), so an app can paint coloured square tiles (e.g. the chess
 board). It is cleared on `cpu_reset_n`, like MODE, so a returning BASIC text
 screen keeps the global background.
+
+`TEXT_ATTR` bit 1 enables the DOS-like 80×25 text mode. It keeps the same
+640×400 text picture but uses 8×16 cells instead of 16×16 cells. Because the
+VRAM window remains 2 KiB, 80-column mode uses `$8000`–`$87CF` for character
+codes and has no second per-cell colour plane; foreground comes from `$9003`,
+background from `$D021`.
 
 A long reset clears MODE to `$00` (text mode) so a returning BASIC text screen is
 never hidden behind a leftover bitmap — see [Reset architecture](./02_MODULES.md).
@@ -107,7 +113,7 @@ fed back to `vic_vga` as `border_color`/`bg_color`. Because the active timing is
 CEA-480p (525 lines), the raster counts 0–524 rather than the C64's 0–262/311 —
 each target line still occurs once per frame, so equality waits resolve.
 
-## Text Mode (default)
+## Text Modes
 
 40×25 characters, each cell scaled 2× to 16×16 screen pixels (400 px tall, 40 px
 top/bottom border). For each scanline the VIC fetches:
@@ -126,6 +132,13 @@ Glyphs come combinationally from the char ROM. `char_code(7)` selects the upper
 128 glyphs (German umlauts) via `glyph_hi` rather than reverse-video. A blinking
 cursor is OR-overlaid on the lower scanlines of the cell at (CURSOR_X, CURSOR_Y).
 Colours use the 16-entry palette below.
+
+80×25 text is selected with `$9005` bit 1:
+
+- **character codes** from `$8000`+ (`row*80 + col`, through `$87CF`)
+- foreground colour from `$9003`
+- background colour from `$D021`
+- no per-cell colour RAM in this compact mode
 
 ## Bitmap Modes
 
@@ -272,7 +285,8 @@ COLOR16 both index it.
 
 During each line's H-blank the fetch FSM borrows CPU cycles and reads the next
 line into a 160-byte line buffer (`linebuf`, distributed RAM) — character codes
-then colours in text mode, or one packed pixel line in bitmap modes. `vic_addr`
+then colours in 40-column text mode, character codes only in 80-column text mode,
+or one packed pixel line in bitmap modes. `vic_addr`
 is presented one cycle ahead of the synchronous RAM data. During the visible line
 the CPU runs unhindered and the renderer streams pixels from the line buffer, so a
 single-port BSRAM suffices. CPU bitmap writes that collide with a steal are

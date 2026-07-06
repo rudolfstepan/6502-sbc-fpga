@@ -117,11 +117,12 @@ architecture rtl of sbc_t65_sdram_boot_top is
   signal vram_wr_data    : data_t := (others => '0');
   signal vic_addr     : addr_t;
   signal vic_stealing : std_logic;
-  signal vic_cursor_x : std_logic_vector(5 downto 0) := (others => '0');
+  signal vic_cursor_x : std_logic_vector(6 downto 0) := (others => '0');
   signal vic_cursor_y : std_logic_vector(4 downto 0) := (others => '0');
   signal vic_text_color : data_t := x"01";
   signal vic_bg_color   : data_t := x"00";
   signal vic_mode_reg     : data_t := x"00";
+  signal vic_text_attr    : data_t := x"00";
   signal vic_fetch_bitmap : std_logic;
   signal bitmap_dout      : data_t;
   signal bitmap_addr      : std_logic_vector(13 downto 0);
@@ -413,13 +414,15 @@ begin
       if reset_n = '0' then
         vic_cursor_x <= (others => '0');
         vic_cursor_y <= (others => '0');
+        vic_mode_reg <= (others => '0');
+        vic_text_attr <= (others => '0');
       elsif vic_reg_we = '1' then
         case cpu_addr(3 downto 0) is
           when x"0" =>
             vic_mode_reg <= cpu_dout;
           when x"1" =>
-            if unsigned(cpu_dout(5 downto 0)) < to_unsigned(40, 6) then
-              vic_cursor_x <= cpu_dout(5 downto 0);
+            if unsigned(cpu_dout(6 downto 0)) < to_unsigned(80, 7) then
+              vic_cursor_x <= cpu_dout(6 downto 0);
             end if;
           when x"2" =>
             if unsigned(cpu_dout(4 downto 0)) < to_unsigned(25, 5) then
@@ -429,6 +432,8 @@ begin
             vic_text_color <= cpu_dout;
           when x"4" =>
             vic_bg_color <= cpu_dout;
+          when x"5" =>
+            vic_text_attr <= cpu_dout;
           when others =>
             null;
         end case;
@@ -436,19 +441,21 @@ begin
     end if;
   end process;
 
-  process(cpu_addr, vic_cursor_x, vic_cursor_y, vic_text_color, vic_bg_color, vic_mode_reg)
+  process(cpu_addr, vic_cursor_x, vic_cursor_y, vic_text_color, vic_bg_color, vic_mode_reg, vic_text_attr)
   begin
     case cpu_addr(3 downto 0) is
       when x"0" =>
         vic_reg_dout <= vic_mode_reg;
       when x"1" =>
-        vic_reg_dout <= "00" & vic_cursor_x;
+        vic_reg_dout <= '0' & vic_cursor_x;
       when x"2" =>
         vic_reg_dout <= "000" & vic_cursor_y;
       when x"3" =>
         vic_reg_dout <= vic_text_color;
       when x"4" =>
         vic_reg_dout <= vic_bg_color;
+      when x"5" =>
+        vic_reg_dout <= vic_text_attr;
       when others =>
         vic_reg_dout <= x"00";
     end case;
@@ -818,6 +825,10 @@ begin
       bitmap_mode      => vic_mode_reg(0),
       color256_mode    => vic_mode_reg(1),
       color64_mode     => vic_mode_reg(3),
+      cell_bg_mode     => vic_text_attr(0),
+      text80_mode      => vic_text_attr(1),
+      text_color       => vic_text_color(3 downto 0),
+      bg_color         => vic_bg_color(3 downto 0),
       vic_fetch_bitmap => vic_fetch_bitmap,
       vga_hs       => vga_hs,
       vga_vs       => vga_vs,

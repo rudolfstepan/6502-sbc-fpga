@@ -76,5 +76,6 @@
 
         <!-- Physical constraints -->
         <File path="../constraints/tang20k_sbc.cst" type="file.cst" enable="1"/>
+        <File path="../constraints/tang20k_sbc.sdc" type="file.sdc" enable="1"/>
     </FileList>
 </Project>

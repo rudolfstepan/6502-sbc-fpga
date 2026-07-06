@@ -7,7 +7,7 @@
 --   Die CPU wird dabei via RDY gehalten. Kein Dual-Port-RAM noetig.
 --
 --   Waehrend der sichtbaren Zeile laeuft die CPU ungehindert; der VIC
---   zeigt Zeichen aus dem 40-Byte Zeilenpuffer mit kombinatorischer
+--   zeigt Zeichen aus dem Zeilenpuffer mit kombinatorischer
 --   Char-ROM-Ausgabe.
 --
 -- Timing: 858x525 total. Active width and sync positions are generics.
@@ -17,6 +17,7 @@
 --   640-wide content is pillarboxed (40 px black border each side) into the
 --   standard 720 active region so HDMI capture devices lock onto a known mode.
 -- Textmodus: 40x25 Zeichen, 2x skaliert (16x16 Bildschirmpixel pro Zeichen)
+--            oder 80x25 Zeichen (8x16 Bildschirmpixel pro Zeichen).
 -- Randhoehe oben/unten: 40 Pixel
 library ieee;
 use ieee.std_logic_1164.all;
@@ -56,8 +57,8 @@ entity vic_vga is
     char_glyph_hi : out std_logic;
     char_data    : in  data_t;
 
-    -- Text cursor register inputs (0..39, 0..24)
-    cursor_x     : in  std_logic_vector(5 downto 0);
+    -- Text cursor register inputs (0..79, 0..24)
+    cursor_x     : in  std_logic_vector(6 downto 0);
     cursor_y     : in  std_logic_vector(4 downto 0);
     cursor_enable : in std_logic := '1';
 
@@ -85,7 +86,14 @@ entity vic_vga is
     -- high nibble instead of the global $D021 colour (e.g. the chess board's
     -- coloured squares). Default 0 keeps the C64 global-background model.
     cell_bg_mode  : in  std_logic := '0';
+    -- $9005[1]: 80x25 text mode. Characters come from $8000..$87CF
+    -- (row*80+col), using 8x16 cells. Per-cell colour RAM is disabled in this
+    -- compact 2 KiB VRAM layout; the foreground comes from text_color.
+    text80_mode   : in  std_logic := '0';
     vic_fetch_bitmap : out std_logic;
+
+    -- Default text foreground colour used by 80-column mode.
+    text_color    : in  std_logic_vector(3 downto 0) := "0001";
 
     -- VIC-II $D020 border colour (palette index). Colours the visible area
     -- outside the active text/bitmap content (default 0 = black, as before).
@@ -165,10 +173,10 @@ architecture rtl of vic_vga is
   signal hc       : natural range 0 to H_TOT - 1 := 0;
   signal vc       : natural range 0 to V_TOT - 1 := 0;
 
-  -- 160-byte pixel/character line buffer. Text and legacy bitmap modes use
-  -- entries 0..39; RGB332 mode uses one entry per logical 160x100 pixel.
+  -- 160-byte pixel/character line buffer. Text mode uses entries 0..39 or
+  -- 0..79; RGB332 mode uses one entry per logical 160x100 pixel.
   type linebuf_t is array (0 to 159) of data_t;
-  type colorbuf_t is array (0 to 39) of data_t;
+  type colorbuf_t is array (0 to 79) of data_t;
   signal linebuf  : linebuf_t := (others => (others => '0'));
   signal colorbuf : colorbuf_t := (others => x"01");  -- default: white on black
   attribute ram_style : string;
@@ -193,7 +201,7 @@ architecture rtl of vic_vga is
   -- the whole frame (incl. blanking up to V_TOT-1), not just the text band, so
   -- vc-V_BORD can exceed V_VIS. (Only used by text-mode cursor logic.)
   signal v_off    : natural range 0 to V_TOT := 0;
-  signal col      : natural range 0 to 39 := 0;
+  signal col      : natural range 0 to 79 := 0;
   signal crow     : natural range 0 to 32 := 0;
   signal cline    : natural range 0 to 7  := 0;
   signal cpix     : natural range 0 to 7  := 0;
@@ -361,7 +369,9 @@ begin
   end process;
 
   -- Zeilenpuffer-Lade-Automat
-  -- Laeuft 41 System-Takte am Anfang jedes H-Blank
+  -- Laeuft am Anfang jedes H-Blank. 40-column text fetches chars + colours;
+  -- 80-column text fetches chars only because the compact 2 KiB VRAM layout
+  -- has no room for a second 80x25 colour plane.
   -- pre-fetcht fuer die NAECHSTE Scan-Zeile
   -- Das VRAM ist synchron: vic_addr wird einen Takt vor dem Speichern
   -- ausgegeben. Ohne diesen Vorlauf landet besonders Spalte 0 mit altem
@@ -449,11 +459,16 @@ begin
                 fetch_phase = '0' and fetch_store_col = 159) or
                ((bitmap_mode = '0' or
                  (color64_mode = '0' and color256_mode = '0' and color16_mode = '0')) and
-                fetch_store_col = 39) then
+                ((text80_mode = '1' and fetch_store_col = 79) or
+                 (text80_mode = '0' and fetch_store_col = 39))) then
               if fetch_phase = '0' then
                 if bitmap_mode = '1' and
                    (color64_mode = '1' or color256_mode = '1' or color16_mode = '1') then
                   -- Chunky pixels carry their colour/index directly; no colour phase.
+                  fetching    <= '0';
+                  fetch_valid <= '0';
+                elsif text80_mode = '1' then
+                  -- 80-column text consumes the whole 2 KiB VRAM for characters.
                   fetching    <= '0';
                   fetch_valid <= '0';
                 else
@@ -496,6 +511,9 @@ begin
              std_logic_vector(to_unsigned(fetch_bmp_line * 40 + fetch_col, 16))
     when fetching = '1' and fetch_phase = '0' and bitmap_mode = '1' else
              std_logic_vector(
+      to_unsigned(16#8000# + fetch_row * 80 + fetch_col, 16))
+    when fetching = '1' and fetch_phase = '0' and text80_mode = '1' else
+             std_logic_vector(
       to_unsigned(16#8000# + fetch_row * 40 + fetch_col, 16))
     when fetching = '1' and fetch_phase = '0' else
              std_logic_vector(
@@ -527,10 +545,10 @@ begin
   fb_rdaddr <= std_logic_vector(to_unsigned((fb_line mod 2) * 640 + fb_col, 11));
 
   v_off <= (vc - V_BORD)   when vc >= V_BORD else 0;
-  col   <= hx / 16;
+  col   <= hx / 8 when text80_mode = '1' else hx / 16;
   crow  <= v_off / 16;
   cline <= (v_off / 2) mod 8;
-  cpix  <= (hx  / 2) mod 8;
+  cpix  <= hx mod 8 when text80_mode = '1' else (hx / 2) mod 8;
   pixel_col <= hx / 4;
   -- RGB222 maps to the full active region (uses hc, not the pillarboxed hx),
   -- scaled by C64_SC: on Tang that is 4x -> 720x480 edge to edge (no pillarbox
@@ -567,8 +585,10 @@ begin
 
   -- Zeichencode und Farbattribut aus Zeilenpuffer
   char_code  <= linebuf(col)  when in_text = '1' else x"00";
-  cell_color <= colorbuf(col) when in_text = '1' else x"00";
-  fg_index   <= to_integer(unsigned(cell_color(3 downto 0)));
+  cell_color <= (bg_color & text_color) when in_text = '1' and text80_mode = '1' else
+                colorbuf(col) when in_text = '1' else x"00";
+  fg_index   <= to_integer(unsigned(text_color)) when text80_mode = '1' else
+                to_integer(unsigned(cell_color(3 downto 0)));
   -- Background is the global VIC-II $D021 colour (C64 text-mode model) by
   -- default; with cell_bg_mode ($9005[0]) it comes from the colour-RAM high
   -- nibble per cell, so apps like chess can paint coloured square tiles.

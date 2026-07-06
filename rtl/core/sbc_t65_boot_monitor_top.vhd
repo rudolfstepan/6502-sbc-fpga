@@ -233,14 +233,15 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vic_addr     : addr_t;
   signal vic_stealing : std_logic;
   signal vic_stealing_d : std_logic := '0';  -- steal delayed 1 clk (read-latency cushion)
-  signal vic_cursor_x : std_logic_vector(5 downto 0) := (others => '0');
+  signal vic_cursor_x : std_logic_vector(6 downto 0) := (others => '0');
   signal vic_cursor_y : std_logic_vector(4 downto 0) := (others => '0');
   signal vic_text_color : data_t := x"01";
   signal vic_bg_color   : data_t := x"00";
   signal vic_mode_reg     : data_t := x"00";
   -- $9005 TEXT_ATTR: bit0 = per-cell text background (colour-RAM high nibble)
-  -- instead of the global $D021 background. Cleared on cpu_reset_n like the mode
-  -- register so a returning BASIC text screen keeps the C64-style global bg.
+  -- instead of the global $D021 background; bit1 = 80x25 text mode. Cleared on
+  -- cpu_reset_n like the mode register so a returning BASIC text screen keeps
+  -- the C64-style global bg and 40-column layout unless software enables it.
   signal vic_text_attr  : data_t := x"00";
   -- VIC-II register block ($D000-$D03F). $20 = border, $21 = background (drive
   -- the display); $11/$12 read back the current raster line; the rest are a
@@ -691,8 +692,8 @@ begin
           when x"0" =>
             vic_mode_reg <= cpu_dout;
           when x"1" =>
-            if unsigned(cpu_dout(5 downto 0)) < to_unsigned(40, 6) then
-              vic_cursor_x <= cpu_dout(5 downto 0);
+            if unsigned(cpu_dout(6 downto 0)) < to_unsigned(80, 7) then
+              vic_cursor_x <= cpu_dout(6 downto 0);
             end if;
           when x"2" =>
             if unsigned(cpu_dout(4 downto 0)) < to_unsigned(25, 5) then
@@ -720,7 +721,7 @@ begin
       when x"0" =>
         vic_reg_dout <= vic_mode_reg;
       when x"1" =>
-        vic_reg_dout <= "00" & vic_cursor_x;
+        vic_reg_dout <= '0' & vic_cursor_x;
       when x"2" =>
         vic_reg_dout <= "000" & vic_cursor_y;
       when x"3" =>
@@ -1269,6 +1270,8 @@ begin
       fb_hires_mode    => fb_hires_mode,
       fb_true_mode     => fb_true_mode,
       cell_bg_mode     => vic_text_attr(0),
+      text80_mode      => vic_text_attr(1),
+      text_color       => vic_text_color(3 downto 0),
       border_color     => vic2_regs(16#20#)(3 downto 0),
       bg_color         => vic2_regs(16#21#)(3 downto 0),
       raster           => vic_raster,

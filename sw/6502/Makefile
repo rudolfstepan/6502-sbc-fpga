@@ -21,6 +21,7 @@ KERNEL_ROM = ../../roms/6502/kernel.rom
         mandelbrot-true upload-mandelbrot-true \
         mandelbrot-true240 upload-mandelbrot-true240 \
         disk-test upload-disk-test \
+        text80-on upload-text80-on \
         test-ddr3-fb upload-test-ddr3-fb test-ddr3-hires upload-test-ddr3-hires \
         test-ddr3-true upload-test-ddr3-true
 
@@ -134,6 +135,21 @@ sd-ehbasic: fpga-ehbasic
 # Build and upload rom_demo via UART monitor (board must be in monitor mode)
 upload-demo: $(ROM_BIN)
 	$(PYTHON) upload_rom_demo.py --run --verbose
+
+# Tiny RAM PRG that flips $9005 bit 1 and writes 80-column screen markers.
+TEXT80_ON_PRG = ../../roms/6502/text80_on.prg
+
+text80_on.o: text80_on.s
+	$(CA65) --cpu 6502 -t none -l text80_on.lst $< -o $@
+
+$(TEXT80_ON_PRG): text80_on.o text80_on.cfg
+	$(LD65) -C text80_on.cfg -o $@ $< -m text80_on.map
+	@echo "PRG ready: $(TEXT80_ON_PRG)  (upload with --prg --run)"
+
+text80-on: $(TEXT80_ON_PRG)
+
+upload-text80-on: $(TEXT80_ON_PRG)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(TEXT80_ON_PRG) --prg --port COM15 --baud 115200 --run --verbose
 
 
 # ── Mandelbrot standalone split-ROM images ─────────────────────────────────

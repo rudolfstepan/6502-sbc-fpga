@@ -15,7 +15,7 @@ This page describes the **Tang Primer 20K split-ROM map** used by
 | `$0200`–`$3FFF` | ~15.5 KiB | Program / BASIC working RAM | on-chip BSRAM |
 | `$4000`–`$5FFF` | 8 KiB | RAM (SRAM region, separate from zero-page RAM) | `bram_byte_bridge` 8 KB BSRAM (or DDR3 when `USE_DDR3`) |
 | `$6000`–`$7FFF` | 8 KiB | **VIC bitmap window** (banked into the DDR3 framebuffer; bank via `$9000[7:5]` or `$9006`) | `vic_fb_ddr3` (DDR3) |
-| `$8000`–`$87FF` | 2 KiB | VIC text RAM (char `$8000`+, colour `$8400`+) | BSRAM |
+| `$8000`–`$87FF` | 2 KiB | VIC text RAM. 40-col: chars `$8000`+, colour `$8400`+. 80-col: chars `$8000`–`$87CF` | BSRAM |
 | `$8800`–`$880F` | 16 B | VIA 6522 (parallel I/O, timers) | — |
 | `$8810`–`$8813` | 4 B | UART 6551 (serial) | — |
 | `$8820`–`$8823` | 4 B | Keyboard registers — served by the **PS/2 keyboard** controller (German/US layout). USB HID host is only *prepared* (port stubs, not active) | — |

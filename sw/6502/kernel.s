@@ -30,11 +30,11 @@
 ;   $EF+ EhBASIC Decss (number-to-decimal buffer) — DO NOT USE in kernel
 ;
 ; Hardware:
-;   VIC video RAM  $8000-$87FF  (40 x 25 = 1000 bytes)
+;   VIC video RAM  $8000-$87FF  (80 x 25 = 2000 bytes in text80 mode)
 ;   VIA 6522       $8800-$880F  (keyboard on Port A / CA1)
 ; ============================================================
 
-COLS        = 40
+COLS        = 80
 ROWS        = 25
 
 VIC_BASE    = $8000
@@ -68,6 +68,8 @@ STAT_MOUNTED = $08
 VIC_GFX_MODE = $9000
 VIC_CURSOR_X = $9001
 VIC_CURSOR_Y = $9002
+VIC_TEXT_ATTR = $9005
+VIC_TEXT_80   = $02
 
 UART_DATA   = $8810         ; write = TX byte, read = RX byte
 UART_SR     = $8811         ; bit 4 = TDRE (TX ready), bit 3 = RDRF (RX data)
@@ -87,13 +89,13 @@ STRPTR_HI   = $EE
 
 CMD_BUF     = $0200     ; command line buffer in page 2 (64 bytes)
 CMD_MAX     = 38        ; max usable chars per command line
+EHBASIC_INPUT_MAX = $7E ; patched EhBASIC Ibuffs capacity, must stay < $80
 
 ; Screen editor replay buffer.  Used by FPGA keyboard cursor editing: when
 ; Enter is pressed after moving the hardware cursor, the full screen line
 ; is read (C64-style), trailing spaces trimmed, and replayed to BASIC one
 ; character per CHRIN call.  CHROUT suppresses echo while POS < LEN so the
 ; line is not duplicated on screen.
-SCREEN_REPLAY_BUF  = $02C0
 SCREEN_EDIT_ACTIVE = $02F0
 SCREEN_REPLAY_POS  = $02F1
 SCREEN_REPLAY_LEN  = $02F2
@@ -110,7 +112,7 @@ SCREEN_FLUSH        = $02F9
 
 VIC_TEXT_COLOR = $9003          ; foreground color register (0-15)
 VIC_BG_COLOR   = $9004          ; background color register (0-15)
-VIC_COLOR_BASE = $8400          ; color RAM: per-cell bg[7:4] | fg[3:0]
+VIC_COLOR_BASE = $8400          ; 40-column color RAM (not used by 80-column kernel)
 
 KEY_CRSR_DOWN  = $11
 KEY_HOME       = $13
@@ -162,10 +164,12 @@ IRQ_HANDLER:
     txs                     ; init stack pointer
     lda #$00
     sta VIA_DDRA            ; VIA Port A = all input (keyboard)
-    lda #$01                ; white
+    lda #$0E                ; light blue
     sta VIC_TEXT_COLOR
     lda #$00                ; black
     sta VIC_BG_COLOR
+    lda #VIC_TEXT_80        ; 80x25 text, global text/background colours
+    sta VIC_TEXT_ATTR
     jsr CLRSCR
     jsr show_welcome
     ; Auto-start BASIC (like C64)
@@ -202,6 +206,8 @@ no_suppress:
     beq newline_cr
     cmp #$0A
     beq restore             ; ignore LF (0x0A) - only CR (0x0D) triggers newline
+    cmp #$07
+    beq restore             ; ignore BEL (EhBASIC buffer-full beep), don't draw glyph
     cmp #$08
     beq backspace
 
@@ -618,10 +624,10 @@ add_cr:
     lda #0
     sta SCREEN_REPLAY_POS
     sta SCREEN_EDIT_ACTIVE
-    ; Empty BASIC's input buffer first: feed it $47 backspaces (its max line
+    ; Empty BASIC's input buffer first: feed it EHBASIC_INPUT_MAX backspaces (its max line
     ; length).  Excess backspaces past an empty buffer are ignored by BASIC, so
     ; whatever it had collected is cleared before the corrected line replays.
-    lda #$47
+    lda #EHBASIC_INPUT_MAX
     sta SCREEN_FLUSH
 
     ldx #0
@@ -655,38 +661,29 @@ clrscr_diag:
     lda #'*'
     sta UART_DATA
     pla
-    ; Fill character area ($8000-$83FF) with spaces
+    ; Fill the active 80x25 character area ($8000-$87CF) with spaces.
     lda #<VIC_BASE
     sta SCRPTR_LO
     lda #>VIC_BASE
     sta SCRPTR_HI
+    ldx #ROWS
+char_row:
     lda #$20                ; space character
     ldy #0
-    ldx #4                  ; 4 x 256 = 1024 bytes
-char_loop:
+char_col:
     sta (SCRPTR_LO),y
     iny
-    bne char_loop
+    cpy #COLS
+    bne char_col
+    clc
+    lda SCRPTR_LO
+    adc #COLS
+    sta SCRPTR_LO
+    bcc char_next
     inc SCRPTR_HI
+char_next:
     dex
-    bne char_loop
-    ; SCRPTR_HI is now $84 (start of color area)
-    ; Fill color area ($8400-$87FF) with composed color byte
-    lda VIC_BG_COLOR
-    asl a
-    asl a
-    asl a
-    asl a
-    ora VIC_TEXT_COLOR
-    ldy #0
-    ldx #4                  ; 4 x 256 = 1024 bytes
-color_loop:
-    sta (SCRPTR_LO),y
-    iny
-    bne color_loop
-    inc SCRPTR_HI
-    dex
-    bne color_loop
+    bne char_row
     lda #0
     sta CURSOR_X
     sta CURSOR_Y
@@ -785,82 +782,55 @@ done:
     tya
     pha                     ; save Y
 
-    ; Copy 24 * 40 = 960 bytes from row 1 to row 0 (character codes)
-    ldx #0
-copy0:
-    lda VIC_BASE + COLS,x
-    sta VIC_BASE,x
-    inx
-    bne copy0
+    ; Copy rows 1..24 to rows 0..23.  The pointer-based loop works for the
+    ; 80-column kernel and avoids hard-coded 256-byte page chunks.
+    lda #<VIC_BASE
+    sta SCRPTR_LO
+    lda #>VIC_BASE
+    sta SCRPTR_HI
+    lda #<(VIC_BASE + COLS)
+    sta STRPTR_LO
+    lda #>(VIC_BASE + COLS)
+    sta STRPTR_HI
+    ldx #(ROWS-1)
+copy_row:
+    ldy #0
+copy_col:
+    lda (STRPTR_LO),y
+    sta (SCRPTR_LO),y
+    iny
+    cpy #COLS
+    bne copy_col
 
-copy1:
-    lda VIC_BASE + COLS + $100,x
-    sta VIC_BASE + $100,x
-    inx
-    bne copy1
-
-copy2:
-    lda VIC_BASE + COLS + $200,x
-    sta VIC_BASE + $200,x
-    inx
-    bne copy2
-
-copy3:
-    lda VIC_BASE + COLS + $300,x
-    sta VIC_BASE + $300,x
-    inx
-    cpx #192
-    bne copy3
+    clc
+    lda SCRPTR_LO
+    adc #COLS
+    sta SCRPTR_LO
+    bcc dst_ok
+    inc SCRPTR_HI
+dst_ok:
+    clc
+    lda STRPTR_LO
+    adc #COLS
+    sta STRPTR_LO
+    bcc src_ok
+    inc STRPTR_HI
+src_ok:
+    dex
+    bne copy_row
 
     ; clear last character row
+    lda #<(VIC_BASE + (ROWS-1)*COLS)
+    sta SCRPTR_LO
+    lda #>(VIC_BASE + (ROWS-1)*COLS)
+    sta SCRPTR_HI
     lda #$20
-    ldx #0
+    ldy #0
 clr:
-    sta VIC_BASE + (ROWS-1)*COLS,x
-    inx
-    cpx #COLS
+    sta (SCRPTR_LO),y
+    iny
+    cpy #COLS
     bne clr
-
-    ; Scroll color RAM ($8400-$87C0) — same pattern as character scroll
-    ldx #0
-ccopy0:
-    lda VIC_COLOR_BASE + COLS,x
-    sta VIC_COLOR_BASE,x
-    inx
-    bne ccopy0
-
-ccopy1:
-    lda VIC_COLOR_BASE + COLS + $100,x
-    sta VIC_COLOR_BASE + $100,x
-    inx
-    bne ccopy1
-
-ccopy2:
-    lda VIC_COLOR_BASE + COLS + $200,x
-    sta VIC_COLOR_BASE + $200,x
-    inx
-    bne ccopy2
-
-ccopy3:
-    lda VIC_COLOR_BASE + COLS + $300,x
-    sta VIC_COLOR_BASE + $300,x
-    inx
-    cpx #192
-    bne ccopy3
-
-    ; clear last color row with composed color byte
-    lda VIC_BG_COLOR
-    asl a
-    asl a
-    asl a
-    asl a
-    ora VIC_TEXT_COLOR
-    ldx #0
-cclr:
-    sta VIC_COLOR_BASE + (ROWS-1)*COLS,x
-    inx
-    cpx #COLS
-    bne cclr
 
     ; Restore registers in reverse order
     pla
@@ -905,21 +875,10 @@ done:
 .endproc
 
 ; ------------------------------------------------------------
-; write_color_attr -- write CUR_COLOR to color RAM at SCRPTR+$0400
-;                     Y must be 0. Clobbers A, SCRPTR_HI.
+; write_color_attr -- no-op in the default 80-column kernel.
+;                     80x25 uses all 2 KiB text VRAM for character codes.
 ; ------------------------------------------------------------
 .proc write_color_attr
-    lda SCRPTR_HI
-    clc
-    adc #$04
-    sta SCRPTR_HI
-    lda VIC_BG_COLOR
-    asl a
-    asl a
-    asl a
-    asl a
-    ora VIC_TEXT_COLOR
-    sta (SCRPTR_LO),y
     rts
 .endproc
 
@@ -1634,6 +1593,7 @@ fin:
 FAT_MAX     = 20
 
 .segment "BSS"
+SCREEN_REPLAY_BUF: .res COLS + 1
 FAT_RES:    .res 2          ; reserved sectors
 FAT_NFATS:  .res 1          ; number of FATs
 FAT_SPF:    .res 4          ; sectors per FAT (32-bit)
