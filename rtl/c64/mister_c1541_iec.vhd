@@ -186,7 +186,9 @@ architecture rtl of mister_c1541_iec is
       img_sector : out std_logic_vector(4 downto 0);
       img_offset : out std_logic_vector(7 downto 0);
       img_dout   : in  std_logic_vector(7 downto 0);
-      img_valid  : in  std_logic
+      img_valid  : in  std_logic;
+      disk_id1   : in  std_logic_vector(7 downto 0) := x"54";
+      disk_id2   : in  std_logic_vector(7 downto 0) := x"50"
     );
   end component;
 
@@ -208,6 +210,8 @@ architecture rtl of mister_c1541_iec is
   signal img_offset : std_logic_vector(7 downto 0);
   signal img_dout   : std_logic_vector(7 downto 0);
   signal img_valid  : std_logic;
+  signal disk_id1   : std_logic_vector(7 downto 0) := x"54";
+  signal disk_id2   : std_logic_vector(7 downto 0) := x"50";
 
   -- Decoded write stream GCR engine -> backend (consumed by backend 3 only).
   signal gcr_wr_data   : std_logic_vector(7 downto 0);
@@ -225,6 +229,11 @@ architecture rtl of mister_c1541_iec is
   signal gcr_wr_stall  : std_logic;
   signal drive_hold    : std_logic;
 begin
+  gen_default_disk_id : if D64_BACKEND /= 3 generate
+    disk_id1 <= x"54";
+    disk_id2 <= x"50";
+  end generate;
+
   drive_reset <= not reset_n;
   drive_hold  <= gcr_wr_stall;
   read_active  <= mtr and mode;
@@ -385,7 +394,9 @@ begin
       img_sector => img_sector,
       img_offset => img_offset,
       img_dout   => img_dout,
-      img_valid  => img_valid
+      img_valid  => img_valid,
+      disk_id1   => disk_id1,
+      disk_id2   => disk_id2
     );
 
   -- Disk image backend selected by D64_BACKEND.
@@ -396,7 +407,7 @@ begin
         sector => img_sector,
         offset => img_offset,
         dout   => img_dout
-      );
+    );
     img_valid  <= '1';
     uart_tx    <= '1';
     sdram_addr <= (others => '0');
@@ -496,6 +507,8 @@ begin
         sd_sec_write_end       => sd_sec_write_end,
         mount_lba              => sd_mount_lba,
         mount_strobe           => sd_mount_strobe,
+        disk_id1               => disk_id1,
+        disk_id2               => disk_id2,
         uart_tx                => uart_tx
       );
     sdram_addr <= (others => '0');

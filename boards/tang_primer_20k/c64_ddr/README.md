@@ -30,9 +30,20 @@ PS/2 front-end concepts) and adds the C64-specific chips natively.
   display cycle. This avoids the broken bitmap/charset backgrounds seen when
   the VIC path hit DDR too directly.
 - Power-up reset sequence is one-shot: wait for DDR readiness and boot writes,
-  hold C64 reset, run briefly, pulse the board reset line once, then stay in
-  `CR_DONE`. It is re-armed only by a real KEY[0]/base reset, avoiding the reset
-  loop that happened when the generated pulse re-triggered itself.
+  hold C64 reset, run briefly, pulse only the C64 core reset once, then stay in
+  `CR_DONE`. The SD controller and hook boot loader stay alive during that
+  automatic pulse, so the disk menu cannot reach READY with `sd_init_done` low.
+  It is re-armed only by a real KEY[0]/base reset, avoiding the reset loop that
+  happened when the generated pulse re-triggered itself.
+- Current SD test bitstream uses the SD-card D64 backend again
+  (`MISTER_1541_BACKEND => 3`, `MISTER_1541_SD_WRITE => true`) with the
+  resident menu/fastload hook booted from LBA 8. For IEC-sensitive titles,
+  `LOAD"@I",8` mounts through the menu and then disables the hook signature so
+  later loads use the stock IEC/1541 path. Ultima I has been verified on
+  hardware with this SD `@I` path.
+- The Python-backed virtual 1541 sector source (`MISTER_1541_BACKEND => 2`) was
+  used as a comparison path. Ultima I has been verified on hardware there,
+  confirming that the C64 IEC loader and internal 1541 logic are viable.
 - Latest Gowin build checked: `0` setup and `0` hold violations; resource use is
   about 78% logic and 39/46 BSRAM. The generated `.fs` is kept local because it
   embeds the C64 ROM images.
@@ -74,6 +85,14 @@ boards/tang_primer_20k/c64_ddr/
    make c64-kernal-load-vector-patch
    make c64-roms
    ```
+   The patch changes `$FFD5` to a small guard at `$ECB9`. That guard now
+   accepts the resident SD hook only when `$C000` contains the `$2C`/`BIT`
+   signature and then enters the hook at `$C006`; otherwise it falls back to the
+   stock KERNAL LOAD routine. This keeps games that place their own loader or
+   overlay at `$C000` from being mistaken for the SD hook.
+   `LOAD"@I",8` intentionally clears the resident hook signature after mounting
+   a disk; after that the same guard falls through to the stock IEC path until
+   the hook is restored by reset/boot.
    (The ROMs themselves are not redistributed; this is run locally.)
 2. Build the FPGA image:
    ```
@@ -107,12 +126,17 @@ currently `true`):
   and each CIA2 VIC-bank switch starts a DDR-to-shadow refresh sweep. BA still
   reproduces 6510 stall timing; the VIC does not issue per-cycle DDR reads.
 
-### SD floppy
+### SD floppy (alternate backend)
 
 The native core carries the SD-backed MiSTer 1541 drive used during probe-board
 bring-up, but the native C64 top also wires the SD write channel and enables
 write-back (`MISTER_1541_SD_WRITE => true`). The same FAT16 card, resident SD
 hook and disk menu are used for loading:
+
+For loaders that talk to the 1541 directly, use `LOAD"@I",8` instead of
+`LOAD"@",8`. It still uses the FAT16 menu to mount the D64, but then disables
+the resident hook signature so the KERNAL guard falls back to the stock IEC
+entry point.
 
 * `mister_c1541_iec` runs with `D64_BACKEND => 3` (contiguous .d64 file on the
   card, mounted at runtime) and `SD_PACKED_D64_FILE => true`.
@@ -140,6 +164,20 @@ LIST
 LOAD"*",8,1
 SAVE"NAME",8
 ```
+
+For IEC-loader games such as Ultima I, mount with:
+
+```basic
+LOAD"@I",8
+LOAD"$",8
+LIST
+LOAD"*",8,1
+RUN
+```
+
+After `@I`, the hook stays disabled until a reset restores it from the SD hook
+block at LBA 8. Re-run `tools/write_sd_hook_block.ps1` after rebuilding the hook
+PRG, otherwise the card still contains the old resident hook.
 
 The `LOAD"@",8` selector shows 16 `.d64` files per page. Use cursor
 right/down for the next page and cursor left/up for the previous page, then
@@ -193,7 +231,9 @@ tools/write_sd_hook_block.ps1 -DriveLetter G    # elevated PowerShell
 ```
 
 The script writes only the `C64HOOK1` boot block at LBA 8, below the FAT16
-partition, and verifies it afterwards.
+partition, and verifies it afterwards. Re-run this after changing
+`sw/c64_sd_fastload_hook.s`; a bitstream with the current `$2C` guard will not
+enter an older hook block that still starts with the old `$4C`/`JMP` header.
 
 There is also a standalone board project for testing only the floppy write path
 without the C64 core: `boards/tang_primer_20k/c1541_selftest`.
@@ -335,12 +375,39 @@ deeper 1541/IEC compatibility work. After testing large uploads, use a long
 KEY[0] reset if BASIC/KERNAL should restart with clean RAM instead of preserving
 the uploaded program bytes.
 
-### Virtual 1541 UART transport (superseded by the SD floppy)
+### Virtual 1541 UART sector backend
 
-> The current board top runs the 1541 from the SD card (`MISTER_1541_BACKEND
-> => 3`, see the SD floppy section); the UART transport below is NOT wired in
-> the default build any more. It still works when the core is built with
-> `MISTER_1541_BACKEND => 2` and `HOST_UART_ENABLE => true`.
+The Python sector backend is the confirmed comparison path for IEC-loader
+debugging. With `MISTER_1541_BACKEND => 2`, the 1541 CPU/VIA/IEC/GCR path
+remains inside the FPGA, while `c1541_v1541_uart_sector_source` asks the Python
+GUI for each D64 sector on demand.
+
+Do not press `SEND HOOK` for this mode and do not use `LOAD"@",8`; there is no
+SD hook installed. Start the Python drive, mount the D64, then use normal C64
+disk commands:
+
+```basic
+LOAD"$",8
+LIST
+LOAD"*",8,1
+RUN
+```
+
+The PC-side companion is:
+
+```powershell
+python tools/c64_1541_uart_gui.py --port COM15 --baud 230400 --folder E:\Emulatoren\C64\Games
+```
+
+The GUI answers the FPGA sector protocol (`CMD_SECTOR`) and the GCR engine
+stretches the virtual disk rotation while a 256-byte sector is fetched.
+
+#### Legacy KERNAL-hook UART transport
+
+The older `$DE00/$DE01` KERNAL-hook transport is still useful for smoke tests
+and RAM-hook experiments, but it is not enabled in the current Ultima sector
+build (`HOST_UART_ENABLE => false`). Enable it only when intentionally testing
+the hook path.
 
 With that configuration the board top routes the native C64 host-disk UART to
 the CH340 while the monitor is inactive. The C64 sees this transport at:
@@ -350,7 +417,7 @@ the CH340 while the monitor is inactive. The C64 sees this transport at:
 | `$DE00` | read/write | UART data byte; reading consumes the received byte |
 | `$DE01` | read | bit 0 = RX byte available, bit 1 = TX busy, bit 2 = RX overflow |
 
-The PC-side companion is:
+The PC-side companion for the legacy hook transport is:
 
 ```powershell
 python tools/virtual_1541/c64_1541_uart_gui.py --port COM15 --folder E:\Emulatoren\C64\Games

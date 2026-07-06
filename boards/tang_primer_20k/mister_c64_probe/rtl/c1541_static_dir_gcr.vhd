@@ -42,14 +42,14 @@ entity c1541_static_dir_gcr is
     img_sector : out std_logic_vector(4 downto 0);
     img_offset : out std_logic_vector(7 downto 0);
     img_dout   : in  std_logic_vector(7 downto 0);
-    img_valid  : in  std_logic
+    img_valid  : in  std_logic;
+
+    disk_id1   : in  std_logic_vector(7 downto 0) := x"54";
+    disk_id2   : in  std_logic_vector(7 downto 0) := x"50"
   );
 end entity;
 
 architecture rtl of c1541_static_dir_gcr is
-  constant ID1 : std_logic_vector(7 downto 0) := x"54";
-  constant ID2 : std_logic_vector(7 downto 0) := x"50";
-
   function clipped_step return natural is
   begin
     if GCR_TURBO < 1 then
@@ -194,8 +194,8 @@ begin
                  hdr_cks when byte_cnt = 1 else
                  "000" & std_logic_vector(sector) when byte_cnt = 2 else
                  std_logic_vector(logical_track) when byte_cnt = 3 else
-                 ID2 when byte_cnt = 4 else
-                 ID1 when byte_cnt = 5 else
+                 disk_id2 when byte_cnt = 4 else
+                 disk_id1 when byte_cnt = 5 else
                  x"0F";
 
   data_body <= x"07" when byte_cnt = 0 else
@@ -275,7 +275,7 @@ begin
   begin
     if rising_edge(clk) then
       wr_trace_count_v := wr_trace_count_r;
-      hdr_cks <= std_logic_vector(logical_track) xor ("000" & std_logic_vector(sector)) xor ID1 xor ID2;
+      hdr_cks <= std_logic_vector(logical_track) xor ("000" & std_logic_vector(sector)) xor disk_id1 xor disk_id2;
 
       we <= '0';
       wr_commit <= '0';

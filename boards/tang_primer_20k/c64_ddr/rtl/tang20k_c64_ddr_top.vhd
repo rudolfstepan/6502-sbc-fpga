@@ -157,6 +157,13 @@ architecture rtl of tang20k_c64_ddr_top is
   -- a few hundred LUTs) -- the full FLAT_64K uart_debug_monitor (~2.1k LUTs)
   -- no longer fits next to the SD floppy.
   constant ENABLE_UART_MONITOR : boolean := true;
+  -- Diagnostic/compatibility variant: use the Python virtual-1541 UART server
+  -- instead of the SD-card D64 backend, and do not auto-install the SD LOAD
+  -- hook. KERNAL LOAD then falls through to the normal IEC path.
+  constant USE_PYTHON_V1541    : boolean := false;
+  constant ENABLE_SD_HOOK_BOOT : boolean := true;
+  constant C64_DRIVE_BACKEND   : integer := 3;     -- 2 = virtual 1541 UART, 3 = SD D64
+  constant C64_DRIVE_SD_WRITE  : boolean := true;  -- only meaningful for backend 3
 
   -- Four-byte monitor wake sequence. A single magic byte is unsafe once the
   -- same UART also carries arbitrary D64/PRG binary data for the virtual 1541.
@@ -561,10 +568,9 @@ begin
 
   -- Release the C64 only after DDR is ready, then emulate the short manual
   -- reset pulse that reliably recovers the VIC after the board has warmed up.
-  -- The automatic pulse drives the board reset line too, matching KEY[0]
-  -- instead of only resetting the C64 core. It is deliberately one-shot:
-  -- reset_n going low during the generated pulse resets the boot/SD logic,
-  -- and that must not arm the pulse again.
+  -- The automatic pulse resets only the C64 core.  Keeping reset_n high avoids
+  -- restarting the SD controller/boot loader after the hook has just been
+  -- copied, so the disk menu does not reach READY before sd_init_done returns.
   -- While boot_owns is high before the one-shot pulse, keep the core alive so
   -- the monitor RAM handshake can drain; the CPU is parked by monitor_hold.
   process(clk_pix)
@@ -619,14 +625,14 @@ begin
               c64_auto_delay_cnt <= c64_auto_delay_cnt - 1;
             else
               c64_reset_reg <= '0';
-              auto_board_reset_n <= '0';
+              auto_board_reset_n <= '1';
               c64_auto_pulse_cnt <= C64_AUTO_RESET_PULSE_CYCLES;
               c64_reset_state <= CR_AUTO_PULSE;
             end if;
 
           when CR_AUTO_PULSE =>
             c64_reset_reg <= '0';
-            auto_board_reset_n <= '0';
+            auto_board_reset_n <= '1';
             if c64_auto_pulse_cnt > 0 then
               c64_auto_pulse_cnt <= c64_auto_pulse_cnt - 1;
             else
@@ -1143,28 +1149,42 @@ begin
 
   -- Standalone power-up loader: pulls the resident SD hook from the card
   -- (LBA 8, "C64HOOK1" header written by make_fat16_d64_card.py) into C64
-  -- RAM while the CPU is parked, so no UART upload is needed.
-  boot_i : entity work.c64_sd_hook_boot_loader
-    generic map (
-      HOOK_LBA => x"00000008",
-      CLK_HZ   => 27_000_000
-    )
-    port map (
-      clk     => clk_pix,
-      reset_n => reset_n,
-      sd_init_done           => sd_init_done,
-      sd_sec_read            => boot_sd_sec_read,
-      sd_sec_read_addr       => boot_sd_sec_read_addr,
-      sd_sec_read_data       => sd_sec_read_data,
-      sd_sec_read_data_valid => boot_sd_valid,
-      sd_sec_read_end        => boot_sd_end,
-      mem_we    => boot_mem_we,
-      mem_addr  => boot_mem_addr,
-      mem_wdata => boot_mem_wdata,
-      active    => boot_active,
-      done      => boot_done,
-      status    => boot_status
-    );
+  -- RAM while the CPU is parked, so no UART upload is needed. Disabled for
+  -- the Python virtual-1541 variant so KERNAL LOAD uses the IEC path.
+  gen_sd_hook_boot : if ENABLE_SD_HOOK_BOOT generate
+    boot_i : entity work.c64_sd_hook_boot_loader
+      generic map (
+        HOOK_LBA => x"00000008",
+        CLK_HZ   => 27_000_000
+      )
+      port map (
+        clk     => clk_pix,
+        reset_n => reset_n,
+        sd_init_done           => sd_init_done,
+        sd_sec_read            => boot_sd_sec_read,
+        sd_sec_read_addr       => boot_sd_sec_read_addr,
+        sd_sec_read_data       => sd_sec_read_data,
+        sd_sec_read_data_valid => boot_sd_valid,
+        sd_sec_read_end        => boot_sd_end,
+        mem_we    => boot_mem_we,
+        mem_addr  => boot_mem_addr,
+        mem_wdata => boot_mem_wdata,
+        active    => boot_active,
+        done      => boot_done,
+        status    => boot_status
+      );
+  end generate;
+
+  gen_no_sd_hook_boot : if not ENABLE_SD_HOOK_BOOT generate
+    boot_sd_sec_read <= '0';
+    boot_sd_sec_read_addr <= (others => '0');
+    boot_mem_we <= '0';
+    boot_mem_addr <= (others => '0');
+    boot_mem_wdata <= (others => '0');
+    boot_active <= '0';
+    boot_done <= '1';
+    boot_status <= x"00";
+  end generate;
 
   -- Boot-write shim: the boot loader emits one RAM write per SD byte; the
   -- c64_core monitor port wants a req/ready handshake. Queue a few bytes and
@@ -1420,9 +1440,9 @@ begin
       VIC_XL => true,
       IEC_BUS_MODEL => true,
       MISTER_1541_ENABLE => true,
-      MISTER_1541_BACKEND => 3,      -- SD-card D64 (was 2 = virtual 1541 UART)
+      MISTER_1541_BACKEND => C64_DRIVE_BACKEND,
       MISTER_1541_BAUD => 230400,
-      MISTER_1541_SD_WRITE => true,  -- flush 1541 writes back to the card
+      MISTER_1541_SD_WRITE => C64_DRIVE_SD_WRITE,
       HOST_UART_ENABLE => false
     )
     port map (

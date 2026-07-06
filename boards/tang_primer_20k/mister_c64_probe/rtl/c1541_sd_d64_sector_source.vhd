@@ -67,6 +67,9 @@ entity c1541_sd_d64_sector_source is
     mount_lba    : in std_logic_vector(31 downto 0);
     mount_strobe : in std_logic;
 
+    disk_id1 : out std_logic_vector(7 downto 0);
+    disk_id2 : out std_logic_vector(7 downto 0);
+
     uart_tx : out std_logic
   );
 end entity;
@@ -106,6 +109,9 @@ architecture rtl of c1541_sd_d64_sector_source is
   signal fetch_track   : std_logic_vector(7 downto 0) := (others => '0');
   signal fetch_sector  : std_logic_vector(4 downto 0) := (others => '0');
   signal req_change    : std_logic;
+  signal id_fetch      : std_logic := '0';
+  signal disk_id1_r    : std_logic_vector(7 downto 0) := x"54";
+  signal disk_id2_r    : std_logic_vector(7 downto 0) := x"50";
 
   signal mounted : std_logic := '0';
   signal map_valid : std_logic;
@@ -236,6 +242,8 @@ begin
   sd_sec_write_addr <= std_logic_vector(target_lba(22 downto 0)) & "000000000" when SD_BYTE_ADDRESSING
                        else std_logic_vector(target_lba);
   sd_sec_write_data <= wr_out;
+  disk_id1 <= disk_id1_r;
+  disk_id2 <= disk_id2_r;
 
   -- Freeze the GCR engine (write mode) while a flush is pending or running.
   wr_busy <= '1' when wr_commit_pend = '1'
@@ -286,6 +294,9 @@ begin
         loaded_sector <= (others => '1');
         fetch_track <= (others => '0');
         fetch_sector <= (others => '0');
+        id_fetch <= '0';
+        disk_id1_r <= x"54";
+        disk_id2_r <= x"50";
         blank_sector <= '0';
         active_d64_lba <= unsigned(RAW_D64_LBA);
         target_lba <= (others => '0');
@@ -338,8 +349,14 @@ begin
           wr_commit_pend <= '0';
           loaded_track <= (others => '1');
           loaded_sector <= (others => '1');
+          id_fetch <= '0';
+          disk_id1_r <= x"54";
+          disk_id2_r <= x"50";
           if sd_init_done = '1' then
-            state <= S_READY;
+            fetch_track <= x"12";
+            fetch_sector <= "00000";
+            id_fetch <= '1';
+            state <= S_DRV_REQ;
           else
             state <= S_WAIT_SD;
           end if;
@@ -354,7 +371,10 @@ begin
             mounted <= '1';
             loaded_track <= (others => '1');
             loaded_sector <= (others => '1');
-            state <= S_READY;
+            fetch_track <= x"12";
+            fetch_sector <= "00000";
+            id_fetch <= '1';
+            state <= S_DRV_REQ;
 
           when S_READY =>
             -- A pending write flush beats a new fetch: the freshly written
@@ -395,6 +415,7 @@ begin
               blank_sector <= '1';
               loaded_track <= fetch_track;
               loaded_sector <= fetch_sector;
+              id_fetch <= '0';
               state <= S_READY;
             end if;
 
@@ -407,6 +428,11 @@ begin
             -- write port above, gated by sec_wr_en)
             if sd_sec_read_data_valid = '1' then
               if raw_pos(8) = fetch_upper_half then
+                if id_fetch = '1' and raw_pos(7 downto 0) = to_unsigned(16#A2#, 8) then
+                  disk_id1_r <= sd_sec_read_data;
+                elsif id_fetch = '1' and raw_pos(7 downto 0) = to_unsigned(16#A3#, 8) then
+                  disk_id2_r <= sd_sec_read_data;
+                end if;
                 if raw_pos(7 downto 0) >= 2 and raw_pos(7 downto 0) < 16 then
                   dbg_buf(to_integer(raw_pos(3 downto 0))) <= sd_sec_read_data;
                 end if;
@@ -417,6 +443,7 @@ begin
             if sd_sec_read_end = '1' then
               loaded_track <= fetch_track;
               loaded_sector <= fetch_sector;
+              id_fetch <= '0';
               state <= S_READY;
             end if;
 

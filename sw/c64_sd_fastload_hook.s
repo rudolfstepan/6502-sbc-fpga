@@ -2,12 +2,15 @@
 ;
 ; One resident program at $C000 replaces the separate fastload hook and disk
 ; selector.  It installs a LOAD vector hook at $0330; the patched KERNAL also
-; detects it by the JMP opcode at $C000 and enters at $C003 directly, so the
-; hook survives RUN/STOP+RESTORE.
+; detects the BIT-signature byte at $C000 and enters at $C006 directly, so the
+; hook survives RUN/STOP+RESTORE without confusing common $C000 game overlays
+; for a resident hook.
 ;
 ;   LOAD"@",8       FAT16 disk menu: scans the SD root directory for *.D64,
 ;                   walks the FAT chain (fragmented files are refused) and
 ;                   mounts the selection
+;   LOAD"@I",8      same menu, then disables the resident hook signature so
+;                   later LOAD calls use the stock IEC/1541 path
 ;   LOAD"*",8,1     fastload the first PRG from the mounted D64
 ;   LOAD"NAME",8,1  fastload by name through the $DF08-$DF0C sector window
 ;   LOAD"$",8       falls back to the original KERNAL/IEC path, like VERIFY
@@ -63,9 +66,11 @@ basic_end:
 
 .segment "CODE"
 hook_header:
-        jmp install               ; $C000: the KERNAL stub checks for this JMP
+        .byte $2C, "SD"           ; $C000: BIT $4453 signature for KERNAL guard
+hook_install_entry:
+        jmp install               ; SYS 49152 executes BIT then installs hook
 hook_load_entry:
-        jmp vload                 ; $C003: entered directly by the KERNAL stub
+        jmp vload                 ; $C006: entered directly by the KERNAL stub
 
 install:
         sei
@@ -121,6 +126,18 @@ vload_device8:
 :
         cmp #'@'
         bne fastload_ok_name
+        lda #$00
+        sta MENU_IEC_MODE
+        lda FNLEN
+        cmp #$02
+        bcc :+
+        ldy #1
+        lda (FNADR),y
+        cmp #'I'
+        bne :+
+        lda #$01
+        sta MENU_IEC_MODE
+:
         jmp menu_entry
 
 fastload_ok_name:
@@ -604,6 +621,14 @@ menu_mount:
         lda #<usage_msg
         ldy #>usage_msg
         jsr print_z
+        lda MENU_IEC_MODE
+        beq :+
+        lda #$00
+        sta hook_header          ; patched KERNAL guard now falls back to IEC
+        lda #<iec_mode_msg
+        ldy #>iec_mode_msg
+        jsr print_z
+:
 
 menu_exit:
         jsr restore_zp
@@ -1461,6 +1486,8 @@ mounted_msg:
         .byte $0D, "MOUNTED: ", 0
 usage_msg:
         .byte "NOW USE: LOAD", $22, "$", $22, ",8 / LOAD", $22, "*", $22, ",8,1", $0D, 0
+iec_mode_msg:
+        .byte "IEC MODE: HOOK OFF UNTIL RESET", $0D, 0
 
 .segment "BSS"
 req_addr:   .res 2
@@ -1509,6 +1536,7 @@ PAGE_START: .res 1
 SKIP_LEFT:  .res 1
 PAGE_MORE:  .res 1
 SEL:        .res 1
+MENU_IEC_MODE: .res 1
 CLUS:       .res 2
 NCLUS:      .res 2
 FATVAL:     .res 2

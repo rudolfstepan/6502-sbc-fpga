@@ -323,6 +323,8 @@ def run(pc, a=0, x=0, y=0, max_steps=50_000_000):
         elif op == 0x29: A &= b1; set_nz(A); PC += 2
         elif op == 0x25: A &= rd(b1); set_nz(A); PC += 2
         elif op == 0x2D: A &= rd(w); set_nz(A); PC += 3
+        elif op == 0x2C:
+            v = rd(w); Z = ((A & v) == 0); N = bool(v & 0x80); V = bool(v & 0x40); PC += 3
         elif op == 0x09: A |= b1; set_nz(A); PC += 2
         elif op == 0x05: A |= rd(b1); set_nz(A); PC += 2
         elif op == 0x0D: A |= rd(w); set_nz(A); PC += 3
@@ -381,7 +383,7 @@ def call_load(name, sa, a=0, addr=0x0801):
     ram[0xBC] = 0x03
     for i, ch in enumerate(name):
         ram[0x340 + i] = ord(ch)
-    return run(0xC003, a=a, x=addr & 0xFF, y=addr >> 8)
+    return run(0xC006, a=a, x=addr & 0xFF, y=addr >> 8)
 
 fails = []
 
@@ -395,13 +397,13 @@ ram[0x2B] = 0x01; ram[0x2C] = 0x08          # TXTTAB $0801
 ram[0x2D] = 0x03; ram[0x2E] = 0x08          # VARTAB $0803
 
 # 1) install via SYS 49152 (skipped in standalone mode: the KERNAL guard
-#    stub enters at $C003 without install ever having run)
+#    stub enters at $C006 without install ever having run)
 if not STANDALONE:
     res = run(0xC000)
     flush_output("install")
     check(ram[0x330] | (ram[0x331] << 8) != 0, "ILOAD written")
 else:
-    check(ram[0xC000] == 0x4C, "hook signature JMP present at $C000")
+    check(ram[0xC000] == 0x2C, "hook BIT signature present at $C000")
 
 # 2) fastload before any mount -> $E5 error + hint, carry set, A=$04
 res = call_load("*", 1)
@@ -481,6 +483,17 @@ if len(card_d64s) > 16:
     check(sd.mounted == card_d64s[16]["start_lba"],
           f"paged menu mounted {card_d64s[16]['name']} at {card_d64s[16]['start_lba']} "
           f"(got {sd.mounted})")
+
+# 10) IEC-loader mount mode: LOAD"@I",8 mounts, then clears the $C000 guard
+#     signature so the patched KERNAL falls back to the stock IEC path.
+ram[0xC000] = 0x2C
+keys[:] = [ord("1")]
+res = call_load("@I", 0)
+flush_output("LOAD\"@I\",8 menu, key 1")
+check(res[0] == "rts" and res[4] is False, "@I menu returns clean")
+check(sd.mounted == card_d64s[0]["start_lba"],
+      f"@I mounted {card_d64s[0]['name']} at LBA {card_d64s[0]['start_lba']} (got {sd.mounted})")
+check(ram[0xC000] == 0x00, "IEC mode clears $C000 hook signature")
 
 print()
 print("RESULT:", "ALL PASS" if not fails else f"{len(fails)} FAILURES: {fails}")
