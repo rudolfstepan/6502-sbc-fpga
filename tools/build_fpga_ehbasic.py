@@ -47,10 +47,10 @@ from pathlib import Path
 ROOT        = Path(__file__).resolve().parent.parent          # 6502-sbc-fpga
 SIBLING     = ROOT.parent / "6502-sbc-emulator"               # EhBASIC source only
 CACHE_ASM   = SIBLING / "tools" / "ehbasic_port" / ".cache" / "basic.asm"
-KERNEL_ROM  = ROOT / "roms" / "kernel.rom"                    # built by sw/Makefile (make kernel)
-WRAPPER_S   = ROOT / "sw" / "ehbasic_fpga.s"
-LINKER_CFG  = ROOT / "sw" / "ehbasic_fpga.cfg"
-OUT_DIR     = ROOT / "roms"
+KERNEL_ROM  = ROOT / "roms" / "6502" / "kernel.rom"                    # built by sw/Makefile (make kernel)
+WRAPPER_S   = ROOT / "sw" / "6502" / "ehbasic_fpga.s"
+LINKER_CFG  = ROOT / "sw" / "6502" / "ehbasic_fpga.cfg"
+OUT_DIR     = ROOT / "roms" / "6502"
 OUT_ROM     = OUT_DIR / "fpga_ehbasic_16kb.rom"
 OUT_IMG     = OUT_DIR / "fpga_ehbasic_16kb.img"
 SD_IMG_TOOL = ROOT / "tools" / "make_sd_boot_image.py"

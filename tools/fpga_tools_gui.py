@@ -304,7 +304,7 @@ class App(tk.Tk):
         s1.pack(fill=tk.X, padx=8)
         s1.add_note("Press KEY0 on the board first to enter monitor mode.")
         self._mon_image = s1.add_file_row(
-            "ROM Image:", str(ROMS / "fpga_ehbasic_16kb.rom"),
+            "ROM Image:", str(ROMS / "6502" / "fpga_ehbasic_16kb.rom"),
             filetypes=[("ROM / BIN", "*.rom *.bin"), ("All", "*.*")],
         )
         (self._mon_port,
@@ -341,7 +341,7 @@ class App(tk.Tk):
 
         s = Section(p, "Native SID Tune ROMs")
         s.pack(fill=tk.X, padx=8)
-        s.add_note("Pick a tune from roms/sound_*.rom and upload it to the SID core.\n"
+        s.add_note("Pick a tune from roms/6502/sound_*.rom and upload it to the SID core.\n"
                    "Press KEY0 on the board to enter monitor mode first.")
 
         # Filter / refresh row
@@ -379,7 +379,7 @@ class App(tk.Tk):
 
         c = Section(p, "C64 UART SID PRGs")
         c.pack(fill=tk.X, padx=8)
-        c.add_note("Pick a RUN-loadable C64 SID PRG from roms/c64_uart_sid.\n"
+        c.add_note("Pick a RUN-loadable C64 SID PRG from roms/c64/sid.\n"
                    "The loader uses sidecar segment maps automatically when present; "
                    "after upload type RUN on the C64.")
 
@@ -429,7 +429,7 @@ class App(tk.Tk):
         flt = self._sid_filter.get().strip().lower()
         self._sid_paths = []
         self._sid_list.delete(0, tk.END)
-        for p in sorted(ROMS.glob("sound_*.rom")):
+        for p in sorted((ROMS / "6502").glob("sound_*.rom")):
             title = self._tune_title(p, "sound_")
             if flt and flt not in title.lower() and flt not in p.name.lower():
                 continue
@@ -444,7 +444,7 @@ class App(tk.Tk):
         flt = self._c64_sid_filter.get().strip().lower()
         self._c64_sid_paths = []
         self._c64_sid_list.delete(0, tk.END)
-        for p in sorted((ROMS / "c64_uart_sid").glob("*.prg")):
+        for p in sorted((ROMS / "c64" / "sid").glob("*.prg")):
             title = self._tune_title(p)
             if flt and flt not in title.lower() and flt not in p.name.lower():
                 continue
@@ -489,11 +489,11 @@ class App(tk.Tk):
             "sectors 1-32 = 16 KB ROM payload.  Flash to SD card with dd or Win32DiskImager."
         )
         self._sd_rom = s1.add_file_row(
-            "ROM File:", str(ROMS / "fpga_ehbasic_16kb.rom"),
+            "ROM File:", str(ROMS / "6502" / "fpga_ehbasic_16kb.rom"),
             filetypes=[("ROM / BIN", "*.rom *.bin"), ("All", "*.*")],
         )
         self._sd_out = s1.add_file_row(
-            "Output Image:", str(ROMS / "fpga_ehbasic_16kb.img"),
+            "Output Image:", str(ROMS / "6502" / "fpga_ehbasic_16kb.img"),
             filetypes=[("Disk Image", "*.img"), ("All", "*.*")],
             save=True,
         )

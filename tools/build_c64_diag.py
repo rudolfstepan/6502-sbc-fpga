@@ -17,7 +17,7 @@ from pathlib import Path
 from build_c64_roms import emit_rom  # reuse the VHDL block-ROM emitter
 
 ROOT = Path(__file__).resolve().parents[1]
-SW = ROOT / "sw"
+SW = ROOT / "sw" / "c64"
 ROM_DIR = ROOT / "roms" / "c64"
 OUT = ROOT / "rtl" / "c64" / "c64_roms.vhd"
 

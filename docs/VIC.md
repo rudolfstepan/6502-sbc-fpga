@@ -177,7 +177,7 @@ sta $9000
 
 A worked example that fills the screen with 16 vertical colour bars is in
 [`sw/fb16_test.s`](../sw/fb16_test.s) → `roms/fb16_test.rom` (upload via
-`roms/upload/fb16_test.bat`).
+`roms/6502/upload/fb16_test.bat`).
 
 ## Displaying a Photograph (image → D64)
 

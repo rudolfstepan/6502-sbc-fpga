@@ -4,10 +4,10 @@
 For each tune under ``sid_orig/`` this wraps the native PSID/RSID payload in a
 generic player: it generates the 6502 player source, assembles it with ca65,
 links it with ``sw/soundsid.cfg`` (or ``sw/sid_page.cfg`` for $A000-load tunes)
-into ``roms/sound_<name>.rom`` and writes ``roms/upload/sound_<name>.bat``.
+into ``roms/6502/sound_<name>.rom`` and writes ``roms/6502/upload/sound_<name>.bat``.
 Tunes that cannot be wrapped (load address in zero page, or a payload too big
 for RAM/ROM) are skipped and reported. Curated hand-made ROMs (see ``CURATED``,
-e.g. ``roms/sound_commando.rom``) are left untouched unless ``--rebuild-curated``
+e.g. ``roms/6502/sound_commando.rom``) are left untouched unless ``--rebuild-curated``
 is given.
 
 Usage:
@@ -29,7 +29,7 @@ from build_native_sid_rom import parse_payload, render_asm, SidUnsupported  # no
 ROOT = Path(__file__).resolve().parent.parent
 
 # Curated, hand-crafted ROMs that are NOT tooling output and must never be
-# overwritten by the bulk build. `roms/sound_commando.rom` is a bespoke demo
+# overwritten by the bulk build. `roms/6502/sound_commando.rom` is a bespoke demo
 # (commit "add a new sounddemo based on the c64 sid commando") whose generic
 # wrapper does not reproduce it; clobbering it with the auto-generated player
 # breaks playback. Keyed by the sanitized base name. Use --rebuild-curated to
@@ -82,9 +82,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sid-dir", type=Path, default=ROOT / "sid_orig")
-    ap.add_argument("--rom-dir", type=Path, default=ROOT / "roms")
-    ap.add_argument("--bat-dir", type=Path, default=ROOT / "roms" / "upload")
-    ap.add_argument("--cfg", type=Path, default=ROOT / "sw" / "soundsid.cfg")
+    ap.add_argument("--rom-dir", type=Path, default=ROOT / "roms" / "6502")
+    ap.add_argument("--bat-dir", type=Path, default=ROOT / "roms" / "6502" / "upload")
+    ap.add_argument("--cfg", type=Path, default=ROOT / "sw" / "6502" / "soundsid.cfg")
     ap.add_argument("--ca65", default="C:/tools/cc65/bin/ca65.exe")
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65.exe")
     ap.add_argument("--port", default="COM15")
@@ -144,7 +144,7 @@ def main() -> int:
         rom_path = args.rom_dir / rom_name
         s_path.write_text(asm, newline="\n")
         # "page" tunes (load $A000-$CFFF) use the RAM-under-BASIC layout cfg.
-        cfg = (ROOT / "sw" / "sid_page.cfg") if info["mode"] == "page" else args.cfg
+        cfg = (ROOT / "sw" / "6502" / "sid_page.cfg") if info["mode"] == "page" else args.cfg
         try:
             subprocess.run([args.ca65, "--cpu", "6502", "-t", "none",
                             str(s_path), "-o", str(o_path)],

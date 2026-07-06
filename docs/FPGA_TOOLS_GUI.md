@@ -110,7 +110,7 @@ Ruft `upload_basic_uart.py` auf.  EhBASIC muss bereits auf dem Board laufen und 
 
 Wählt eine native SID-Tune-ROM aus `roms/sound_*.rom` und lädt sie auf den
 SID-Kern. Ruft `upload_monitor_hex.py … --split-rom --run` auf (dasselbe wie die
-`roms/upload/sound_*.bat`-Skripte). Die ROMs werden mit
+`roms/6502/upload/sound_*.bat`-Skripte). Die ROMs werden mit
 `build_all_sid_roms.py` aus `sid_orig/` erzeugt (siehe [SOUND.md](./SOUND.md)).
 
 > **Voraussetzung:** Zuerst die Monitor-Taste am Board drücken (Monitor-Modus).
@@ -126,7 +126,7 @@ SID-Kern. Ruft `upload_monitor_hex.py … --split-rom --run` auf (dasselbe wie d
 
 ### C64 UART SID PRGs
 
-Wählt eine RUN-loadbare C64-SID-PRG aus `roms/c64_uart_sid/` und lädt sie über
+Wählt eine RUN-loadbare C64-SID-PRG aus `roms/c64/sid/` und lädt sie über
 den nativen C64-UART-Monitor. Ruft intern `c64_uart_prg_loader.py` auf; nach dem
 Upload wird die C64-Umgebung freigegeben, danach am C64-Prompt `RUN` eingeben.
 
@@ -138,7 +138,7 @@ und SID-Player/Payload. Die Liste zeigt dann beide Größen an, z. B.
 | Feld / Option | Beschreibung |
 |---|---|
 | Filter | Filtert die C64-SID-PRG-Liste nach Titel oder Dateiname |
-| ↻ Refresh | Liest `roms/c64_uart_sid/*.prg` neu ein |
+| ↻ Refresh | Liest `roms/c64/sid/*.prg` neu ein |
 | C64 SID PRG-Liste | Alle gefundenen RUN-PRGs; **Doppelklick lädt direkt hoch** |
 | Port / Baud | Serieller Port und Baudrate für den C64-UART-Monitor |
 | Wake seq | Monitor-Wake-Sequenz, Standard `0xA5 0x5A 0xC3 0x3C` |

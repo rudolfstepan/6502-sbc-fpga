@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--sid-dir", type=Path, default=ROOT / "sid_orig")
-    ap.add_argument("--out-dir", type=Path, default=ROOT / "roms" / "c64_uart_sid")
+    ap.add_argument("--out-dir", type=Path, default=ROOT / "roms" / "c64" / "sid")
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--ca65", default="C:/tools/cc65/bin/ca65")
     ap.add_argument("--ld65", default="C:/tools/cc65/bin/ld65")

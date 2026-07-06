@@ -169,7 +169,7 @@ on the mounted disk:
 
 ```bat
 make c64-sd-fastload-first-prg
-python tools\c64_uart_prg_loader.py roms\diagnostics\sd_fastload_first.prg --port COM15
+python tools\c64_uart_prg_loader.py roms\c64\diag\sd_fastload_first.prg --port COM15
 ```
 
 After upload, type `RUN`.  The loader parses the D64 directory, follows the PRG
@@ -181,7 +181,7 @@ menu in one program, so only a single UART upload per power-on is needed:
 
 ```bat
 make c64-sd-fastload-hook-prg
-python tools\c64_uart_prg_loader.py roms\diagnostics\sd_fastload_hook.prg --port COM15
+python tools\c64_uart_prg_loader.py roms\c64\diag\sd_fastload_hook.prg --port COM15
 ```
 
 After upload, type `RUN` once.  The hook lives at `$C000` and installs itself
@@ -224,7 +224,7 @@ bytes 16..   hook code, continuing through following SD blocks
 ```
 
 `make mister64-fat16-d64-card` embeds the current hook automatically
-(`--hook-image roms\diagnostics\sd_fastload_hook.prg`).  An already
+(`--hook-image roms\c64\diag\sd_fastload_hook.prg`).  An already
 formatted card with .d64 files on it does not need to be rebuilt: the block
 lives below the partition, so it can be added in place without touching the
 filesystem:
@@ -291,7 +291,7 @@ through `$DF00-$DF04`:
 
 ```bat
 make c64-sd-fat16-selector-prg
-python tools\c64_uart_prg_loader.py roms\diagnostics\sd_fat16_select.prg --port COM15
+python tools\c64_uart_prg_loader.py roms\c64\diag\sd_fat16_select.prg --port COM15
 ```
 
 Because the card is read live, `.d64` files copied onto the card later (for
@@ -303,7 +303,7 @@ on the `$DF0D` window:
 
 ```bat
 make c64-sd-d64-selector-prg
-python tools\c64_uart_prg_loader.py roms\diagnostics\sd_d64_select.prg --port COM15
+python tools\c64_uart_prg_loader.py roms\c64\diag\sd_d64_select.prg --port COM15
 ```
 
 The monitor is entered by the same wake sequence as the native Tang C64 target,

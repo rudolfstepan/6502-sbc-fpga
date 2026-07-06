@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SW = ROOT / "sw"
+SW = ROOT / "sw" / "6502"
 BANK = 8192
 FB_BASE = 0x6000
 
@@ -40,13 +40,13 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("image")
-    ap.add_argument("-o", "--output", type=Path, default=ROOT / "roms" / "ich_image.d64")
+    ap.add_argument("-o", "--output", type=Path, default=ROOT / "roms" / "6502" / "ich_image.d64")
     ap.add_argument("--saturation", type=float, default=1.1)
     ap.add_argument("--contrast", type=float, default=1.08)
     ap.add_argument("--keep", action="store_true", help="keep intermediate .prg files")
     args = ap.parse_args(argv)
 
-    work = ROOT / "roms" / "_imgdisk"
+    work = ROOT / "roms" / "6502" / "imgdisk"
     work.mkdir(parents=True, exist_ok=True)
     base = work / "img"
 

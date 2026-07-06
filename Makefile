@@ -3,6 +3,7 @@ PYTHON        ?= python
 GHDL_FLAGS    ?= --std=08 --ieee=synopsys
 GHDL_RUN_FLAGS ?= --ieee-asserts=disable-at-0
 C64_DIAG_DIR  = roms/diagnostics
+C64_PRG_DIR   = roms/c64/prg
 
 CHESS_ROM_HEX        = sim/generated/chess_rom.hex
 SBC_ROM_HEX          = sim/generated/sbc_rom.hex
@@ -137,13 +138,19 @@ c64-math-copro-test-prg:
 	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/math_copro_test.o').unlink(missing_ok=True)"
 	@echo "Built roms/math_copro_test.prg (upload with tools/c64_uart_prg_loader.py, then RUN)"
 
-c64-mandelbrot-prg: c64-mandelbrot-copro-prg
+c64-mandelbrot-prg:
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_PRG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -o $(C64_PRG_DIR)/mandelbrot.o sw/c64/c64_mandelbrot_copro.s
+	$(LD65) -C sw/c64/c64_mandelbrot_copro.cfg -o $(C64_PRG_DIR)/mandelbrot.prg $(C64_PRG_DIR)/mandelbrot.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_PRG_DIR)/mandelbrot.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_PRG_DIR)/mandelbrot.prg (C64 CPU-only; upload with tools/c64_uart_prg_loader.py, then RUN)"
 
 c64-mandelbrot-copro-prg:
-	$(CA65) --cpu 6502 -o roms/mandelbrot_copro_c64.o sw/c64_mandelbrot_copro.s
-	$(LD65) -C sw/c64_mandelbrot_copro.cfg -o roms/mandelbrot_copro_c64.prg roms/mandelbrot_copro_c64.o
-	@$(PYTHON) -c "import pathlib; pathlib.Path('roms/mandelbrot_copro_c64.o').unlink(missing_ok=True)"
-	@echo "Built roms/mandelbrot_copro_c64.prg (software multiply; upload with tools/c64_uart_prg_loader.py, then RUN)"
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_PRG_DIR)').mkdir(parents=True, exist_ok=True)"
+	$(CA65) --cpu 6502 -D USE_COPRO=1 -o $(C64_PRG_DIR)/mandelbrot-copo.o sw/c64/c64_mandelbrot_copro.s
+	$(LD65) -C sw/c64/c64_mandelbrot_copro.cfg -o $(C64_PRG_DIR)/mandelbrot-copo.prg $(C64_PRG_DIR)/mandelbrot-copo.o
+	@$(PYTHON) -c "import pathlib; pathlib.Path('$(C64_PRG_DIR)/mandelbrot-copo.o').unlink(missing_ok=True)"
+	@echo "Built $(C64_PRG_DIR)/mandelbrot-copo.prg (C64-DDR math coprocessor; upload with tools/c64_uart_prg_loader.py, then RUN)"
 
 c64-ich-image-prg:
 	$(PYTHON) tools/c64_c16_to_hires.py sw/ich_image_c16.bin --out sw/ich_image_c64

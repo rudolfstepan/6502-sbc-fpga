@@ -2,15 +2,19 @@
 """
 Upload a binary image through the FPGA UART monitor hex loader.
 
-Default workflow:
-  1. Press the hardware monitor button on the board.
-  2. Run: python fpga/tools/upload_monitor_hex.py --build-demo --run
+The board now runs the small c64_prg_upload_monitor, entered over UART by a
+four-byte magic wake sequence (A5 5A C3 3C) -- sent automatically here, so no
+hardware button is needed. Pass --no-wake if the monitor is already active.
 
-The monitor command used is:
+Default workflow:
+  python tools/upload_monitor_hex_enter.py --build-demo --run
+
+The monitor commands used are:
+  <magic wake A5 5A C3 3C>   (enter the monitor)
   L <address>
   <hex bytes...>
   .
-  G <address>   (only with --run)
+  G <address>   (only with --run; "G aaaa" runs, a bare "G" would just release)
 
 Optional:
   --send-enter-after-run simulates pressing ENTER over UART after G <address>.
@@ -26,7 +30,10 @@ from pathlib import Path
 DEFAULT_PORT = "COM12"
 DEFAULT_BAUD = 115200
 DEFAULT_ADDR = 0xC000
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "roms" / "upload_demo.rom"
+# Four-byte magic wake sequence for c64_prg_upload_monitor (enters the monitor).
+WAKE_SEQUENCE = bytes([0xA5, 0x5A, 0xC3, 0x3C])
+MONITOR_BANNER = b"FPGA MONITOR"
+DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "roms" / "6502" / "upload_demo.rom"
 
 
 def require_pyserial():
@@ -76,6 +83,33 @@ def write_line(port, text: str, delay: float) -> None:
         time.sleep(delay)
 
 
+def wake_monitor(port, retries: int, wait: float, verbose: bool) -> bool:
+    """Enter the PRG upload monitor by sending the 4-byte UART magic sequence.
+
+    Returns True once the "FPGA MONITOR" banner is seen; retried a few times in
+    case a byte is lost while the port settles after opening.
+    """
+    for attempt in range(retries):
+        if verbose:
+            print(f"wake attempt {attempt + 1}/{retries}")
+        port.reset_input_buffer()
+        port.write(WAKE_SEQUENCE + b"\r")
+        port.flush()
+        deadline = time.monotonic() + wait
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            waiting = getattr(port, "in_waiting", 0)
+            if waiting:
+                buf.extend(port.read(waiting))
+                if MONITOR_BANNER in buf:
+                    if verbose:
+                        print(buf.decode("ascii", errors="replace"), end="")
+                    return True
+            else:
+                time.sleep(0.02)
+    return False
+
+
 def send_enter(port, delay_before: float, wait_after: float, verbose: bool) -> None:
     if delay_before:
         time.sleep(delay_before)
@@ -101,9 +135,17 @@ def upload(args: argparse.Namespace) -> None:
     print(f"Opening {args.port} @ {args.baud} baud")
     with serial.Serial(args.port, args.baud, timeout=0.05, write_timeout=2) as port:
         time.sleep(args.settle)
-        banner = read_some(port, 0.25)
-        if banner and args.verbose:
-            print(banner.decode("ascii", errors="replace"), end="")
+        if args.no_wake:
+            banner = read_some(port, 0.25)
+            if banner and args.verbose:
+                print(banner.decode("ascii", errors="replace"), end="")
+        else:
+            print("Waking monitor (magic A5 5A C3 3C) ...")
+            if not wake_monitor(port, args.wake_retries, args.wake_wait, args.verbose):
+                raise SystemExit(
+                    "ERROR: no 'FPGA MONITOR' banner after the magic wake sequence. "
+                    "Check the port/baud, or use --no-wake if the monitor is already active."
+                )
 
         print(f"Starting monitor upload: ${args.address:04X}, {len(data)} bytes")
         write_line(port, f"L {args.address:04X}", args.command_delay)
@@ -155,6 +197,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-done", type=float, default=0.8, help="seconds to read after . or G")
     parser.add_argument("--progress", type=int, default=1024, help="progress interval in bytes, 0 disables")
     parser.add_argument("--run", action="store_true", help="send G <address> after upload")
+    parser.add_argument("--no-wake", action="store_true",
+                        help="skip the magic wake (monitor already active, e.g. via key)")
+    parser.add_argument("--wake-retries", type=int, default=3, help="magic wake attempts")
+    parser.add_argument("--wake-wait", type=float, default=1.0, help="seconds to wait per wake attempt")
     parser.add_argument("--send-enter-after-run", action="store_true", help="send ENTER over UART after G <address>")
     parser.add_argument("--enter-delay", type=float, default=1.0, help="delay before simulated ENTER after run")
     parser.add_argument("--build-demo", action="store_true", help="generate the default demo ROM first")

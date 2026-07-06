@@ -2,9 +2,13 @@
 """
 Upload a binary image through the FPGA UART monitor hex loader.
 
+The board now runs the small c64_prg_upload_monitor, entered over UART by a
+four-byte magic wake sequence (A5 5A C3 3C) instead of a hardware button, so no
+button press is needed -- this script sends the wake automatically. Pass
+--no-wake if the monitor is already active (e.g. entered with the physical key).
+
 Default workflow:
-  1. Press the hardware monitor button on the board.
-  2. Run: python fpga/tools/upload_monitor_hex.py --build-demo --run
+  python tools/upload_monitor_hex.py --build-demo --run
 
 EhBASIC workflow (split around the $D000-$DFFF I/O window):
   python tools/upload_monitor_hex.py --ehbasic --run
@@ -12,11 +16,12 @@ EhBASIC workflow (split around the $D000-$DFFF I/O window):
 Standalone split-ROM workflow (for example soundsid.rom):
   python tools/upload_monitor_hex.py roms/soundsid.rom --split-rom --run
 
-The monitor command used is:
+The monitor commands used are:
+  <magic wake A5 5A C3 3C>   (enter the monitor)
   L <address>
   <hex bytes...>
   .
-  G <address>   (only with --run)
+  G <address>   (only with --run; "G aaaa" runs, a bare "G" would just release)
 """
 from __future__ import annotations
 
@@ -29,8 +34,12 @@ from pathlib import Path
 DEFAULT_PORT = "COM15"
 DEFAULT_BAUD = 115200
 DEFAULT_ADDR = 0xC000
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "roms" / "upload_demo.rom"
-ROMS_DIR = Path(__file__).resolve().parent.parent / "roms"
+# Four-byte magic wake sequence for c64_prg_upload_monitor (same as the C64 board
+# and tools/c64_uart_monitor_wake.py). Sending this over UART enters the monitor.
+WAKE_SEQUENCE = bytes([0xA5, 0x5A, 0xC3, 0x3C])
+MONITOR_BANNER = b"FPGA MONITOR"
+DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "roms" / "6502" / "upload_demo.rom"
+ROMS_DIR = Path(__file__).resolve().parent.parent / "roms" / "6502"
 EHBASIC_SEGMENTS = (
     (ROMS_DIR / "fpga_kernel_F000.bin", 0xF000),
     (ROMS_DIR / "fpga_ehbasic_A000.bin", 0xA000),
@@ -82,6 +91,33 @@ def write_line(port, text: str, delay: float) -> None:
     port.flush()
     if delay:
         time.sleep(delay)
+
+
+def wake_monitor(port, retries: int, wait: float, verbose: bool) -> bool:
+    """Enter the PRG upload monitor by sending the 4-byte UART magic sequence.
+
+    Returns True once the "FPGA MONITOR" banner is seen. The sequence is retried
+    a few times because a byte can be lost while the port settles after opening.
+    """
+    for attempt in range(retries):
+        if verbose:
+            print(f"wake attempt {attempt + 1}/{retries}")
+        port.reset_input_buffer()
+        port.write(WAKE_SEQUENCE + b"\r")
+        port.flush()
+        deadline = time.monotonic() + wait
+        buf = bytearray()
+        while time.monotonic() < deadline:
+            waiting = getattr(port, "in_waiting", 0)
+            if waiting:
+                buf.extend(port.read(waiting))
+                if MONITOR_BANNER in buf:
+                    if verbose:
+                        print(buf.decode("ascii", errors="replace"), end="")
+                    return True
+            else:
+                time.sleep(0.02)
+    return False
 
 
 def check_monitor_response(response: bytes, operation: str) -> None:
@@ -169,9 +205,17 @@ def upload(args: argparse.Namespace) -> None:
     print(f"Opening {args.port} @ {args.baud} baud")
     with serial.Serial(args.port, args.baud, timeout=0.05, write_timeout=2) as port:
         time.sleep(args.settle)
-        banner = read_some(port, 0.25)
-        if banner and args.verbose:
-            print(banner.decode("ascii", errors="replace"), end="")
+        if args.no_wake:
+            banner = read_some(port, 0.25)
+            if banner and args.verbose:
+                print(banner.decode("ascii", errors="replace"), end="")
+        else:
+            print("Waking monitor (magic A5 5A C3 3C) ...")
+            if not wake_monitor(port, args.wake_retries, args.wake_wait, args.verbose):
+                raise SystemExit(
+                    "ERROR: no 'FPGA MONITOR' banner after the magic wake sequence. "
+                    "Check the port/baud, or use --no-wake if the monitor is already active."
+                )
 
         for image, address, data in segments:
             upload_segment(port, image, address, args, data)
@@ -201,6 +245,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-done", type=float, default=0.8, help="seconds to read after . or G")
     parser.add_argument("--progress", type=int, default=1024, help="progress interval in bytes, 0 disables")
     parser.add_argument("--run", action="store_true", help="send G <address> after upload")
+    parser.add_argument("--no-wake", action="store_true",
+                        help="skip the magic wake (monitor already active, e.g. via key)")
+    parser.add_argument("--wake-retries", type=int, default=3, help="magic wake attempts")
+    parser.add_argument("--wake-wait", type=float, default=1.0, help="seconds to wait per wake attempt")
     parser.add_argument(
         "--ehbasic", action="store_true",
         help="upload kernel to $F000, then EhBASIC to $A000 (use --run to start at $A000)",

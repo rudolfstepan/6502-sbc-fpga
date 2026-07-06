@@ -37,7 +37,7 @@ PLAYER_RESERVE = 0x80   # bytes build_sid_prg reserves below an in-place payload
 # `Commando` is hand-built as a bespoke ROM (sw/sound_commando.s relocates a
 # custom payload to $1000 with init/play trampolines); the generic player driven
 # from the original PSID ($5000, init=$5F80, play=$5012) does not play it. It
-# stays available as the curated roms/sound_commando.rom (upload via .bat).
+# stays available as the curated roms/6502/sound_commando.rom (upload via .bat).
 # Keyed by the sanitized base name, mirroring build_all_sid_roms.CURATED.
 CURATED = {"commando"}
 

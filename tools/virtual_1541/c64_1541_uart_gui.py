@@ -1558,7 +1558,7 @@ class App(tk.Tk):
             self._log("disconnecting drive UART for hook upload")
             self._disconnect_worker()
 
-        hook_prg = ROOT / "roms" / "v1541_hook.prg"
+        hook_prg = ROOT / "roms" / "c64" / "prg" / "v1541_hook.prg"
         if not hook_prg.exists():
             messagebox.showerror("Hook upload", f"Hook PRG not found:\n{hook_prg}")
             return

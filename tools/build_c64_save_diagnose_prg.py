@@ -6,7 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-OUT = Path("roms/diagnostics/diagnose.prg")
+OUT = Path("roms/c64/diag/diagnose.prg")
 BASIC_LOAD = 0x0801
 
 # BASIC V2 tokens.  Keep longer spellings first so PRINT# wins over PRINT and
@@ -162,7 +162,7 @@ def main() -> int:
     prg = basic_prg(PROGRAM)
     OUT.write_bytes(prg)
     print(f"Wrote {OUT} ({len(prg)} bytes, load=${BASIC_LOAD:04X})")
-    print("Upload: python tools/c64_uart_prg_loader.py roms/diagnostics/diagnose.prg --port COM15")
+    print("Upload: python tools/c64_uart_prg_loader.py roms/c64/diag/diagnose.prg --port COM15")
     return 0
 
 

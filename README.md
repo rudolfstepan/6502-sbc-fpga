@@ -96,7 +96,7 @@ project layout, build targets, and ISE source/build-artifact policy.
 The Gowin project for the Tang Primer 20K lives at:
 
 ```text
-fpga/boards/tang_primer_20k/project/tang_sbc.gprj
+fpga/boards/tang_primer_20k/sbc/project/tang_sbc.gprj
 ```
 
 It targets the Sipeed Tang Primer 20K / Gowin GW2A-18. The current board top is

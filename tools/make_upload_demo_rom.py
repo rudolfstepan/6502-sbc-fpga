@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROM_BASE = 0xC000
 ROM_SIZE = 0x4000
-OUT = Path(__file__).resolve().parent.parent / "roms" / "upload_demo.rom"
+OUT = Path(__file__).resolve().parent.parent / "roms" / "6502" / "upload_demo.rom"
 
 VIC_BASE = 0x8000
 VIA_ORB = 0x8800

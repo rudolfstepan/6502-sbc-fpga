@@ -158,7 +158,7 @@ make test-c64-vic          # Run focused native C64 VIC-II graphics tests
 make test-c64-input        # Run PS/2 keyboard matrix + joystick input tests
 make c64-graphics-test-prg # Build roms/test.prg for UART upload to the C64 core
 make c64-sprite-test-prg   # Build roms/sprite_test.prg for sprite testing
-make c64-sid-prgs          # Build RUN-loadable C64 SID PRGs in roms/c64_uart_sid
+make c64-sid-prgs          # Build RUN-loadable C64 SID PRGs in roms/c64/sid
 make clean                 # Remove generated files
 make help                  # Show available targets, if supported by your make
 ```
@@ -222,11 +222,11 @@ convertible tune from `sid_orig/*.sid` with:
 make c64-sid-prgs
 ```
 
-The generated files are written to `roms/c64_uart_sid/`. Upload one with the C64
+The generated files are written to `roms/c64/sid/`. Upload one with the C64
 UART loader and start it from BASIC:
 
 ```powershell
-python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/sid/Commando.prg --port COM15
 ```
 
 ```text
@@ -237,7 +237,7 @@ These PRGs are intentionally sound-only. Their wrapper clears `$D011.DEN` and
 disables VIC raster IRQs before starting CIA Timer A as a roughly 50 Hz SID
 player tick. In this core `DEN=0` also stops VIC RAM fetches, so the single-port
 C64 RAM no longer stalls the CPU during playback and long SID players avoid
-audible timing hiccups. See `roms/c64_uart_sid/README.md` for details and known
+audible timing hiccups. See `roms/c64/sid/README.md` for details and known
 conversion limits.
 
 ### Native C64 virtual 1541 transport
@@ -268,7 +268,7 @@ Transport-only smoke test:
 
 ```powershell
 make c64-v1541-ping-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_ping.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_ping.prg --port COM15
 ```
 
 Close the upload tool, start `tools/virtual_1541/c64_1541_uart_gui.py` on the same COM port,
@@ -280,7 +280,7 @@ KERNAL `LOAD` hook exists:
 
 ```powershell
 make c64-v1541-loadfirst-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_loadfirst.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_loadfirst.prg --port COM15
 ```
 
 Close the upload tool, start the virtual 1541 server, mount/select a D64, and
@@ -318,7 +318,7 @@ the FPGA C64. Start with the diagnostic variant:
 
 ```powershell
 make c64-v1541-hook-diag-prg c64-v1541-hook-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_hook_diag.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_hook_diag.prg --port COM15
 ```
 
 Run the hook once on the C64. Then start the virtual 1541 server, mount a D64,
@@ -399,7 +399,7 @@ The `--ieee=synopsys` flag is required for the T65 CPU core compatibility.
   `sim/generated/sbc_ehbasic_sd.img` to the SD card.
 
 **Tang Primer 20K / GowinEDA**:
-- Open `fpga/boards/tang_primer_20k/project/tang_sbc.gprj` in GowinEDA.
+- Open `fpga/boards/tang_primer_20k/sbc/project/tang_sbc.gprj` in GowinEDA.
 - The active top is `tang20k_sbc_top`.
 - The project targets `GW2A-18C` / `GW2A-LV18PG256C8/I7`, matching the Sipeed
   Tang Primer 20K examples.

@@ -155,7 +155,7 @@ The UART-loadable SAVE diagnostic is:
 
 ```powershell
 python tools/build_c64_save_diagnose_prg.py
-python tools/c64_uart_prg_loader.py roms/diagnostics/diagnose.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/diagnose.prg --port COM15
 ```
 
 After resident-hook changes, an already formatted FAT16 SD card can be updated
@@ -256,7 +256,7 @@ through the same UART monitor:
 
 ```powershell
 make c64-sid-prgs
-python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/sid/Commando.prg --port COM15
 ```
 
 Generated SID PRGs include `*.prg.segments.json` sidecars. The UART loader uses
@@ -346,7 +346,7 @@ To smoke-test the serial path without a KERNAL patch:
 
 ```powershell
 make c64-v1541-ping-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_ping.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_ping.prg --port COM15
 ```
 
 Then close the upload tool, start `tools/virtual_1541/c64_1541_uart_gui.py` on the same COM
@@ -359,7 +359,7 @@ transport. The small BASIC stub lives at `$0801`, but the loader itself runs at
 
 ```powershell
 make c64-v1541-loadfirst-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_loadfirst.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_loadfirst.prg --port COM15
 ```
 
 Close the upload tool, start the virtual 1541 server, mount/select a D64, and
@@ -398,7 +398,7 @@ install the RAM hook on the real C64 core. Start with the diagnostic variant:
 
 ```powershell
 make c64-v1541-hook-diag-prg c64-v1541-hook-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_hook_diag.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_hook_diag.prg --port COM15
 ```
 
 Run the PRG once on the C64. After that, start the virtual 1541 server, mount a

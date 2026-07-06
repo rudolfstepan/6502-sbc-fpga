@@ -48,7 +48,7 @@ oeffentlich. Die SHA256-Summen hier identifizieren die lokalen Dateien.
   `tools/write_sd_hook_block.ps1 -DriveLetter G` schreibt nur den C64HOOK1-Block
   bei LBA 8 und laesst FAT/D64-Daten unveraendert.
 - Neue Diagnosepfade:
-  - `roms/diagnostics/diagnose.prg` fuer SAVE auf echter Hardware
+  - `roms/c64/diag/diagnose.prg` fuer SAVE auf echter Hardware
   - `$DF07`, `$DF0D-$DF0F`, `$DF10-$DF14` als Write-Counter/Trace
   - `make test-c1541-sd-write` fuer GHDL
   - `boards/tang_primer_20k/c1541_selftest` als standalone Floppy-Selftest ohne

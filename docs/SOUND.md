@@ -141,7 +141,7 @@ lets the bank default to 1.8 V — that is not possible here because the bank is
 shared.)
 
 > **Build note:** the sound sources must be listed in
-> [`boards/tang_primer_20k/project/build.tcl`](../boards/tang_primer_20k/project/build.tcl).
+> [`boards/tang_primer_20k/sbc/project/build.tcl`](../boards/tang_primer_20k/sbc/project/build.tcl).
 > The PowerShell build (`make_tang20k.ps1`) drives `gw_sh build.tcl`, **not** the
 > `.gprj` project file — if `sound_voice.vhd`/`pt8211_dac.vhd` are missing from
 > `build.tcl`, GowinEDA synthesizes them as empty black boxes and the DAC pins
@@ -358,12 +358,12 @@ python tools/build_native_sid_rom.py path/to/tune.sid sw/<name>.s   # one wrappe
 ### C64 UART SID PRGs
 
 The native C64 core uses a different SID wrapper for UART-uploadable PRGs. These
-files live in `roms/c64_uart_sid/`, load at `$0801`, include a BASIC `SYS` line,
+files live in `roms/c64/sid/`, load at `$0801`, include a BASIC `SYS` line,
 and start with `RUN` after upload through `tools/c64_uart_prg_loader.py`:
 
 ```sh
 make c64-sid-prgs
-python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/sid/Commando.prg --port COM15
 ```
 
 The builder also emits `*.prg.segments.json` files. The UART loader detects
@@ -388,14 +388,14 @@ plays. That removes audible stalls from the single-port RAM sharing path; the
 HDMI output is intentionally blank while these PRGs play.
 
 This is separate from the `sound_*.rom` split-ROM path above. The split-ROM
-wrappers target the SBC monitor/ROM map, while `roms/c64_uart_sid/*.prg` targets
+wrappers target the SBC monitor/ROM map, while `roms/c64/sid/*.prg` targets
 the native C64 BASIC environment and UART PRG loader.
 
 ### Bulk-building a whole `.sid` collection
 
 `tools/build_all_sid_roms.py` wraps **every** suitable tune under `sid_orig/` at
 once, emitting `roms/sound_<name>.rom` and a matching
-`roms/upload/sound_<name>.bat` for each (page-mode tunes are linked with
+`roms/6502/upload/sound_<name>.bat` for each (page-mode tunes are linked with
 `sw/sid_page.cfg` automatically), and reporting the tunes it has to skip.
 
 By default it also runs each tune through the bare-6502 SID emulator

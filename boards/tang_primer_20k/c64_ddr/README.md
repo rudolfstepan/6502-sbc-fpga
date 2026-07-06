@@ -44,9 +44,26 @@ PS/2 front-end concepts) and adds the C64-specific chips natively.
 - The Python-backed virtual 1541 sector source (`MISTER_1541_BACKEND => 2`) was
   used as a comparison path. Ultima I has been verified on hardware there,
   confirming that the C64 IEC loader and internal 1541 logic are viable.
+- The shared fixed-point math coprocessor is enabled again in the DDR fork at
+  `$DEB0-$DEBF` (I/O1). `$DFxx` remains reserved for the SD disk window, and the
+  legacy host UART stays at `$DE00-$DE01` when that path is enabled.
 - Latest Gowin build checked: `0` setup and `0` hold violations; resource use is
   about 78% logic and 39/46 BSRAM. The generated `.fs` is kept local because it
   embeds the C64 ROM images.
+
+### Math coprocessor
+
+The C64 DDR project maps `rtl/core/peripherals/math_copro.vhd` into I/O1:
+
+| Address | Meaning |
+| --- | --- |
+| `$DEB0-$DEB3` | operand A, signed 32-bit little endian |
+| `$DEB4-$DEB7` | operand B, signed 32-bit little endian |
+| `$DEB8-$DEBB` | shifted result, signed 32-bit little endian |
+| `$DEBC` | shift amount, default `24` |
+
+The raw signed 64-bit product is readable at `$DEB0-$DEB7`; after writing the
+operands, read `$DEB8-$DEBB` for `(A * B) >> shift`.
 
 ## Layout
 
@@ -96,10 +113,10 @@ boards/tang_primer_20k/c64_ddr/
    (The ROMs themselves are not redistributed; this is run locally.)
 2. Build the FPGA image:
    ```
-   make c64-tang20k-build
+   cd boards/tang_primer_20k/c64_ddr/project
+   build.bat
    ```
-   This runs `boards/tang_primer_20k/c64_ddr/project/build.bat`, which drives
-   `gw_sh project/build.tcl` with a fresh source file list.
+   This drives `gw_sh build.tcl` with a fresh source file list.
 3. Flash `impl/pnr/tang_c64_ddr.fs`.
 
 Tested bitstreams live in `bitstream/` with a date+version suffix; see
@@ -219,7 +236,7 @@ The UART-loadable SAVE diagnostic is:
 
 ```powershell
 python tools/build_c64_save_diagnose_prg.py
-python tools/c64_uart_prg_loader.py roms/diagnostics/diagnose.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/diagnose.prg --port COM15
 ```
 
 After resident-hook changes, an already formatted FAT16 SD card can be updated
@@ -328,7 +345,7 @@ through the same UART monitor:
 
 ```powershell
 make c64-sid-prgs
-python tools/c64_uart_prg_loader.py roms/c64_uart_sid/Commando.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/sid/Commando.prg --port COM15
 ```
 
 Generated SID PRGs include `*.prg.segments.json` sidecars. The UART loader uses
@@ -445,7 +462,7 @@ To smoke-test the serial path without a KERNAL patch:
 
 ```powershell
 make c64-v1541-ping-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_ping.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_ping.prg --port COM15
 ```
 
 Then close the upload tool, start `tools/virtual_1541/c64_1541_uart_gui.py` on the same COM
@@ -458,7 +475,7 @@ transport. The small BASIC stub lives at `$0801`, but the loader itself runs at
 
 ```powershell
 make c64-v1541-loadfirst-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_loadfirst.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_loadfirst.prg --port COM15
 ```
 
 Close the upload tool, start the virtual 1541 server, mount/select a D64, and
@@ -497,7 +514,7 @@ install the RAM hook on the real C64 core. Start with the diagnostic variant:
 
 ```powershell
 make c64-v1541-hook-diag-prg c64-v1541-hook-prg
-python tools/c64_uart_prg_loader.py roms/diagnostics/v1541_hook_diag.prg --port COM15
+python tools/c64_uart_prg_loader.py roms/c64/diag/v1541_hook_diag.prg --port COM15
 ```
 
 Run the PRG once on the C64. After that, start the virtual 1541 server, mount a
