@@ -1,0 +1,1298 @@
+-- C64 core: Tang Primer 20K DDR fork.
+--
+-- Wires the native building blocks into a working machine:
+--   cpu6510  -- T65 + processor port ($00/$01) for ROM banking
+--   64K DRAM -- external byte-wide DDR bridge for CPU/monitor main RAM
+--   ROMs     -- original BASIC/KERNAL/CHARGEN (rtl/c64/c64_roms.vhd)
+--   vic_ii   -- text/bitmap video + raster IRQ (HDMI-ready RGB565)
+--   colour_ram, 2x cia6526_full, sid6581, keyboard matrix
+--
+-- Banking is the PLA decode from c64_pkg (unexpanded machine: GAME=EXROM=1).
+-- "RAM under ROM": writes always reach DRAM unless the address is I/O, so the
+-- KERNAL's RAM scribbles beneath BASIC/KERNAL work as on real hardware.
+--
+-- The shared rtl/c64/c64_core.vhd remains untouched; this fork exposes the main
+-- RAM byte port so only the c64_ddr board project moves its 64K RAM to DDR.
+-- The small VIC still needs fixed one-clock video fetches, so this fork keeps a
+-- local 16K shadow of the currently selected VIC bank for display reads.
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+use work.c64_pkg.all;
+
+entity c64_core_ddr is
+  generic (
+    -- System clocks per PHI2 (27 -> ~1 MHz CPU). Simulation overrides this with
+    -- a small value to boot faster.
+    PHI2_DIV : integer := 27;
+    -- Video implementation:
+    --   false = vic_ii     -- the proven line-buffer VIC (stable bring-up
+    --                         bitstream; whole-line prefetch, no badlines)
+    --   true  = vic_ii_xl  -- cycle-based 6569 model (real badlines, border
+    --                         flip-flops, YSCROLL/RSEL, mid-line register
+    --                         effects, sprite DMA with Y-crunch, collision
+    --                         IRQs). Needs PHI2_DIV = 27 (engine cycle grid
+    --                         is locked to the 27 MHz / 864x625 raster).
+    -- The DDR fork uses VIC_XL=false. VIC_XL needs a true second main-RAM read
+    -- port and is intentionally not enabled in tang20k_c64_ddr_top.
+    VIC_XL : boolean := false;
+    -- Keep false for the stable bring-up bitstream.  True makes CIA2 PA6/PA7
+    -- see the modeled IEC bus instead of the old PA output loopback; this needs
+    -- an active drive responder or KERNAL/fastloaders can wait forever.
+    IEC_BUS_MODEL : boolean := false;
+    -- Experimental full 1541 IEC responder adapted from the MiSTer C64 core.
+    MISTER_1541_ENABLE : boolean := false;
+    -- 1541 disk backend: 0 = built-in test image, 2 = virtual 1541 sectors over
+    -- UART, 3 = SD-card D64 (contiguous .d64 file, mounted at runtime through
+    -- the sd_mount_* ports -- same scheme as the MiSTer C64 probe board).
+    MISTER_1541_BACKEND : integer := 0;
+    MISTER_1541_BAUD : integer := 230400;
+    -- Backend-3 write-back: 1541 writes are flushed to the SD card (needs the
+    -- sd_sec_write channel wired by the board top).  Leave false otherwise.
+    MISTER_1541_SD_WRITE : boolean := false;
+    -- Legacy KERNAL-hook transport at $DE00/$DE01. Disable when the physical
+    -- UART is owned by the IEC/1541 backend.
+    HOST_UART_ENABLE : boolean := true;
+    -- Simulation-only RAM preload (ADDR VALUE hex); "" = zeroed (synthesis).
+    RAM_INIT : string  := ""
+  );
+  port (
+    clk      : in  std_logic;                       -- 27 MHz pixel + system clock
+    reset_n  : in  std_logic;
+    cold_reset : in std_logic := '0';               -- held high to scrub RAM
+
+    -- Debug taps (leave open in synthesis; used by the testbench).
+    dbg_addr : out std_logic_vector(15 downto 0);
+    dbg_we   : out std_logic;
+    dbg_do   : out std_logic_vector(7 downto 0);
+    dbg_di   : out std_logic_vector(7 downto 0);
+    dbg_sync : out std_logic;
+    dbg_phi  : out std_logic;
+    dbg_status : out std_logic_vector(15 downto 0);
+    dbg_cia1 : out std_logic_vector(31 downto 0);
+    dbg_iec : out std_logic_vector(31 downto 0);
+    dbg_regs : out std_logic_vector(63 downto 0);
+    -- dbg_cia1_irq : out std_logic;                -- (DIAG heartbeat tap -- disabled)
+
+    -- Video (RGB565 split, to the HDMI encoder).
+    vga_hs   : out std_logic;
+    vga_vs   : out std_logic;
+    vga_de   : out std_logic;
+    vga_r    : out std_logic_vector(4 downto 0);
+    vga_g    : out std_logic_vector(5 downto 0);
+    vga_b    : out std_logic_vector(4 downto 0);
+
+    -- PS/2 keyboard.
+    ps2_clk  : in  std_logic;
+    ps2_data : in  std_logic;
+
+    -- SID audio sample (signed 16-bit), to the board DAC.
+    audio    : out std_logic_vector(15 downto 0);
+
+    -- Host disk link: UART to a PC running a 1541 server (LOAD over serial).
+    uart_tx : out std_logic;
+    uart_rx : in  std_logic := '1';  -- idle high; default so the TB can leave it open
+
+    -- SD raw-sector port for MISTER_1541_BACKEND = 3 (wired to the board's
+    -- sd_card_top through the top-level SD arbiter, like the MiSTer probe).
+    sd_init_done           : in  std_logic := '0';
+    sd_sec_read            : out std_logic;
+    sd_sec_read_addr       : out std_logic_vector(31 downto 0);
+    sd_sec_read_data       : in  std_logic_vector(7 downto 0) := (others => '0');
+    sd_sec_read_data_valid : in  std_logic := '0';
+    sd_sec_read_end        : in  std_logic := '0';
+    sd_sec_write           : out std_logic;
+    sd_sec_write_addr      : out std_logic_vector(31 downto 0);
+    sd_sec_write_data      : out std_logic_vector(7 downto 0);
+    sd_sec_write_data_req  : in  std_logic := '0';
+    sd_sec_write_end       : in  std_logic := '0';
+    sd_mount_lba           : in  std_logic_vector(31 downto 0) := (others => '0');
+    sd_mount_strobe        : in  std_logic := '0';
+    drive_act_led          : out std_logic;
+    drive_read_active      : out std_logic;
+    drive_write_active     : out std_logic;
+    drive_write_byte_pulse   : out std_logic;
+    drive_write_commit_pulse : out std_logic;
+    drive_write_block_done_pulse : out std_logic;
+    drive_write_checksum_error_pulse : out std_logic;
+    drive_write_checksum_calc : out std_logic_vector(7 downto 0);
+    drive_write_checksum_recv : out std_logic_vector(7 downto 0);
+    drive_write_prev_data : out std_logic_vector(7 downto 0);
+    drive_write_last_data : out std_logic_vector(7 downto 0);
+    drive_write_debug : out std_logic_vector(7 downto 0);
+    drive_write_trace_addr : in  std_logic_vector(4 downto 0) := (others => '0');
+    drive_write_trace_data : out std_logic_vector(31 downto 0);
+    drive_write_trace_count : out std_logic_vector(5 downto 0);
+    drive_write_trace_clear : in  std_logic := '0';
+
+    -- Expansion I/O2 window ($DF00-$DFFF): the board top implements the SD
+    -- disk/fastload registers here (identical map to the MiSTer probe).
+    exp2_cs    : out std_logic;
+    exp2_we    : out std_logic;                       -- 1-clk strobe per write
+    exp2_addr  : out std_logic_vector(7 downto 0);
+    exp2_wdata : out std_logic_vector(7 downto 0);
+    exp2_rdata : in  std_logic_vector(7 downto 0) := (others => '1');
+
+    -- External UART monitor/loader. While active, the CPU is parked via RDY and
+    -- the monitor gets safe byte-wise access to the 64K RAM under ROM/I/O.
+    monitor_hold      : in  std_logic := '0';
+    monitor_mem_req   : in  std_logic := '0';
+    monitor_mem_we    : in  std_logic := '0';
+    monitor_mem_addr  : in  std_logic_vector(15 downto 0) := (others => '0');
+    monitor_mem_wdata : in  std_logic_vector(7 downto 0) := (others => '0');
+    monitor_mem_rdata : out std_logic_vector(7 downto 0);
+    monitor_mem_ready : out std_logic;
+
+    -- External 64K main-RAM byte port.  This c64_ddr fork wires it to the
+    -- Tang Primer 20K DDR3 bridge; the shared c64_core remains BSRAM based.
+    ext_ram_req   : out std_logic;
+    ext_ram_we    : out std_logic;
+    ext_ram_addr  : out std_logic_vector(15 downto 0);
+    ext_ram_din   : out std_logic_vector(7 downto 0);
+    ext_ram_dout  : in  std_logic_vector(7 downto 0) := (others => '0');
+    ext_ram_ack   : in  std_logic := '0';
+    ext_ram_ready : in  std_logic := '0'
+  );
+end entity;
+
+architecture rtl of c64_core_ddr is
+  component mos6526 is
+    port (
+      mode    : in  std_logic;
+      clk     : in  std_logic;
+      phi2_p  : in  std_logic;
+      phi2_n  : in  std_logic;
+      res_n   : in  std_logic;
+      cs_n    : in  std_logic;
+      rw      : in  std_logic;
+      rs      : in  std_logic_vector(3 downto 0);
+      db_in   : in  std_logic_vector(7 downto 0);
+      db_out  : out std_logic_vector(7 downto 0);
+      pa_in   : in  std_logic_vector(7 downto 0);
+      pa_out  : out std_logic_vector(7 downto 0);
+      pa_oe   : out std_logic_vector(7 downto 0);
+      pb_in   : in  std_logic_vector(7 downto 0);
+      pb_out  : out std_logic_vector(7 downto 0);
+      pb_oe   : out std_logic_vector(7 downto 0);
+      flag_n  : in  std_logic;
+      pc_n    : out std_logic;
+      tod     : in  std_logic;
+      sp_in   : in  std_logic;
+      sp_out  : out std_logic;
+      cnt_in  : in  std_logic;
+      cnt_out : out std_logic;
+      irq_n   : out std_logic;
+      dbg_state : out std_logic_vector(31 downto 0)
+    );
+  end component;
+
+  -- ---- clocking ----
+  signal core_reset_n : std_logic;
+  signal phi2_cnt   : integer range 0 to PHI2_DIV - 1 := 0;
+  signal phi2_en    : std_logic := '0';
+  signal cia_bus_en : std_logic := '0';
+  signal tod_tick   : std_logic := '0';
+
+  -- ---- CPU ----
+  signal cpu_addr  : std_logic_vector(15 downto 0);
+  signal cpu_dout  : std_logic_vector(7 downto 0);
+  signal cpu_din   : std_logic_vector(7 downto 0);   -- combinational read mux
+  signal other_din : std_logic_vector(7 downto 0);   -- everything except stolen RAM
+  signal cpu_we    : std_logic;
+  signal cpu_sync  : std_logic;
+  signal cpu_rdy   : std_logic;
+  signal cpu_irq_n : std_logic;
+  signal cpu_nmi_n : std_logic;
+  signal cpu_regs  : std_logic_vector(63 downto 0);
+  signal io_we     : std_logic;
+  signal loram, hiram, charen : std_logic;
+  signal ctrl      : std_logic_vector(2 downto 0);
+
+  -- ---- banking decode ----
+  signal sel : c64_sel_t;
+  signal io  : c64_io_t;
+
+  -- ---- DRAM ----
+  signal ram_addr  : std_logic_vector(15 downto 0);
+  signal dram_dout : std_logic_vector(7 downto 0) := (others => '0');
+  signal dram_we   : std_logic;
+  signal cpu_en    : std_logic;
+  signal ram_settle : integer range 0 to 7 := 7;
+  signal vic_ba_d  : std_logic := '1';
+  signal vic_ba_d2 : std_logic := '1';
+  signal vic_ba_d3 : std_logic := '1';
+  signal vic_ba_d4 : std_logic := '1';
+  -- Deferred CPU writes the 6502 completes after BA drops. RDY only stalls reads,
+  -- so the CPU keeps running write cycles until it parks on the next read -- and a
+  -- 6502 can emit up to THREE consecutive writes (JSR pushes PCH+PCL, an interrupt
+  -- pushes PCH+PCL+P). A 1-deep latch keeps only the last of those and silently
+  -- drops the rest -> corrupted stack -> RTS/RTI into the weeds (the marginal hang
+  -- that wandered with code timing). So buffer the whole burst in a small FIFO and
+  -- drain it (one entry per clk) once the steal returns the bus.
+  constant WQ_DEPTH : integer := 4;
+  type wq_addr_t is array (0 to WQ_DEPTH-1) of std_logic_vector(15 downto 0);
+  type wq_data_t is array (0 to WQ_DEPTH-1) of std_logic_vector(7 downto 0);
+  signal wq_addr  : wq_addr_t;
+  signal wq_data  : wq_data_t;
+  signal wq_cnt   : integer range 0 to WQ_DEPTH := 0;
+  signal dram_din : std_logic_vector(7 downto 0);
+  signal cold_ram_addr : unsigned(15 downto 0) := (others => '0');
+  signal cold_ram_done : std_logic := '0';
+
+  type cwq_addr_t is array (0 to WQ_DEPTH-1) of std_logic_vector(9 downto 0);
+  type cwq_data_t is array (0 to WQ_DEPTH-1) of std_logic_vector(3 downto 0);
+  signal cwq_addr : cwq_addr_t;
+  signal cwq_data : cwq_data_t;
+  signal cwq_cnt  : integer range 0 to WQ_DEPTH := 0;
+  signal col_din  : std_logic_vector(3 downto 0);
+  signal cold_col_addr : unsigned(9 downto 0) := (others => '0');
+  signal cold_col_done : std_logic := '0';
+
+  -- UART monitor RAM master. It waits until the VIC and both deferred write
+  -- queues have released the single-port RAM, then performs one byte transfer.
+  type mon_mem_state_t is (MON_IDLE, MON_WAIT_SAFE, MON_ACCESS, MON_READY);
+  signal mon_mem_state : mon_mem_state_t := MON_IDLE;
+  signal mon_addr_lat  : std_logic_vector(15 downto 0) := (others => '0');
+  signal mon_wdata_lat : std_logic_vector(7 downto 0) := (others => '0');
+  signal mon_we_lat    : std_logic := '0';
+  signal mon_owner     : std_logic := '0';
+  signal mon_ready_reg : std_logic := '0';
+  signal mon_rdata_reg : std_logic_vector(7 downto 0) := (others => '0');
+  signal monitor_safe  : std_logic;
+
+  -- External DDR RAM access sequencer.  The old core consumed BSRAM with
+  -- single-cycle read latency; this fork stalls CPU-side users until the DDR
+  -- byte bridge returns an acknowledge.  VIC fetches are served by the local
+  -- shadow below because the line-buffer VIC samples video RAM one clock after
+  -- presenting vic_addr.
+  type ram_src_t is (RS_NONE, RS_COLD, RS_MON, RS_WQ, RS_CPU_RD, RS_VIC_RD, RS_SHADOW_RD);
+  type ram_state_t is (RAM_IDLE, RAM_WAIT);
+  signal ram_state      : ram_state_t := RAM_IDLE;
+  signal ram_src        : ram_src_t := RS_NONE;
+  signal ram_done       : std_logic := '0';
+  signal ram_done_src   : ram_src_t := RS_NONE;
+  signal ram_req_reg    : std_logic := '0';
+  signal ram_addr_lat   : std_logic_vector(15 downto 0) := (others => '0');
+  signal ram_din_lat    : std_logic_vector(7 downto 0) := (others => '0');
+  signal ram_we_lat     : std_logic := '0';
+  signal ram_need       : std_logic;
+  signal ram_next_src   : ram_src_t;
+  signal ram_ext_idle   : std_logic;
+  signal cpu_ram_read   : std_logic;
+  signal cpu_ram_ready  : std_logic;
+  signal cpu_read_addr  : std_logic_vector(15 downto 0) := (others => '0');
+  signal cpu_read_valid : std_logic := '0';
+
+  -- ---- ROMs ----
+  signal basic_dout   : std_logic_vector(7 downto 0);
+  signal kernal_dout  : std_logic_vector(7 downto 0);
+  signal cg_cpu_dout  : std_logic_vector(7 downto 0);
+  signal cg_vic_dout  : std_logic_vector(7 downto 0);
+
+  -- ---- VIC ----
+  signal vic_dout  : std_logic_vector(7 downto 0);
+  signal vic_irq_n : std_logic;
+  signal vic_addr  : std_logic_vector(15 downto 0);
+  signal vic_data  : std_logic_vector(7 downto 0);
+  signal vic_ba    : std_logic;
+  type vic_shadow_t is array (0 to 16383) of std_logic_vector(7 downto 0);
+  signal vic_shadow : vic_shadow_t := (others => (others => '0'));
+  signal vic_shadow_dout    : std_logic_vector(7 downto 0) := (others => '0');
+  signal vic_shadow_wr_en   : std_logic;
+  signal vic_shadow_wr_addr : std_logic_vector(13 downto 0);
+  signal vic_shadow_wr_data : std_logic_vector(7 downto 0);
+  signal cpu_shadow_write   : std_logic;
+  signal mon_shadow_write   : std_logic;
+  signal shadow_bank          : std_logic_vector(1 downto 0) := "00";
+  signal shadow_reload_addr   : unsigned(13 downto 0) := (others => '0');
+  signal shadow_reload_active : std_logic := '0';
+  signal vic_shadow_fill_req  : std_logic;
+  attribute ram_style : string;
+  attribute ram_style of vic_shadow : signal is "block";
+  -- Bus-steal view of BA for the RAM/colour mux + write FIFOs. With the XL VIC
+  -- the CPU never loses its RAM port, so this is tied '1' and vic_ba only
+  -- stalls the CPU via RDY (real 6510 semantics: reads freeze, writes finish
+  -- and go straight to RAM).
+  signal ram_ba    : std_logic;
+  signal vic_bank  : std_logic_vector(1 downto 0);
+  signal vic_col_addr : std_logic_vector(9 downto 0);
+  signal vic_col_data : std_logic_vector(3 downto 0);
+  signal vic_char_addr: std_logic_vector(11 downto 0);
+  signal vic_char_busy: std_logic;
+  signal cg_b_addr    : std_logic_vector(11 downto 0);
+
+  -- ---- colour RAM ----
+  signal col_a_dout : std_logic_vector(3 downto 0);
+  signal col_addr   : std_logic_vector(9 downto 0);
+  signal col_dout   : std_logic_vector(3 downto 0);
+
+  -- ---- CIAs ----
+  signal cia1_dout, cia2_dout : std_logic_vector(7 downto 0);
+  signal cia1_irq_n, cia2_irq_n : std_logic;
+  signal cia1_pa_out, cia1_pb_out : std_logic_vector(7 downto 0);
+  signal cia2_pa_out, cia2_pb_out : std_logic_vector(7 downto 0);
+  signal cia2_pa_in : std_logic_vector(7 downto 0);
+  signal cia2_pa_bus_in : std_logic_vector(7 downto 0);
+  signal cia1_pa_oe, cia1_pb_oe : std_logic_vector(7 downto 0);
+  signal cia2_pa_oe, cia2_pb_oe : std_logic_vector(7 downto 0);
+  signal cia1_cs_n, cia2_cs_n, cia_rw : std_logic;
+  signal cia1_pc_n, cia2_pc_n : std_logic;
+  signal cia1_sp_out, cia2_sp_out : std_logic;
+  signal cia1_cnt_out, cia2_cnt_out : std_logic;
+  signal cia1_dbg_state, cia2_dbg_state : std_logic_vector(31 downto 0);
+  signal kb_col, kb_row : std_logic_vector(7 downto 0);
+  signal restore_n : std_logic;
+  signal iec_atn_n  : std_logic;
+  signal iec_clk_n  : std_logic;
+  signal iec_data_n : std_logic;
+  signal iec_drive_clk_pull_n  : std_logic := '1';
+  signal iec_drive_data_pull_n : std_logic := '1';
+  signal iec_probe_clk_pull_n  : std_logic := '1';
+  signal iec_probe_data_pull_n : std_logic := '1';
+  signal iec_m1541_clk_pull_n  : std_logic := '1';
+  signal iec_m1541_data_pull_n : std_logic := '1';
+  signal iec_dbg_state : std_logic_vector(31 downto 0);
+  signal m1541_led : std_logic;
+
+  -- ---- SID ----
+  signal sid_dout : std_logic_vector(7 downto 0);
+
+  -- internal video (so the TOD generator can observe vsync)
+  signal s_hs, s_vs, s_de : std_logic;
+  signal s_r, s_b : std_logic_vector(4 downto 0);
+  signal s_g      : std_logic_vector(5 downto 0);
+
+  -- chip selects
+  signal cs_vic, cs_sid, cs_cia1, cs_cia2, cs_col : std_logic;
+  signal col_we : std_logic;
+
+  -- ---- Host disk UART ($DE00) ----
+  signal cs_uart   : std_logic;
+  signal uart_dout : std_logic_vector(7 downto 0);
+  signal legacy_uart_tx : std_logic;
+  signal m1541_uart_tx : std_logic := '1';
+  signal m1541_led_s   : std_logic := '0';
+  signal m1541_read_s  : std_logic := '0';
+  signal m1541_write_s : std_logic := '0';
+  signal m1541_wr_byte_s   : std_logic := '0';
+  signal m1541_wr_commit_s : std_logic := '0';
+  signal m1541_wr_block_done_s : std_logic := '0';
+  signal m1541_wr_checksum_error_s : std_logic := '0';
+  signal m1541_wr_checksum_calc_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_checksum_recv_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_prev_data_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_last_data_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_debug_s : std_logic_vector(7 downto 0) := (others => '0');
+  signal m1541_wr_trace_data_s : std_logic_vector(31 downto 0) := (others => '0');
+  signal m1541_wr_trace_count_s : std_logic_vector(5 downto 0) := (others => '0');
+  signal urx_data  : std_logic_vector(7 downto 0);
+  signal urx_valid : std_logic;
+  constant RX_FIFO_DEPTH : integer := 256;
+  type rx_fifo_t is array (0 to RX_FIFO_DEPTH-1) of std_logic_vector(7 downto 0);
+  signal rx_fifo     : rx_fifo_t;
+  signal rx_rd_ptr   : unsigned(7 downto 0) := (others => '0');
+  signal rx_wr_ptr   : unsigned(7 downto 0) := (others => '0');
+  signal rx_count    : integer range 0 to RX_FIFO_DEPTH := 0;
+  signal rx_avail    : std_logic;
+  signal rx_overflow : std_logic := '0';
+  signal rx_pop      : std_logic;
+  signal uart_read_sel   : std_logic;
+  signal uart_read_held  : std_logic := '0';
+  signal uart_data_latch : std_logic_vector(7 downto 0) := (others => '0');
+  signal uart_data_dout  : std_logic_vector(7 downto 0);
+  signal utx_busy    : std_logic;
+  signal utx_send  : std_logic;
+
+  -- Packed for the board debug UART:
+  -- 15 phi2_en, 14 VIC cs, 13 CIA1 cs, 12 cwq full, 11 wq full,
+  -- 10 cwq non-empty, 9 wq non-empty, 8 CPU we, 7 CPU sync,
+  -- 6 RESTORE_n, 5 CIA2 IRQ_n, 4 VIC IRQ_n, 3 CIA1 IRQ_n,
+  -- 2 CPU IRQ_n, 1 VIC BA, 0 CPU RDY.
+  signal dbg_wq_nonempty  : std_logic;
+  signal dbg_cwq_nonempty : std_logic;
+  signal dbg_wq_full      : std_logic;
+  signal dbg_cwq_full     : std_logic;
+begin
+  core_reset_n <= reset_n and not cold_reset;
+  vga_hs <= s_hs; vga_vs <= s_vs; vga_de <= s_de;
+  vga_r <= s_r; vga_g <= s_g; vga_b <= s_b;
+
+  -- Debug taps for the testbench.
+  dbg_addr <= cpu_addr;
+  dbg_we   <= cpu_we;
+  dbg_do   <= cpu_dout;
+  dbg_di   <= cpu_din;
+  dbg_sync <= cpu_sync;
+  dbg_phi  <= phi2_en;
+  dbg_wq_nonempty  <= '1' when wq_cnt > 0 else '0';
+  dbg_cwq_nonempty <= '1' when cwq_cnt > 0 else '0';
+  dbg_wq_full      <= '1' when wq_cnt = WQ_DEPTH else '0';
+  dbg_cwq_full     <= '1' when cwq_cnt = WQ_DEPTH else '0';
+  dbg_status <= phi2_en & cs_vic & cs_cia1 & dbg_cwq_full &
+                dbg_wq_full & dbg_cwq_nonempty & dbg_wq_nonempty &
+                cpu_we & cpu_sync & restore_n & cia2_irq_n & vic_irq_n &
+                cia1_irq_n & cpu_irq_n & vic_ba & cpu_rdy;
+  dbg_cia1 <= cia1_dbg_state;
+  dbg_iec <= iec_dbg_state;
+  dbg_regs <= cpu_regs;
+  uart_tx <= m1541_uart_tx when (MISTER_1541_ENABLE and MISTER_1541_BACKEND = 2) else legacy_uart_tx;
+  monitor_mem_rdata <= mon_rdata_reg;
+  monitor_mem_ready <= mon_ready_reg;
+  ext_ram_req  <= ram_req_reg;
+  ext_ram_we   <= ram_we_lat;
+  ext_ram_addr <= ram_addr_lat;
+  ext_ram_din  <= ram_din_lat;
+  -- dbg_cia1_irq <= cia1_irq_n;                    -- (DIAG heartbeat tap -- disabled)
+  ctrl <= charen & hiram & loram;
+  sel  <= pla_decode(cpu_addr, ctrl, '1', '1');     -- unexpanded: GAME=EXROM=1
+  io   <= io_decode(cpu_addr) when sel = SEL_IO else IO_NONE;
+
+  -- ---- PHI2 / TOD ----
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' then
+        phi2_cnt <= 0; phi2_en <= '0';
+      elsif phi2_cnt = PHI2_DIV - 1 then
+        phi2_cnt <= 0; phi2_en <= '1';
+      else
+        phi2_cnt <= phi2_cnt + 1; phi2_en <= '0';
+      end if;
+    end if;
+  end process;
+
+  -- The MiST/MiSTer CIA registers CPU bus reads/writes on phi2_n and advances
+  -- timers/IRQ state on phi2_p. Because the CIA data bus is registered, the bus
+  -- strobe must happen just BEFORE the T65 samples data/advances on phi2_en. A
+  -- delayed strobe misses ICR reads after the CPU has already moved to the next
+  -- address, leaving CIA1 IRQ stuck low.
+  cia_bus_en <= '1' when phi2_cnt = PHI2_DIV - 1 else '0';
+  -- 60 Hz TOD pulse from the VIC vsync edge.
+  process(clk)
+    variable vs_d : std_logic := '1';
+  begin
+    if rising_edge(clk) then
+      tod_tick <= '0';
+      if s_vs = '0' and vs_d = '1' then tod_tick <= '1'; end if;
+      vs_d := s_vs;
+    end if;
+  end process;
+
+  -- ---- CPU ----
+  -- Single-port main RAM, time-shared with the VIC: the CPU clock-enable is gated
+  -- off during a VIC steal (BA low) so the two never touch RAM at the same cycle
+  -- (no dual-port collision -> no .002 display corruption, no lost writes).
+  --
+  -- After the VIC or deferred-write FIFO owns the single BSRAM port, ram_addr
+  -- switches back to cpu_addr and dout needs a few clocks before it reflects the
+  -- CPU read address again. A guard only after BA was not enough: the FIFO can
+  -- drain a CPU screen write after the steal, and the KERNAL may immediately read
+  -- the screen line back on RETURN. So hold RDY low until the RAM port has been
+  -- CPU-owned and idle for several clocks after BOTH steal and write-queue drain.
+  -- NOTE: an earlier attempt registered the read (cpu_din_reg) instead -- it
+  -- fixed banner/CIA symptoms but DEADLOCKED the CPU under IRQ load (extra read
+  -- latency corrupted the T65 IRQ vector/stack fetch). The combinational read
+  -- plus explicit RAM-port settle guard keeps the CPU timing intact.
+  process(clk) begin
+    if rising_edge(clk) then
+      vic_ba_d  <= vic_ba;
+      vic_ba_d2 <= vic_ba_d;
+      vic_ba_d3 <= vic_ba_d2;
+      vic_ba_d4 <= vic_ba_d3;
+      if core_reset_n = '0' then
+        ram_settle <= 7;
+      elsif ram_ba = '0' or wq_cnt > 0 or cwq_cnt > 0 or mon_owner = '1' then
+        ram_settle <= 7;
+      elsif ram_settle > 0 then
+        ram_settle <= ram_settle - 1;
+      end if;
+    end if;
+  end process;
+  -- The CPU advances every PHI2 tick; the VIC steal is signalled via the 6502's
+  -- native RDY (stalls reads), NOT by gating the clock enable. Freezing the T65
+  -- mid-cycle during the steal made the CPU timeline DRIFT from the CIA (which
+  -- keeps ticking) -> a marginal IRQ-vs-steal beat that wandered with code timing
+  -- and rarely corrupted control flow. With RDY the CPU timeline keeps advancing
+  -- during the steal (halted but counted), in lockstep with the CIA -- as on real
+  -- hardware. RDY stays low while the RAM port is stolen/draining/settling.
+  -- With the XL VIC the CPU RAM port is never stolen (BA only stalls the CPU
+  -- via RDY), so the monitor need not wait for BA-high windows -- important for
+  -- the SD boot loader, whose byte stream must not stall behind badlines.
+  ram_ext_idle <= '1' when ram_state = RAM_IDLE else '0';
+  cpu_ram_read  <= '1' when sel = SEL_RAM and cpu_we = '0' else '0';
+  cpu_ram_ready <= '1' when cpu_ram_read = '0' else
+                   '1' when cpu_read_valid = '1' and cpu_read_addr = cpu_addr else
+                   '0';
+
+  monitor_safe <= '1' when monitor_hold = '1' and ext_ram_ready = '1' and
+                           (VIC_XL or (vic_ba = '1' and
+                           vic_ba_d = '1' and vic_ba_d2 = '1' and
+                            vic_ba_d3 = '1' and vic_ba_d4 = '1')) and
+                           wq_cnt = 0 and cwq_cnt = 0 and ram_settle = 0 and
+                           cpu_we = '0' and ram_ext_idle = '1'
+                  else '0';
+
+  ram_ba  <= '1' when VIC_XL else vic_ba;
+  cpu_en  <= phi2_en;
+  cpu_rdy <= '1' when (ext_ram_ready = '1'
+                       and vic_ba = '1' and vic_ba_d = '1' and vic_ba_d2 = '1'
+                       and vic_ba_d3 = '1' and vic_ba_d4 = '1'
+                       and wq_cnt = 0 and cwq_cnt = 0 and ram_settle = 0
+                       and monitor_hold = '0' and ram_ext_idle = '1'
+                       and cpu_ram_ready = '1') else '0';
+
+  -- Main-RAM write FIFO: enqueue every write the CPU completes while the steal
+  -- holds the bus, then drain one entry per clk once BA returns (CPU stays parked
+  -- via RDY until the queue is empty). Depth 4 covers the 6502's longest write
+  -- burst (3, an interrupt push) with margin -- no stack push is ever lost.
+  process(clk) begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' then
+        wq_cnt <= 0;
+      elsif ram_done = '1' and ram_done_src = RS_WQ and wq_cnt > 0 then
+        for i in 0 to WQ_DEPTH-2 loop
+          wq_addr(i) <= wq_addr(i+1);
+          wq_data(i) <= wq_data(i+1);
+        end loop;
+        wq_cnt <= wq_cnt - 1;
+      elsif phi2_en = '1' and cpu_we = '1' and sel /= SEL_IO
+            and wq_cnt < WQ_DEPTH then
+        wq_addr(wq_cnt) <= cpu_addr;
+        wq_data(wq_cnt) <= cpu_dout;
+        wq_cnt <= wq_cnt + 1;
+      end if;
+    end if;
+  end process;
+
+  -- Colour-RAM write FIFO (same scheme; colour RAM lives in the I/O page).
+  process(clk) begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' then
+        cwq_cnt <= 0;
+      elsif ram_ba = '1' and cwq_cnt > 0 then
+        for i in 0 to WQ_DEPTH-2 loop
+          cwq_addr(i) <= cwq_addr(i+1);
+          cwq_data(i) <= cwq_data(i+1);
+        end loop;
+        cwq_cnt <= cwq_cnt - 1;
+      elsif phi2_en = '1' and cpu_we = '1' and cs_col = '1' and ram_ba = '0'
+            and cwq_cnt < WQ_DEPTH then
+        cwq_addr(cwq_cnt) <= cpu_addr(9 downto 0);
+        cwq_data(cwq_cnt) <= cpu_dout(3 downto 0);
+        cwq_cnt <= cwq_cnt + 1;
+      end if;
+    end if;
+  end process;
+  cpu_irq_n <= cia1_irq_n and vic_irq_n;
+  cpu_nmi_n <= cia2_irq_n and restore_n;
+  -- Peripheral register writes must be one PHI2 bus strobe, just like RAM.
+  -- Keep chip-selects level-based so CIA read side effects can wait until the
+  -- CPU leaves the address, even if RDY stretches a read cycle.
+  io_we     <= cpu_we and phi2_en;
+
+  cpu_i : entity work.cpu6510
+    port map (
+      clk => clk, reset_n => core_reset_n, enable => cpu_en, rdy => cpu_rdy,
+      irq_n => cpu_irq_n, nmi_n => cpu_nmi_n,
+      addr => cpu_addr, data_in => cpu_din, data_out => cpu_dout, we => cpu_we,
+      sync => cpu_sync, regs => cpu_regs,
+      pa_in => x"FF", pa_out => open,
+      loram => loram, hiram => hiram, charen => charen
+    );
+
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' or monitor_hold = '0' then
+        mon_mem_state <= MON_IDLE;
+        mon_addr_lat  <= (others => '0');
+        mon_wdata_lat <= (others => '0');
+        mon_we_lat    <= '0';
+        mon_rdata_reg <= (others => '0');
+        mon_ready_reg <= '0';
+      else
+        mon_ready_reg <= '0';
+        case mon_mem_state is
+          when MON_IDLE =>
+            if monitor_mem_req = '1' then
+              mon_addr_lat  <= monitor_mem_addr;
+              mon_wdata_lat <= monitor_mem_wdata;
+              mon_we_lat    <= monitor_mem_we;
+              mon_mem_state <= MON_WAIT_SAFE;
+            end if;
+
+          when MON_WAIT_SAFE =>
+            if monitor_safe = '1' then
+              mon_mem_state <= MON_ACCESS;
+            end if;
+
+          when MON_ACCESS =>
+            if ram_done = '1' and ram_done_src = RS_MON then
+              if mon_we_lat = '1' then
+                mon_ready_reg <= '1';
+                mon_mem_state <= MON_IDLE;
+              else
+                mon_mem_state <= MON_READY;
+              end if;
+            end if;
+
+          when MON_READY =>
+            mon_rdata_reg <= dram_dout;
+            mon_ready_reg <= '1';
+            mon_mem_state <= MON_IDLE;
+        end case;
+      end if;
+    end if;
+  end process;
+  mon_owner <= '1' when monitor_hold = '1' and mon_mem_state = MON_ACCESS else '0';
+
+  -- Cold reset RAM scrub. The board top asserts cold_reset after a long reset
+  -- button press while holding core_reset_n low; the single RAM ports are then
+  -- free for deterministic clearing before BASIC/KERNAL starts again.
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if cold_reset = '0' then
+        cold_ram_addr <= (others => '0');
+        cold_ram_done <= '0';
+        cold_col_addr <= (others => '0');
+        cold_col_done <= '0';
+      else
+        if cold_ram_done = '0' and ram_done = '1' and ram_done_src = RS_COLD then
+          if cold_ram_addr = to_unsigned(16#FFFF#, cold_ram_addr'length) then
+            cold_ram_done <= '1';
+          else
+            cold_ram_addr <= cold_ram_addr + 1;
+          end if;
+        end if;
+
+        if cold_col_done = '0' then
+          if cold_col_addr = to_unsigned(1023, cold_col_addr'length) then
+            cold_col_done <= '1';
+          else
+            cold_col_addr <= cold_col_addr + 1;
+          end if;
+        end if;
+      end if;
+    end if;
+  end process;
+
+  -- ---- 64K main RAM over the external DDR byte bridge ----
+  -- The VIC's BA signal still stalls the CPU with real 6510 read/write
+  -- semantics, but video bytes are read from the synchronous shadow RAM below.
+  -- This keeps DDR latency out of the VIC line-fetch path.
+  ram_addr <= std_logic_vector(cold_ram_addr) when cold_reset = '1' and cold_ram_done = '0' else
+              mon_addr_lat when mon_owner = '1' else
+              wq_addr(0) when ram_ba = '1' and wq_cnt > 0 else
+              shadow_bank & vic_addr(13 downto 0) when vic_shadow_fill_req = '1' else
+              cpu_addr when cpu_ram_read = '1' and cpu_ram_ready = '0' else
+              shadow_bank & std_logic_vector(shadow_reload_addr) when shadow_reload_active = '1' else
+              cpu_addr;
+  dram_we  <= '1' when cold_reset = '1' and cold_ram_done = '0' else
+              '1' when (mon_owner = '1' and mon_we_lat = '1') else
+              '1' when (ram_ba = '1' and wq_cnt > 0) else
+              '0';
+  dram_din <= (others => '0') when cold_reset = '1' and cold_ram_done = '0' else
+              mon_wdata_lat when mon_owner = '1' else
+              wq_data(0) when ram_ba = '1' and wq_cnt > 0 else cpu_dout;
+
+  ram_next_src <= RS_COLD when cold_reset = '1' and cold_ram_done = '0' else
+                  RS_MON  when mon_owner = '1' else
+                  RS_WQ   when ram_ba = '1' and wq_cnt > 0 else
+                  RS_VIC_RD when vic_shadow_fill_req = '1' else
+                  RS_CPU_RD when cpu_ram_read = '1' and cpu_ram_ready = '0' else
+                  RS_SHADOW_RD when shadow_reload_active = '1' else
+                  RS_NONE;
+  ram_need <= '1' when ram_next_src /= RS_NONE else '0';
+
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if reset_n = '0' or ext_ram_ready = '0' then
+        ram_state      <= RAM_IDLE;
+        ram_src        <= RS_NONE;
+        ram_done       <= '0';
+        ram_done_src   <= RS_NONE;
+        ram_req_reg    <= '0';
+        ram_addr_lat   <= (others => '0');
+        ram_din_lat    <= (others => '0');
+        ram_we_lat     <= '0';
+        dram_dout      <= (others => '0');
+        cpu_read_addr  <= (others => '0');
+        cpu_read_valid <= '0';
+      else
+        ram_done    <= '0';
+        ram_req_reg <= '0';
+
+        case ram_state is
+          when RAM_IDLE =>
+            if ram_need = '1' then
+              ram_addr_lat <= ram_addr;
+              ram_din_lat  <= dram_din;
+              ram_we_lat   <= dram_we;
+              ram_src      <= ram_next_src;
+              ram_req_reg  <= '1';
+              ram_state    <= RAM_WAIT;
+              if dram_we = '1' then
+                cpu_read_valid <= '0';
+              end if;
+            end if;
+
+          when RAM_WAIT =>
+            if ext_ram_ack = '1' then
+              if ram_we_lat = '0' then
+                if ram_src /= RS_SHADOW_RD and ram_src /= RS_VIC_RD then
+                  dram_dout <= ext_ram_dout;
+                end if;
+                if ram_src = RS_CPU_RD then
+                  cpu_read_addr  <= ram_addr_lat;
+                  cpu_read_valid <= '1';
+                end if;
+              end if;
+              ram_done     <= '1';
+              ram_done_src <= ram_src;
+              ram_src      <= RS_NONE;
+              ram_state    <= RAM_IDLE;
+            end if;
+        end case;
+      end if;
+    end if;
+  end process;
+
+  -- A single 16K shadow BSRAM feeds the VIC.  On a VIC bank change we switch
+  -- immediately and refill that shadow from DDR in the background.  During the
+  -- small VIC's BA-low fetch windows the CPU is already parked, so those slots
+  -- are used as demand backfill for the exact bytes the VIC is asking for.
+  vic_shadow_fill_req <= '1' when (not VIC_XL) and vic_ba = '0' else '0';
+
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' or ext_ram_ready = '0' then
+        shadow_bank          <= "00";
+        shadow_reload_addr   <= (others => '0');
+        shadow_reload_active <= '0';
+      elsif vic_bank /= shadow_bank then
+        shadow_bank          <= vic_bank;
+        shadow_reload_addr   <= (others => '0');
+        shadow_reload_active <= '1';
+      elsif ram_state = RAM_WAIT and ext_ram_ack = '1' and ram_src = RS_SHADOW_RD
+            and shadow_reload_active = '1' then
+        if shadow_reload_addr = to_unsigned(16383, shadow_reload_addr'length) then
+          shadow_reload_active <= '0';
+        else
+          shadow_reload_addr <= shadow_reload_addr + 1;
+        end if;
+      end if;
+    end if;
+  end process;
+
+  cpu_shadow_write <= '1' when phi2_en = '1' and cpu_we = '1' and sel /= SEL_IO
+                               and wq_cnt < WQ_DEPTH
+                               and cpu_addr(15 downto 14) = shadow_bank else
+                      '0';
+  mon_shadow_write <= '1' when mon_owner = '1' and mon_we_lat = '1'
+                               and mon_addr_lat(15 downto 14) = shadow_bank else
+                      '0';
+
+  vic_shadow_wr_en <= '1' when cold_reset = '1' and cold_ram_done = '0' else
+                      '1' when mon_shadow_write = '1' else
+                      '1' when cpu_shadow_write = '1' else
+                      '0';
+  vic_shadow_wr_addr <= std_logic_vector(cold_ram_addr(13 downto 0))
+                        when cold_reset = '1' and cold_ram_done = '0' else
+                        mon_addr_lat(13 downto 0) when mon_shadow_write = '1' else
+                        cpu_addr(13 downto 0);
+  vic_shadow_wr_data <= (others => '0') when cold_reset = '1' and cold_ram_done = '0' else
+                        mon_wdata_lat when mon_shadow_write = '1' else
+                        cpu_dout;
+
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if vic_shadow_wr_en = '1' then
+        vic_shadow(to_integer(unsigned(vic_shadow_wr_addr))) <= vic_shadow_wr_data;
+      elsif ram_state = RAM_WAIT and ext_ram_ack = '1'
+            and (ram_src = RS_SHADOW_RD or ram_src = RS_VIC_RD) then
+        vic_shadow(to_integer(unsigned(ram_addr_lat(13 downto 0)))) <= ext_ram_dout;
+      end if;
+      vic_shadow_dout <= vic_shadow(to_integer(unsigned(vic_addr(13 downto 0))));
+    end if;
+  end process;
+  vic_data <= vic_shadow_dout;
+
+  -- ---- ROMs ----
+  basic_i : entity work.basic_rom
+    port map (clk => clk, addr => cpu_addr(12 downto 0), dout => basic_dout);
+  kernal_i : entity work.kernal_rom
+    port map (clk => clk, addr => cpu_addr(12 downto 0), dout => kernal_dout);
+
+  -- CHARGEN. Small VIC: true dual port (CPU on A, VIC on B). XL VIC: ONE
+  -- shared port -- the XL VIC owns it only during its fetch window (char_busy,
+  -- ph 0..9 of each PHI2 cycle) while the CPU samples its read at the END of
+  -- the cycle, long after the address mux has switched back. This halves the
+  -- LUT cost of the ROM (a 2-port LUT ROM is duplicated by synthesis).
+  gen_cg_dual : if not VIC_XL generate
+    chargen_i : entity work.chargen_rom
+      port map (clk => clk,
+                a_addr => cpu_addr(11 downto 0), a_dout => cg_cpu_dout,
+                b_addr => vic_char_addr,         b_dout => cg_vic_dout);
+  end generate;
+
+  gen_cg_shared : if VIC_XL generate
+    cg_b_addr <= vic_char_addr when vic_char_busy = '1' else
+                 cpu_addr(11 downto 0);
+    chargen_i : entity work.chargen_rom
+      port map (clk => clk,
+                a_addr => (others => '0'), a_dout => open,
+                b_addr => cg_b_addr,       b_dout => cg_vic_dout);
+    cg_cpu_dout <= cg_vic_dout;
+  end generate;
+
+  -- ---- colour RAM ----
+  -- Small VIC: single-port, time-shared like main RAM (VIC during the steal,
+  -- CPU otherwise). XL VIC: CPU keeps port A, the VIC reads port B.
+  cs_col   <= '1' when io = IO_COLOR else '0';
+  col_we   <= '1' when cold_reset = '1' and cold_col_done = '0' else
+              '1' when (ram_ba = '1' and cwq_cnt > 0) else
+              '1' when (ram_ba = '1' and cwq_cnt = 0 and phi2_en = '1'
+                        and cs_col = '1' and cpu_we = '1') else
+              '0';
+  col_addr <= std_logic_vector(cold_col_addr) when cold_reset = '1' and cold_col_done = '0' else
+              vic_col_addr when ram_ba = '0' else
+              cwq_addr(0)  when cwq_cnt > 0  else
+              cpu_addr(9 downto 0);
+  col_din  <= (others => '0') when cold_reset = '1' and cold_col_done = '0' else
+              cwq_data(0) when cwq_cnt > 0 else cpu_dout(3 downto 0);
+
+  gen_col_sp : if not VIC_XL generate
+    colram_i : entity work.colour_ram
+      port map (clk => clk, addr => col_addr, we => col_we,
+                din => col_din, dout => col_dout);
+    vic_col_data <= col_dout;   -- VIC reads colour during the steal
+    col_a_dout   <= col_dout;   -- CPU reads colour otherwise
+  end generate;
+
+  gen_col_dp : if VIC_XL generate
+    colram_i : entity work.colour_ram_dp
+      port map (clk => clk,
+                a_addr => col_addr, a_we => col_we,
+                a_din => col_din, a_dout => col_a_dout,
+                b_addr => vic_col_addr, b_dout => vic_col_data);
+  end generate;
+
+  -- ---- VIC-II ----
+  cs_vic <= '1' when io = IO_VIC else '0';
+
+  gen_vic_small : if not VIC_XL generate
+    vic_i : entity work.vic_ii
+      port map (
+        clk => clk, reset_n => core_reset_n,
+        cs => cs_vic, we => io_we, addr => cpu_addr(5 downto 0),
+        din => cpu_dout, dout => vic_dout, irq_n => vic_irq_n,
+        vic_addr => vic_addr, vic_data => vic_data, ba => vic_ba,
+        vic_bank => shadow_bank,
+        color_addr => vic_col_addr, color_data => vic_col_data,
+        char_addr => vic_char_addr, char_data => cg_vic_dout,
+        vga_hs => s_hs, vga_vs => s_vs, vga_de => s_de,
+        vga_r => s_r, vga_g => s_g, vga_b => s_b
+      );
+    vic_char_busy <= '1';
+  end generate;
+
+  gen_vic_xl : if VIC_XL generate
+    vic_i : entity work.vic_ii_xl
+      port map (
+        clk => clk, reset_n => core_reset_n,
+        phi2_en => phi2_en,
+        cs => cs_vic, we => io_we, addr => cpu_addr(5 downto 0),
+        din => cpu_dout, dout => vic_dout, irq_n => vic_irq_n,
+        vic_addr => vic_addr, vic_data => vic_data, ba => vic_ba,
+        vic_bank => shadow_bank,
+        color_addr => vic_col_addr, color_data => vic_col_data,
+        char_addr => vic_char_addr, char_data => cg_vic_dout,
+        char_busy => vic_char_busy,
+        vga_hs => s_hs, vga_vs => s_vs, vga_de => s_de,
+        vga_r => s_r, vga_g => s_g, vga_b => s_b
+      );
+  end generate;
+
+  vic_bank <= not cia2_pa_out(1 downto 0);
+
+  -- ---- CIA-1 (keyboard + Timer A jiffy IRQ) ----
+  cs_cia1 <= '1' when io = IO_CIA1 else '0';
+  cia1_cs_n <= not cs_cia1;
+  cia2_cs_n <= not cs_cia2;
+  cia_rw <= not cpu_we;
+  cia1_i : mos6526
+    port map (
+      mode    => '0',
+      clk     => clk,
+      phi2_p  => phi2_en,
+      phi2_n  => cia_bus_en,
+      res_n   => core_reset_n,
+      cs_n    => cia1_cs_n,
+      rw      => cia_rw,
+      rs      => cpu_addr(3 downto 0),
+      db_in   => cpu_dout,
+      db_out  => cia1_dout,
+      pa_in   => kb_col,
+      pa_out  => cia1_pa_out,
+      pa_oe   => cia1_pa_oe,
+      pb_in   => kb_row,
+      pb_out  => cia1_pb_out,
+      pb_oe   => cia1_pb_oe,
+      flag_n  => '1',
+      pc_n    => cia1_pc_n,
+      tod     => tod_tick,
+      sp_in   => '1',
+      sp_out  => cia1_sp_out,
+      cnt_in  => '1',
+      cnt_out => cia1_cnt_out,
+      irq_n   => cia1_irq_n,
+      dbg_state => cia1_dbg_state
+    );
+
+  -- ---- CIA-2 (VIC bank + NMI + IEC) ----
+  cs_cia2 <= '1' when io = IO_CIA2 else '0';
+
+  -- C64 CIA2 port A:
+  --   PA0/PA1: VIC bank select (outputs, inverted by the board wiring)
+  --   PA3:     IEC ATN out
+  --   PA4/PA5: IEC CLK/DATA out, open-collector style
+  --   PA6/PA7: IEC CLK/DATA in
+  --
+  iec_drive_clk_pull_n  <= iec_probe_clk_pull_n and iec_m1541_clk_pull_n;
+  iec_drive_data_pull_n <= iec_probe_data_pull_n and iec_m1541_data_pull_n;
+
+  -- Passive bring-up used non-inverting output-loopback semantics.  The MiSTer
+  -- 1541 path switches CIA2 PA3/4/5 to the real C64-style inverted IEC drivers.
+  iec_atn_n <= not cia2_pa_out(3) when MISTER_1541_ENABLE else
+               '0' when (cia2_pa_oe(3) = '1' and cia2_pa_out(3) = '0') else
+               '1';
+  iec_clk_n <= '0' when (MISTER_1541_ENABLE and
+                         ((cia2_pa_out(4) = '1') or
+                          (iec_drive_clk_pull_n = '0'))) else
+               '0' when ((not MISTER_1541_ENABLE) and
+                         ((cia2_pa_oe(4) = '1' and cia2_pa_out(4) = '0') or
+                          (iec_drive_clk_pull_n = '0'))) else
+               '1';
+  iec_data_n <= '0' when (MISTER_1541_ENABLE and
+                          ((cia2_pa_out(5) = '1') or
+                           (iec_drive_data_pull_n = '0'))) else
+                '0' when ((not MISTER_1541_ENABLE) and
+                          ((cia2_pa_oe(5) = '1' and cia2_pa_out(5) = '0') or
+                           (iec_drive_data_pull_n = '0'))) else
+                '1';
+
+  -- Keep the locally-driven bits on the proven CIA output loopback path.  The
+  -- KERNAL mostly needs real IEC sense on PA6/PA7; feeding PA3..PA5 back as
+  -- bus pins changes what reads of $DD00 return while those bits are outputs.
+  cia2_pa_bus_in(0) <= cia2_pa_out(0);
+  cia2_pa_bus_in(1) <= cia2_pa_out(1);
+  cia2_pa_bus_in(2) <= cia2_pa_out(2);
+  cia2_pa_bus_in(3) <= cia2_pa_out(3);
+  cia2_pa_bus_in(4) <= cia2_pa_out(4);
+  cia2_pa_bus_in(5) <= cia2_pa_out(5);
+  cia2_pa_bus_in(6) <= (iec_clk_n and (not cia2_pa_out(4)))
+                       when MISTER_1541_ENABLE else iec_clk_n;
+  cia2_pa_bus_in(7) <= (iec_data_n and (not cia2_pa_out(5)))
+                       when MISTER_1541_ENABLE else iec_data_n;
+  cia2_pa_in <= cia2_pa_bus_in when IEC_BUS_MODEL else cia2_pa_out;
+
+  iec_drive_i : entity work.c64_iec_drive
+    generic map (
+      ENABLE_ATN_ACK => false
+    )
+    port map (
+      clk     => clk,
+      reset_n => core_reset_n,
+      atn_n   => iec_atn_n,
+      clk_n   => iec_clk_n,
+      data_n  => iec_data_n,
+      drive_clk_pull_n  => iec_probe_clk_pull_n,
+      drive_data_pull_n => iec_probe_data_pull_n,
+      dbg_state => iec_dbg_state
+    );
+
+  gen_mister_1541 : if MISTER_1541_ENABLE generate
+    m1541_i : entity work.mister_c1541_iec
+      generic map (
+        CLK_HZ       => 27000000,
+        DRIVE_CPU_HZ => 1000000,
+        BAUD         => MISTER_1541_BAUD,
+        GCR_TURBO    => 1,
+        D64_BACKEND  => MISTER_1541_BACKEND,
+        -- Backend 3: normal contiguous .d64 file on the FAT16 card, mounted
+        -- at runtime via sd_mount_* (same as the MiSTer probe board).
+        SD_PACKED_D64_FILE => true,
+        SD_WRITE_ENABLE    => MISTER_1541_SD_WRITE
+      )
+      port map (
+        clk     => clk,
+        reset_n => core_reset_n,
+        iec_atn_n  => iec_atn_n,
+        iec_clk_n  => iec_clk_n,
+        iec_data_n => iec_data_n,
+        drive_clk_pull_n  => iec_m1541_clk_pull_n,
+        drive_data_pull_n => iec_m1541_data_pull_n,
+        uart_rx => uart_rx,
+        uart_tx => m1541_uart_tx,
+        sd_init_done           => sd_init_done,
+        sd_sec_read            => sd_sec_read,
+        sd_sec_read_addr       => sd_sec_read_addr,
+        sd_sec_read_data       => sd_sec_read_data,
+        sd_sec_read_data_valid => sd_sec_read_data_valid,
+        sd_sec_read_end        => sd_sec_read_end,
+        sd_sec_write           => sd_sec_write,
+        sd_sec_write_addr      => sd_sec_write_addr,
+        sd_sec_write_data      => sd_sec_write_data,
+        sd_sec_write_data_req  => sd_sec_write_data_req,
+        sd_sec_write_end       => sd_sec_write_end,
+        sd_mount_lba           => sd_mount_lba,
+        sd_mount_strobe        => sd_mount_strobe,
+        led => m1541_led_s,
+        read_active  => m1541_read_s,
+        write_active => m1541_write_s,
+        write_byte_pulse   => m1541_wr_byte_s,
+        write_commit_pulse => m1541_wr_commit_s,
+        write_block_done_pulse => m1541_wr_block_done_s,
+        write_checksum_error_pulse => m1541_wr_checksum_error_s,
+        write_checksum_calc => m1541_wr_checksum_calc_s,
+        write_checksum_recv => m1541_wr_checksum_recv_s,
+        write_prev_data => m1541_wr_prev_data_s,
+        write_last_data => m1541_wr_last_data_s,
+        write_debug => m1541_wr_debug_s,
+        write_trace_addr => drive_write_trace_addr,
+        write_trace_data => m1541_wr_trace_data_s,
+        write_trace_count => m1541_wr_trace_count_s,
+        write_trace_clear => drive_write_trace_clear
+      );
+  end generate;
+
+  gen_no_mister_1541 : if not MISTER_1541_ENABLE generate
+    sd_sec_read      <= '0';
+    sd_sec_read_addr <= (others => '0');
+    sd_sec_write      <= '0';
+    sd_sec_write_addr <= (others => '0');
+    sd_sec_write_data <= (others => '0');
+  end generate;
+
+  m1541_led <= m1541_led_s;
+  drive_act_led <= m1541_led_s;
+  drive_read_active <= m1541_read_s;
+  drive_write_active <= m1541_write_s;
+  drive_write_byte_pulse <= m1541_wr_byte_s;
+  drive_write_commit_pulse <= m1541_wr_commit_s;
+  drive_write_block_done_pulse <= m1541_wr_block_done_s;
+  drive_write_checksum_error_pulse <= m1541_wr_checksum_error_s;
+  drive_write_checksum_calc <= m1541_wr_checksum_calc_s;
+  drive_write_checksum_recv <= m1541_wr_checksum_recv_s;
+  drive_write_prev_data <= m1541_wr_prev_data_s;
+  drive_write_last_data <= m1541_wr_last_data_s;
+  drive_write_debug <= m1541_wr_debug_s;
+  drive_write_trace_data <= m1541_wr_trace_data_s;
+  drive_write_trace_count <= m1541_wr_trace_count_s;
+
+  cia2_i : mos6526
+    port map (
+      mode    => '0',
+      clk     => clk,
+      phi2_p  => phi2_en,
+      phi2_n  => cia_bus_en,
+      res_n   => core_reset_n,
+      cs_n    => cia2_cs_n,
+      rw      => cia_rw,
+      rs      => cpu_addr(3 downto 0),
+      db_in   => cpu_dout,
+      db_out  => cia2_dout,
+      pa_in   => cia2_pa_in,
+      pa_out  => cia2_pa_out,
+      pa_oe   => cia2_pa_oe,
+      pb_in   => cia2_pb_out,
+      pb_out  => cia2_pb_out,
+      pb_oe   => cia2_pb_oe,
+      flag_n  => '1',
+      pc_n    => cia2_pc_n,
+      tod     => tod_tick,
+      sp_in   => '1',
+      sp_out  => cia2_sp_out,
+      cnt_in  => '1',
+      cnt_out => cia2_cnt_out,
+      irq_n   => cia2_irq_n,
+      dbg_state => cia2_dbg_state
+    );
+
+  -- ---- keyboard matrix ----
+  -- (Isolation test confirmed the PS/2 module is innocent -- the hang persists with
+  -- it removed -- so it stays wired in.)
+  kbd_i : entity work.c64_keyboard_matrix
+    port map (
+      clk => clk, reset_n => core_reset_n,
+      ps2_clk => ps2_clk, ps2_data => ps2_data,
+      col_drive => cia1_pa_out,
+      row_drive => cia1_pb_out,
+      col_read => kb_col,
+      row_read => kb_row,
+      restore_n => restore_n
+    );
+
+  -- ---- SID ----
+  cs_sid <= '1' when io = IO_SID else '0';
+  sid_i : entity work.sid6581
+    generic map (CLK_HZ => 27_000_000, SID_HZ => 985_248)
+    port map (
+      clk => clk, reset_n => core_reset_n,
+      cs => cs_sid, we => io_we, addr => cpu_addr(4 downto 0),
+      din => cpu_dout, dout => sid_dout, sample_out => audio
+    );
+
+  -- ---- Expansion I/O2 window ($DF00-$DFFF) ----
+  -- Exported to the board top, which implements the SD disk mount/fastload
+  -- registers there (register map identical to the MiSTer C64 probe).
+  exp2_cs    <= '1' when io = IO_EXP2 else '0';
+  exp2_we    <= '1' when io = IO_EXP2 and cpu_we = '1' and phi2_en = '1' else '0';
+  exp2_addr  <= cpu_addr(7 downto 0);
+  exp2_wdata <= cpu_dout;
+
+  -- ---- Host disk UART (I/O area 1, $DE00-$DE01) ----
+  -- A PC runs a "1541 server" on this serial link and LOAD is done over UART.
+  --   $DE00 DATA   : write -> transmit a byte; read -> pop one received byte
+  --   $DE01 STATUS : bit0 = RX byte available, bit1 = TX busy, bit2 = RX overflow
+  -- 115200 8N1 on the CH340 USB-UART; the held-cs C64 bus is handled by pulsing
+  -- TX/pop once per CPU access (phi2_en) -- no 27x repeat.
+  cs_uart <= '1' when (HOST_UART_ENABLE and io = IO_EXP1) else '0';
+
+  gen_host_uart : if HOST_UART_ENABLE generate
+    utx_i : entity work.uart_tx_ser
+      generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+      port map (clk => clk, reset_n => core_reset_n,
+                data => cpu_dout, valid => utx_send, tx => legacy_uart_tx, busy => utx_busy);
+
+    urx_i : entity work.uart_rx_ser
+      generic map (CLK_HZ => 27_000_000, BAUD => 115_200)
+      port map (clk => clk, reset_n => core_reset_n,
+                rx => uart_rx, data => urx_data, valid => urx_valid);
+  end generate;
+
+  gen_no_host_uart : if not HOST_UART_ENABLE generate
+    legacy_uart_tx <= '1';
+    urx_data  <= (others => '0');
+    urx_valid <= '0';
+    utx_busy  <= '0';
+  end generate;
+
+  -- One TX start pulse per CPU write to $DE00.
+  utx_send <= '1' when (cs_uart = '1' and cpu_we = '1' and cpu_addr(0) = '0'
+                        and phi2_en = '1') else '0';
+
+  uart_read_sel <= '1' when (cs_uart = '1' and cpu_we = '0' and cpu_addr(0) = '0') else '0';
+
+  rx_pop <= '1' when (uart_read_sel = '1' and phi2_en = '1'
+                      and uart_read_held = '0' and rx_count > 0) else '0';
+  rx_avail <= '1' when rx_count > 0 else '0';
+
+  -- Buffer PC->C64 bursts. A single-byte latch is enough for PING, but D64 PRG
+  -- loads arrive as long serial frames while the 1 MHz CPU is also storing each
+  -- payload byte to RAM. While the FPGA monitor owns the same UART link, keep
+  -- this FIFO empty so upload commands do not become stale disk bytes.
+  process(clk)
+    variable count_v : integer range 0 to RX_FIFO_DEPTH;
+    variable rd_v    : unsigned(7 downto 0);
+    variable wr_v    : unsigned(7 downto 0);
+  begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' or monitor_hold = '1' then
+        rx_count    <= 0;
+        rx_rd_ptr   <= (others => '0');
+        rx_wr_ptr   <= (others => '0');
+        rx_overflow <= '0';
+      else
+        count_v := rx_count;
+        rd_v    := rx_rd_ptr;
+        wr_v    := rx_wr_ptr;
+
+        if rx_pop = '1' and count_v > 0 then
+          rd_v    := rd_v + 1;
+          count_v := count_v - 1;
+        end if;
+
+        if urx_valid = '1' then
+          if count_v < RX_FIFO_DEPTH then
+            rx_fifo(to_integer(wr_v)) <= urx_data;
+            wr_v    := wr_v + 1;
+            count_v := count_v + 1;
+          else
+            rx_overflow <= '1';
+          end if;
+        end if;
+
+        rx_count  <= count_v;
+        rx_rd_ptr <= rd_v;
+        rx_wr_ptr <= wr_v;
+      end if;
+    end if;
+  end process;
+
+  -- Keep a $DE00 read stable after the pop edge. T65 can hold the same read
+  -- address across more than one phi2 tick; without this latch the FIFO pointer
+  -- may advance while the CPU is still sampling the data bus.
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      if core_reset_n = '0' or monitor_hold = '1' then
+        uart_read_held  <= '0';
+        uart_data_latch <= (others => '0');
+      elsif uart_read_sel = '0' then
+        uart_read_held <= '0';
+      elsif phi2_en = '1' and uart_read_held = '0' then
+        uart_read_held <= '1';
+        if rx_count > 0 then
+          uart_data_latch <= rx_fifo(to_integer(rx_rd_ptr));
+        else
+          uart_data_latch <= (others => '0');
+        end if;
+      end if;
+    end if;
+  end process;
+
+  uart_data_dout <= uart_data_latch when uart_read_held = '1'
+                    else rx_fifo(to_integer(rx_rd_ptr));
+
+  uart_dout <= uart_data_dout when cpu_addr(0) = '0'
+               else "00000" & rx_overflow & utx_busy & rx_avail;
+
+  -- ---- CPU read data mux ----
+  -- The CPU read mux is split so the steal-coupled main-RAM read (dram_dout, from
+  -- the single-port BSRAM time-shared with the VIC) stays a SHALLOW final 2:1 mux,
+  -- independent of how deep the ROM/I/O mux below gets. That path is single-cycle
+  -- constrained (the SDC can't multicycle it -- dram_dout changes every clock at
+  -- the steal boundary) and is the placement-critical net; keeping it a 2:1 mux
+  -- stops new I/O sources (e.g. the $DE00 UART) from lengthening it via a merged
+  -- mux tree. Everything else (ROM/CIA/VIC/SID/UART) has the full CPU cycle and is
+  -- multicycled, so its extra depth is harmless.
+  process(sel, io, basic_dout, kernal_dout, cg_cpu_dout,
+          vic_dout, sid_dout, col_a_dout, cia1_dout, cia2_dout,
+          uart_dout, exp2_rdata)
+  begin
+    case sel is
+      when SEL_BASIC   => other_din <= basic_dout;
+      when SEL_KERNAL  => other_din <= kernal_dout;
+      when SEL_CHARGEN => other_din <= cg_cpu_dout;
+      when SEL_IO =>
+        case io is
+          when IO_VIC   => other_din <= vic_dout;
+          when IO_SID   => other_din <= sid_dout;
+          when IO_COLOR => other_din <= "0000" & col_a_dout;
+          when IO_CIA1  => other_din <= cia1_dout;
+          when IO_CIA2  => other_din <= cia2_dout;
+          when IO_EXP1  => other_din <= uart_dout;   -- $DE00 host disk UART
+          when IO_EXP2  => other_din <= exp2_rdata;  -- $DF00 SD disk window
+          when others   => other_din <= x"FF";
+        end case;
+      when others => other_din <= x"FF";
+    end case;
+  end process;
+  cpu_din <= dram_dout when sel = SEL_RAM else other_din;
+end architecture;

@@ -17,7 +17,7 @@ endmodule
 
 // -------------------------------------------------------------------------------
 
-module iecdrv_mem #(parameter DATAWIDTH, ADDRWIDTH, INITFILE=" ")
+module iecdrv_mem #(parameter DATAWIDTH = 8, ADDRWIDTH = 8, INITFILE=" ")
 (
 	input	                     clock_a,
 	input	     [ADDRWIDTH-1:0] address_a,

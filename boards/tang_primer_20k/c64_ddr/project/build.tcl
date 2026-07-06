@@ -1,0 +1,89 @@
+set_device GW2A-LV18PG256C8/I7 -name GW2A-18C
+
+# SBC package (only sid6581 / pt8211_dac depend on it)
+add_file -type vhdl {../../../../rtl/core/sbc_pkg.vhd}
+
+# T65 6502 core
+add_file -type vhdl {../../../../third_party/t65/rtl/T65_Pack.vhd}
+add_file -type vhdl {../../../../third_party/t65/rtl/T65_MCode.vhd}
+add_file -type vhdl {../../../../third_party/t65/rtl/T65_ALU.vhd}
+add_file -type vhdl {../../../../third_party/t65/rtl/T65.vhd}
+
+# C64 package + generated ROMs
+add_file -type vhdl {../../../../rtl/c64/c64_pkg.vhd}
+add_file -type vhdl {../../../../rtl/c64/c64_roms.vhd}
+
+# C64 memories
+add_file -type vhdl {../../../../rtl/c64/colour_ram.vhd}
+add_file -type vhdl {../../../../rtl/c64/colour_ram_dp.vhd}
+
+# C64 chips
+add_file -type vhdl {../../../../rtl/c64/cpu6510.vhd}
+add_file -type vhdl {../../../../rtl/c64/cia6526_full.vhd}
+add_file -type verilog {../../../../rtl/c64/mos6526_mist.v}
+add_file -type vhdl {../../../../rtl/c64/c64_iec_drive.vhd}
+add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_misc.sv}
+add_file -type vhdl {../../../../third_party/mister_c64/rtl/iec_drive/iecdrv_via6522.vhd}
+add_file -type verilog {../../../../third_party/mister_c64/rtl/iec_drive/c1541_logic.sv}
+add_file -type vhdl {../../../../rtl/c64/c1541_rom.vhd}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_d64_sector_source.vhd}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_v1541_uart_sector_source.vhd}
+add_file -type verilog {../../mister_c64_probe/rtl/c1541_static_d64_image.sv}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_static_dir_gcr.vhd}
+
+# SD floppy (same stack as the MiSTer C64 probe board)
+add_file -type vhdl {../../../../rtl/core/peripherals/d64_sector_map.vhd}
+add_file -type verilog {../../../../third_party/alinx_sd/spi_master.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_cmd.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_sec_read_write.v}
+add_file -type verilog {../../../../third_party/alinx_sd/sd_card_top.v}
+add_file -type vhdl {../../mister_c64_probe/rtl/c1541_sd_d64_sector_source.vhd}
+add_file -type vhdl {../../mister_c64_probe/rtl/c64_sd_hook_boot_loader.vhd}
+add_file -type vhdl {../../../../rtl/c64/mister_c1541_iec.vhd}
+add_file -type vhdl {../../../../rtl/c64/c64_keyboard_matrix.vhd}
+add_file -type vhdl {../../../../rtl/c64/vic_ii.vhd}
+add_file -type vhdl {../../../../rtl/c64/vic_ii_xl.vhd}
+add_file -type vhdl {../../../../rtl/core/audio/sid/sid6581.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/math_copro.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/pt8211_dac.vhd}
+
+# Host disk UART (PC runs a 1541 server over the CH340 link)
+add_file -type vhdl {../../../../rtl/core/peripherals/uart_tx_ser.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/uart_rx_ser.vhd}
+# Small PRG upload monitor (L/./G subset), shared with the MiSTer probe board.
+# The full FLAT_64K uart_debug_monitor no longer fits next to the SD floppy.
+add_file -type vhdl {../../mister_c64_probe/rtl/c64_prg_upload_monitor.vhd}
+
+# C64 core
+add_file -type vhdl {../rtl/c64_core_ddr.vhd}
+add_file -type vhdl {../../../../rtl/c64/c64_dbg_uart.vhd}
+
+# HDMI
+add_file -type vhdl {../../../../rtl/core/hdmi/tmds_encoder.vhd}
+add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_data_island_pkg.vhd}
+add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_data_island_576p_pkg.vhd}
+add_file -type vhdl {../../../../rtl/core/hdmi/hdmi_encoder.vhd}
+
+# DDR3 backend for the local c64_core_ddr main-RAM byte port.
+add_file -type verilog {src/gowin_rpll/gowin_rpll.v}
+add_file -type verilog {src/ddr3_memory_interface/ddr3_memory_interface.v}
+add_file -type vhdl {../rtl/ddr3_byte_bridge.vhd}
+
+# Board top + HDMI TX
+add_file -type vhdl {../rtl/tang20k_hdmi_tx.vhd}
+add_file -type vhdl {../rtl/tang20k_c64_ddr_top.vhd}
+
+# Constraints
+add_file -type cst {../constraints/tang20k_c64_ddr.cst}
+add_file -type sdc {../constraints/tang20k_c64_ddr.sdc}
+
+set_option -top_module tang20k_c64_ddr_top
+set_option -use_sspi_as_gpio 1
+set_option -use_mspi_as_gpio 1
+set_option -output_base_name tang_c64_ddr
+set_option -vhdl_std vhd2019
+set_option -verilog_std sysv2017
+set_option -timing_driven 1
+set_option -route_maxfan 23
+
+run all

@@ -171,6 +171,17 @@ boards/tang_primer_20k/mister_c64_probe/project/tmp/
 boards/tang_primer_20k/mister_c64_probe/project/rtl/roms/
 boards/tang_primer_20k/mister_c64_probe/project/*.gprj.user
 
+# Native C64 DDR fork. The generated bitstream embeds C64 ROM data, so keep
+# only reproducible source/project files and release notes in git.
+boards/tang_primer_20k/c64_ddr/bitstream/*.fs
+boards/tang_primer_20k/c64_ddr/project/impl/
+boards/tang_primer_20k/c64_ddr/project/tmp/
+boards/tang_primer_20k/c64_ddr/project/*.gprj.user
+boards/tang_primer_20k/c64_ddr/project/src/*/*.mod
+boards/tang_primer_20k/c64_ddr/project/src/*/*.vo
+boards/tang_primer_20k/c64_ddr/project/src/*/*_tmp.v
+boards/tang_primer_20k/c64_ddr/project/src/*/temp/
+
 roms/c64/*
 !roms/c64/README.md
 
