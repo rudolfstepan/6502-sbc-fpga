@@ -347,6 +347,8 @@ architecture rtl of tang20k_sbc_top is
   signal ddr_pll_lock       : std_logic;
   signal ddr_clk_x1         : std_logic;   -- 100 MHz DDR3 user clock
   signal ddr_calib_complete : std_logic;
+  signal ddr_calib_sys_sync : std_logic_vector(2 downto 0) := (others => '0');
+  signal ddr_calib_sys      : std_logic := '0';
   signal app_cmd            : std_logic_vector(2 downto 0);
   signal app_cmd_en         : std_logic;
   signal app_cmd_rdy        : std_logic;
@@ -361,6 +363,8 @@ architecture rtl of tang20k_sbc_top is
   signal ddr_rst_n          : std_logic := '0';       -- DDR3 controller reset
   signal ddr_lock_sync      : std_logic_vector(1 downto 0) := (others => '0');
   signal ddr_cal_sync       : std_logic_vector(1 downto 0) := (others => '0');
+  signal long_reset_27_sync : std_logic_vector(2 downto 0) := (others => '0');
+  signal long_reset_27      : std_logic := '0';
   signal ddr_rst_cnt        : integer range 0 to DDR_CAL_WAIT := 0;
   -- Reference DDR3 IP uses zero for a single 128-bit user-interface beat.
   signal app_wren           : std_logic;
@@ -459,11 +463,26 @@ begin
   sd2_ncs <= sd2_ncs_i;
   sd2_dclk <= sd2_dclk_i;
   sd2_mosi <= sd2_mosi_i;
+  -- Synchronise DDR3 calibration into clk_sys before it gates the SBC reset.
+  -- The raw IP signal is still used in the DDR app-clock framebuffer controller.
+  ddr_calib_sys <= ddr_calib_sys_sync(2);
+
+  process(clk_sys)
+  begin
+    if rising_edge(clk_sys) then
+      if reset_n = '0' then
+        ddr_calib_sys_sync <= (others => '0');
+      else
+        ddr_calib_sys_sync <= ddr_calib_sys_sync(1 downto 0) & ddr_calib_complete;
+      end if;
+    end if;
+  end process;
+
   -- Hold the CPU until the SD ROM load, the BSRAM main-RAM backend, AND the DDR3
   -- framebuffer are ready. DDR3 now backs only the framebuffer, so gating on
-  -- ddr_calib_complete keeps an early $6000 pixel write from stalling forever
-  -- before calibration finishes. (Without USE_DDR3, ddr_calib_complete = ram_ready.)
-  sbc_boot_done   <= boot_done and ram_ready and ddr_calib_complete;
+  -- ddr_calib_sys keeps an early $6000 pixel write from stalling forever before
+  -- calibration finishes. (Without USE_DDR3, ddr_calib_complete = ram_ready.)
+  sbc_boot_done   <= boot_done and ram_ready and ddr_calib_sys;
 
   -- The SD/RAM boot-debug screen is gone; the display always shows the SBC's own
   -- video. Boot status is still on the LEDs, and boot_done still gates the CPU.
@@ -824,8 +843,9 @@ begin
     if rising_edge(clk_27mhz) then
       ddr_lock_sync <= ddr_lock_sync(0) & ddr_pll_lock;
       ddr_cal_sync  <= ddr_cal_sync(0)  & ddr_calib_complete;
+      long_reset_27_sync <= long_reset_27_sync(1 downto 0) & long_reset;
 
-      if ddr_lock_sync(1) = '0' or long_reset = '1' then
+      if ddr_lock_sync(1) = '0' or long_reset_27 = '1' then
         -- no stable memory clock yet, or a long-press full reset: hold reset
         ddr_rst_state <= DR_ASSERT;
         ddr_rst_cnt   <= 0;
@@ -856,6 +876,8 @@ begin
       end if;
     end if;
   end process;
+
+  long_reset_27 <= long_reset_27_sync(2);
 
   ddr_mem_pll_i : Gowin_rPLL
     port map (
@@ -1021,6 +1043,6 @@ begin
   -- DDR3 bring-up diagnostics until the CPU is released:
   --   LED2 lit = DDR memory PLL locked, LED3 lit = DDR3 calibration complete.
   led(2) <= not ddr_pll_lock        when sbc_boot_done = '0' else not via_portb(2);
-  led(3) <= not ddr_calib_complete  when sbc_boot_done = '0' else not via_portb(3);
+  led(3) <= not ddr_calib_sys       when sbc_boot_done = '0' else not via_portb(3);
 
 end architecture;

@@ -35,8 +35,9 @@ bursts/line would exceed the per-line DDR3 budget with the single-burst fetch).
 
 > **Backed out — 320x240 full height (`$9007` bit 0).** A 240-line full-screen flag
 > for the 320-wide modes was prototyped, then removed after it broke DDR3
-> calibration on this marginal, unconstrained DDR3. The `mandelbrot_true240` source
-> stays; re-enable once the DDR3 is properly constrained (SDC + Gowin 1.9.8.08).
+> calibration during the earlier unconstrained DDR3 bring-up. The
+> `mandelbrot_true240` source stays; re-enable only after re-checking the DDR3
+> timing report and hardware calibration margin.
 
 Removing the old BSRAM `fb_ram` retired the legacy bitmap modes (`$9000` bit 0
 1bpp hires, bit 1 160x100, bit 3 180x120) — the three DDR3 modes are the only
@@ -60,6 +61,44 @@ Demos (build with `make -C sw/6502`, upload with the `.bat` files under
 - `mandelbrot_true240` — the 320x240 full-screen variant; **needs the backed-out
   `$9007` full-height flag**, so it will not display right on the current bitstream.
 
+## Gowin timing closure
+
+The Tang SBC build is timing-clean with GowinEDA V1.9.12.03 as of the July 2026
+DDR3/SBC timing pass. The checked report
+`project/impl/pnr/tang_sbc_tr_content.html` from `Mon Jul 6 21:10:16 2026`
+shows:
+
+| Clock | Constraint | Reported Fmax |
+| --- | ---: | ---: |
+| `clk_27mhz` | 27.000 MHz | 189.627 MHz |
+| `clk_sys` | 54.002 MHz | 56.479 MHz |
+| `clk_pix` | 27.000 MHz | 99.392 MHz |
+| `ddr_clk_x1` | 100.000 MHz | 100.654 MHz |
+| `ddr_mem` | 400.000 MHz | 2016.127 MHz |
+
+The final report has `0` setup-violated endpoints and `0` hold-violated
+endpoints. The previous large negative paths were mostly CDC/constraint issues:
+raw DDR3 calibration status was gating the SBC boot/reset path from the DDR app
+domain, and the SDC did not explicitly describe the generated SBC, pixel, DDR
+app, and DDR memory clocks. `tang20k_sbc_top.vhd` now synchronises
+`ddr_calib_complete` into `clk_sys` before it gates `sbc_boot_done`, and
+synchronises `long_reset` into `clk_27mhz` before the DDR reset sequencer uses
+it. `constraints/tang20k_sbc.sdc` now constrains the internal clocks, marks the
+DDR app/memory clocks asynchronous to the SBC/HDMI clock tree, and carries the
+DDR3 PHY calibration false paths that the generated Gowin IP needs.
+
+There was also one real DDR app-clock critical path in `vic_fb_ddr3.vhd`: CPU
+framebuffer writes used a stride/range compare to invalidate only one buffered
+half-line. That logic sat on the 100 MHz DDR app clock. The controller now
+conservatively invalidates the complete line-buffer validity vector on a CPU
+write, which removes the long compare path at the cost of a harmless extra line
+refetch after writes.
+
+Gowin still emits `TA1132` for
+`hdmi_i/clkdiv_tmds_i/CLKOUT.default_gen_clk`; it is a generated TMDS clock with
+no reportable endpoint frequency in this design and does not correspond to a
+setup/hold violation in the current timing report.
+
 ## UART PRG monitor (magic-byte upload)
 
 The old on-screen SD boot-debug screen and the heavy `uart_debug_monitor` are
@@ -74,13 +113,13 @@ send the wake automatically.
 - **SD2 D64 GoDrive is currently disabled** (commented out in
   `rtl/core/sbc_t65_boot_monitor_top.vhd` and `.../sbc/rtl/tang20k_sbc_top.vhd`).
   Its `fat32_reader` had a ~-215 ns combinational setup path (oversized 40x32 /
-  32x32 multiplies + a 32-bit divide) that, on top of the unconstrained DDR3,
-  pushed the marginal DDR3 calibration over the edge. Uncomment `disk_i` + `sd2_i`
-  (and drop the tie-offs) to restore it; the right fix is to right-size that
-  arithmetic and constrain the DDR3 clocks. SD1 (the EhBASIC boot loader) is
-  untouched.
-- **DDR3 leaves a few scattered pixel errors** in the framebuffer read path. That
-  is the VREF/Gowin-version issue — VREF=INTERNAL wants Gowin 1.9.8.08. The DDR3
-  clocks are intentionally left unconstrained in `constraints/tang20k_sbc.sdc`;
-  see the comments there before adding constraints (separate app/mem clock groups
-  break the PHY).
+  32x32 multiplies + a 32-bit divide) that, on top of the earlier DDR3 timing
+  debt, pushed the marginal DDR3 calibration over the edge. Uncomment `disk_i` +
+  `sd2_i` (and drop the tie-offs) to restore it; the right fix is to right-size
+  that arithmetic and re-run the Gowin timing report. SD1 (the EhBASIC boot
+  loader) is untouched.
+- **DDR3 may still leave scattered pixel errors** in the framebuffer read path on
+  some boards. The timing report is now clean, so remaining artefacts are more
+  likely board/VREF/Gowin-version sensitivity than STA violations. Keep
+  `impl/pnr/device.cfg` and the DDR3-related SDC constraints under review when
+  changing Gowin versions or DDR3 IP settings.

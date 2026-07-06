@@ -219,9 +219,6 @@ begin
     variable lstart : natural;                 -- cur_line * lp (pixels)
     variable pixoff : natural;                 -- pixel offset in the frame
     variable byteoff: natural;                 -- byte offset in the frame
-    variable strd   : natural;                 -- bytes per line
-    variable hl     : natural;                 -- byte offset of half_line(h) start
-    variable cadr   : natural;                 -- cpu_op_addr as integer (byte index)
   begin
     if rst_sys_n = '0' then
       st <= S_CALIB;
@@ -368,17 +365,10 @@ begin
             app_wdata_mask(ln) <= '0';
             app_wren       <= '1';
             app_wdata_end  <= '1';
-            -- invalidate any buffered half holding the edited line
-            strd := lp;                                    -- pixels per line
-            if ew  = '1' then strd := strd + strd; end if; -- 640-wide
-            if b16 = '1' then strd := strd + strd; end if; -- *2 bytes/pixel
-            cadr := to_integer(unsigned(cpu_op_addr));
-            for h in 0 to 1 loop
-              hl := to_integer(half_line(h)) * strd;
-              if half_valid(h) = '1' and cadr >= hl and cadr < hl + strd then
-                half_valid(h) <= '0';
-              end if;
-            end loop;
+            -- Any CPU framebuffer write may affect one cached scanline. Drop
+            -- both halves instead of doing stride/range compares in the 100 MHz
+            -- app-clock path; the line fetcher will refill on demand.
+            half_valid <= (others => '0');
             ack_tgl_x1  <= not ack_tgl_x1;
             cpu_pending <= '0';
             st <= S_IDLE;
