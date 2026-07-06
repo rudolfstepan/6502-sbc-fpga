@@ -94,6 +94,10 @@ architecture rtl of ddr3_byte_bridge is
   -- clk_sys side
   signal busy_sys : std_logic := '0';
   signal dout_reg : std_logic_vector(7 downto 0) := (others => '0');
+  signal ready_sync_sys : std_logic_vector(2 downto 0) := (others => '0');
+  signal test_active_sync_sys : std_logic_vector(2 downto 0) := (others => '0');
+  signal test_done_sync_sys   : std_logic_vector(2 downto 0) := (others => '0');
+  signal test_error_sync_sys  : std_logic_vector(2 downto 0) := (others => '0');
 
   -- ---- clk_x1 op sub-FSM ---------------------------------------------------
   type op_state_t is (OP_IDLE,
@@ -141,7 +145,7 @@ architecture rtl of ddr3_byte_bridge is
 begin
 
   dout      <= dout_reg;
-  ram_ready <= ready_x1;  -- single-bit level; safe to read in sys domain (gated by self-test edges)
+  ram_ready <= ready_sync_sys(2);
 
   -- ===================== clk_sys: request / ack CDC ========================
   process(clk_sys)
@@ -151,11 +155,19 @@ begin
         req_tgl_sys <= '0';
         busy_sys    <= '0';
         ack_tgl_sys <= (others => '0');
+        ready_sync_sys <= (others => '0');
+        test_active_sync_sys <= (others => '0');
+        test_done_sync_sys   <= (others => '0');
+        test_error_sync_sys  <= (others => '0');
         ack         <= '0';
         dout_reg    <= (others => '0');
       else
         ack         <= '0';
         ack_tgl_sys <= ack_tgl_sys(1 downto 0) & ack_tgl_x1;
+        ready_sync_sys <= ready_sync_sys(1 downto 0) & ready_x1;
+        test_active_sync_sys <= test_active_sync_sys(1 downto 0) & t_active_x1;
+        test_done_sync_sys   <= test_done_sync_sys(1 downto 0) & t_done_x1;
+        test_error_sync_sys  <= test_error_sync_sys(1 downto 0) & t_error_x1;
 
         if busy_sys = '0' then
           if req = '1' then
@@ -416,18 +428,24 @@ begin
   end process;
 
   -- ===================== self-test status CDC (x1 -> sys) ==================
-  -- These are quasi-static during/after the test; double-register for display.
+  -- Single-bit status is synchronized. Multi-bit diagnostics are LED/debug-only
+  -- and are captured when the test is idle, done, or failed, so they do not feed
+  -- any control path.
   process(clk_sys)
   begin
     if rising_edge(clk_sys) then
-      ram_test_active    <= t_active_x1;
-      ram_test_done      <= t_done_x1;
-      ram_test_error     <= t_error_x1;
-      ram_test_phase     <= t_phase_x1;
-      ram_test_addr      <= std_logic_vector(test_addr);
-      ram_test_fail_addr <= t_failaddr_x1;
-      ram_test_expected  <= t_expected_x1;
-      ram_test_actual    <= t_actual_x1;
+      ram_test_active <= test_active_sync_sys(2);
+      ram_test_done   <= test_done_sync_sys(2);
+      ram_test_error  <= test_error_sync_sys(2);
+
+      if test_active_sync_sys(2) = '0' or test_done_sync_sys(2) = '1' or
+         test_error_sync_sys(2) = '1' then
+        ram_test_phase     <= t_phase_x1;
+        ram_test_addr      <= std_logic_vector(test_addr);
+        ram_test_fail_addr <= t_failaddr_x1;
+        ram_test_expected  <= t_expected_x1;
+        ram_test_actual    <= t_actual_x1;
+      end if;
     end if;
   end process;
 

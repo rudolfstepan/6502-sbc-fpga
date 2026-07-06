@@ -24,9 +24,12 @@ use work.sbc_pkg.all;
 entity tang20k_sbc_top is
   generic (
     BAUD          : positive := 115_200;
-    -- false (default): low-power 8 KiB BSRAM at $4000-$5FFF.
-    -- true: original Gowin DDR3 IP backend; retains the same CPU memory map.
-    USE_DDR3      : boolean := false
+    -- true (default): the $4000-$5FFF window is backed by the on-board DDR3 via
+    --   the Gowin DDR3 IP + ddr3_byte_bridge, using the same known-good bring-up
+    --   as the c64_ddr project (identical IP/PLL/pins; the bridge carries the
+    --   clock-domain-crossing fix that made c64_ddr's DDR3 reliable).
+    -- false: low-power 8 KiB BSRAM fallback at the same window / CPU memory map.
+    USE_DDR3      : boolean := true
   );
   port (
     clk_27mhz  : in  std_logic;
@@ -297,6 +300,18 @@ architecture rtl of tang20k_sbc_top is
   signal monitor_mem_ready  : std_logic;
   signal monitor_jump_req   : std_logic;
   signal monitor_jump_addr  : addr_t;
+
+  -- Four-byte magic wake sequence (same as the C64 board): a soft monitor button
+  -- over UART, so no physical key is needed. Longer than one byte because the
+  -- same UART also carries the CPU's own byte traffic. Sending A5 5A C3 3C enters
+  -- the PRG upload monitor; the physical key(1) still works too.
+  constant MONITOR_MAGIC0 : std_logic_vector(7 downto 0) := x"A5";
+  constant MONITOR_MAGIC1 : std_logic_vector(7 downto 0) := x"5A";
+  constant MONITOR_MAGIC2 : std_logic_vector(7 downto 0) := x"C3";
+  constant MONITOR_MAGIC3 : std_logic_vector(7 downto 0) := x"3C";
+  signal mon_magic_idx  : integer range 0 to 3 := 0;
+  signal mon_magic_enter : std_logic := '0';
+  signal mon_enter      : std_logic;
   signal sd_seen_read_end   : std_logic := '0';
 
   -- Second SD card (data disk) signals
@@ -373,6 +388,18 @@ architecture rtl of tang20k_sbc_top is
   signal ram_test_expected  : data_t;
   signal ram_test_actual    : data_t;
   signal sbc_boot_done      : std_logic;
+
+  -- DDR3 framebuffer (vic_fb_ddr3): CPU pixel-byte req/ack port + video stream.
+  signal fbw_req        : std_logic;
+  signal fbw_we         : std_logic;
+  signal fbw_addr       : std_logic_vector(16 downto 0);
+  signal fbw_din        : data_t;
+  signal fbw_dout       : data_t;
+  signal fbw_ack        : std_logic;
+  signal fb_frame_start : std_logic;
+  signal fb_line_adv    : std_logic;
+  signal fb_rdaddr      : std_logic_vector(9 downto 0);
+  signal fb_rddata      : std_logic_vector(7 downto 0);
 begin
   -- key(0) is the reset button: a short press soft-resets only the CPU (the
   -- running program restarts via its reset vector, ROM/boot/SRAM kept), a long
@@ -420,6 +447,8 @@ begin
   reset_n <= (not long_reset) and pll_lock;
   rst <= not reset_n;
   monitor_button <= not key(1);
+  -- Monitor enters on the UART magic sequence or the physical key.
+  mon_enter <= mon_magic_enter or monitor_button;
   pa_en <= '1';  -- keep dock audio power amplifier enabled (PT8211 PA_EN, active high)
   sd_ncs <= sd_ncs_i;
   sd_dclk <= sd_dclk_i;
@@ -427,16 +456,20 @@ begin
   sd2_ncs <= sd2_ncs_i;
   sd2_dclk <= sd2_dclk_i;
   sd2_mosi <= sd2_mosi_i;
-  -- Hold the CPU until both the SD ROM load and selected RAM backend are ready.
-  sbc_boot_done   <= boot_done and ram_ready;
-  boot_vga_active <= (not sbc_boot_done) or boot_error or monitor_active;
+  -- Hold the CPU until the SD ROM load, the BSRAM main-RAM backend, AND the DDR3
+  -- framebuffer are ready. DDR3 now backs only the framebuffer, so gating on
+  -- ddr_calib_complete keeps an early $6000 pixel write from stalling forever
+  -- before calibration finishes. (Without USE_DDR3, ddr_calib_complete = ram_ready.)
+  sbc_boot_done   <= boot_done and ram_ready and ddr_calib_complete;
 
-  vga_mux_r  <= boot_vga_r  when boot_vga_active = '1' else sbc_vga_r;
-  vga_mux_g  <= boot_vga_g  when boot_vga_active = '1' else sbc_vga_g;
-  vga_mux_b  <= boot_vga_b  when boot_vga_active = '1' else sbc_vga_b;
-  vga_mux_hs <= boot_vga_hs when boot_vga_active = '1' else sbc_vga_hs;
-  vga_mux_vs <= boot_vga_vs when boot_vga_active = '1' else sbc_vga_vs;
-  vga_mux_de <= boot_vga_de when boot_vga_active = '1' else sbc_vga_de;
+  -- The SD/RAM boot-debug screen is gone; the display always shows the SBC's own
+  -- video. Boot status is still on the LEDs, and boot_done still gates the CPU.
+  vga_mux_r  <= sbc_vga_r;
+  vga_mux_g  <= sbc_vga_g;
+  vga_mux_b  <= sbc_vga_b;
+  vga_mux_hs <= sbc_vga_hs;
+  vga_mux_vs <= sbc_vga_vs;
+  vga_mux_de <= sbc_vga_de;
 
   -- Register the complete renderer output together before the related-clock
   -- handoff in tang20k_hdmi_tx. This removes long combinational 54->27 MHz
@@ -502,33 +535,45 @@ begin
     );
 
   -- Second SD card (data disk) — same Alinx SPI core, separate GPIO pins.
-  sd2_i : sd_card_top
-    generic map (
-      SPI_LOW_SPEED_DIV  => 268,
-      SPI_HIGH_SPEED_DIV => 2
-    )
-    port map (
-      clk                    => clk_sys,
-      rst                    => rst,
-      SD_nCS                 => sd2_ncs_i,
-      SD_DCLK                => sd2_dclk_i,
-      SD_MOSI                => sd2_mosi_i,
-      SD_MISO                => sd2_miso,
-      sd_init_done           => sd2_init_done,
-      sd_sec_read            => sd2_sec_read,
-      sd_sec_read_addr       => sd2_sec_read_addr,
-      sd_sec_read_data       => sd2_sec_read_data,
-      sd_sec_read_data_valid => sd2_sec_read_valid,
-      sd_sec_read_end        => sd2_sec_read_end,
-      sd_sec_write           => sd2_sec_write,
-      sd_sec_write_addr      => sd2_sec_write_addr,
-      sd_sec_write_data      => sd2_sec_write_data,
-      sd_sec_write_data_req  => sd2_sec_write_req,
-      sd_sec_write_end       => sd2_sec_write_end,
-      debug_sec_state        => open,
-      debug_cmd_state        => open,
-      debug_cmd_error        => open
-    );
+  -- SD2 (D64 GoDrive card) DISABLED for the bring-up test: sd2_i is unwired so the
+  -- disk/FAT32 subsystem is fully out of the netlist. All of its outputs are held
+  -- inactive here. Uncomment sd2_i below and drop these tie-offs to restore.
+  sd2_ncs_i          <= '1';   -- chip-select high = SD2 idle
+  sd2_dclk_i         <= '0';
+  sd2_mosi_i         <= '0';
+  sd2_init_done      <= '0';
+  sd2_sec_read_data  <= (others => '0');
+  sd2_sec_read_valid <= '0';
+  sd2_sec_read_end   <= '0';
+  sd2_sec_write_req  <= '0';
+  sd2_sec_write_end  <= '0';
+--  sd2_i : sd_card_top
+--    generic map (
+--      SPI_LOW_SPEED_DIV  => 268,
+--      SPI_HIGH_SPEED_DIV => 2
+--    )
+--    port map (
+--      clk                    => clk_sys,
+--      rst                    => rst,
+--      SD_nCS                 => sd2_ncs_i,
+--      SD_DCLK                => sd2_dclk_i,
+--      SD_MOSI                => sd2_mosi_i,
+--      SD_MISO                => sd2_miso,
+--      sd_init_done           => sd2_init_done,
+--      sd_sec_read            => sd2_sec_read,
+--      sd_sec_read_addr       => sd2_sec_read_addr,
+--      sd_sec_read_data       => sd2_sec_read_data,
+--      sd_sec_read_data_valid => sd2_sec_read_valid,
+--      sd_sec_read_end        => sd2_sec_read_end,
+--      sd_sec_write           => sd2_sec_write,
+--      sd_sec_write_addr      => sd2_sec_write_addr,
+--      sd_sec_write_data      => sd2_sec_write_data,
+--      sd_sec_write_data_req  => sd2_sec_write_req,
+--      sd_sec_write_end       => sd2_sec_write_end,
+--      debug_sec_state        => open,
+--      debug_cmd_state        => open,
+--      debug_cmd_error        => open
+--    );
 
   loader_i : sd_rom_loader
     port map (
@@ -548,34 +593,12 @@ begin
       dbg_state              => loader_state
     );
 
-  boot_debug_i : entity work.boot_debug_uart
-    generic map (STATUS_DIV => 54_000_000)
-    port map (
-      clk             => clk_sys,
-      reset_n         => reset_n,
-      sd_init_done    => sd_init_done,
-      sd_sec_read     => sd_sec_read,
-      sd_sec_read_end => sd_sec_read_end,
-      boot_done       => boot_done,
-      boot_error      => boot_error,
-      sd_ncs          => sd_ncs_i,
-      sd_dclk         => sd_dclk_i,
-      sd_mosi_o       => sd_mosi_i,
-      sd_miso_i       => sd_miso,
-      loader_state    => loader_state,
-      sd_sec_state    => sd_sec_state,
-      sd_cmd_state    => sd_cmd_state,
-      sd_cmd_error    => sd_cmd_error,
-      usb_connected   => usb_connected,
-      usb_keycode     => usb_keycode,
-      usb_modif       => usb_modif,
-      usb_ascii       => usb_ascii,
-      usb_phase       => usb_phase,
-      uart_busy       => uart_tx_busy,
-      uart_data       => boot_dbg_data,
-      uart_valid      => boot_dbg_valid,
-      active          => boot_dbg_active
-    );
+  -- boot_debug_uart removed: the SD/RAM boot status is no longer streamed over the
+  -- UART. The UART now carries only the CPU's own traffic and the PRG upload
+  -- monitor, so the magic wake sequence can't collide with boot chatter.
+  boot_dbg_data   <= (others => '0');
+  boot_dbg_valid  <= '0';
+  boot_dbg_active <= '0';
 
 
   monitor_rx_i : entity work.uart_rx_ser
@@ -588,11 +611,16 @@ begin
       valid   => monitor_rx_valid
     );
 
-  monitor_i : entity work.uart_debug_monitor
+  -- Small PRG upload monitor from the MiSTer C64 probe (L aaaa / . / G aaaa),
+  -- ENABLE_JUMP so "G aaaa" runs an uploaded program via the core's reset-vector
+  -- injection; a bare "G" just releases. Replaces the ~2.1k-LUT uart_debug_monitor.
+  -- Entered by the UART magic sequence (or the physical key(1)).
+  monitor_i : entity work.c64_prg_upload_monitor
+    generic map (ENABLE_DUMP => true, ENABLE_JUMP => true)
     port map (
       clk       => clk_sys,
       reset_n   => reset_n,
-      enter_btn => monitor_button,
+      enter_btn => mon_enter,
       rx_data   => monitor_rx_data,
       rx_valid  => monitor_rx_valid,
       tx_busy   => uart_tx_busy,
@@ -606,18 +634,39 @@ begin
       mem_rdata => monitor_mem_rdata,
       mem_ready => monitor_mem_ready,
       jump_req  => monitor_jump_req,
-      jump_addr => monitor_jump_addr,
-      usb_connected => usb_connected,
-      usb_keycode   => usb_keycode,
-      usb_modif     => usb_modif,
-      usb_ascii     => usb_ascii,
-      usb_phase     => usb_phase,
-      usb_key_event => usb_key_event,
-      usb_polling   => usb_polling,
-      usb_cap_addr  => usb_cap_addr,
-      usb_cap_data  => usb_cap_data,
-      usb_cap_ready => usb_cap_ready
+      jump_addr => monitor_jump_addr
     );
+
+  -- UART 4-byte magic wake sequence -> mon_magic_enter (soft monitor button).
+  magic_seq : process(clk_sys)
+  begin
+    if rising_edge(clk_sys) then
+      mon_magic_enter <= '0';
+      if reset_n = '0' or monitor_active = '1' then
+        mon_magic_idx <= 0;
+      elsif monitor_rx_valid = '1' then
+        case mon_magic_idx is
+          when 0 =>
+            if monitor_rx_data = MONITOR_MAGIC0 then mon_magic_idx <= 1;
+            else mon_magic_idx <= 0; end if;
+          when 1 =>
+            if    monitor_rx_data = MONITOR_MAGIC1 then mon_magic_idx <= 2;
+            elsif monitor_rx_data = MONITOR_MAGIC0 then mon_magic_idx <= 1;
+            else  mon_magic_idx <= 0; end if;
+          when 2 =>
+            if    monitor_rx_data = MONITOR_MAGIC2 then mon_magic_idx <= 3;
+            elsif monitor_rx_data = MONITOR_MAGIC0 then mon_magic_idx <= 1;
+            else  mon_magic_idx <= 0; end if;
+          when others =>
+            if monitor_rx_data = MONITOR_MAGIC3 then mon_magic_enter <= '1'; end if;
+            mon_magic_idx <= 0;
+        end case;
+      end if;
+    end if;
+  end process;
+
+  -- ULPI bus-capture feature was removed; tie the core's capture-addr input off.
+  usb_cap_addr <= (others => '0');
 
   sbc_i : entity work.sbc_t65_boot_monitor_top
     generic map (CLK_HZ => 54_000_000, BAUD => BAUD, CEA_480P => true,
@@ -656,6 +705,16 @@ begin
       sram_ext_din  => sram_ext_din,
       sram_ext_dout => sram_ext_dout,
       sram_ext_ack  => sram_ext_ack,
+      fbw_req        => fbw_req,
+      fbw_we         => fbw_we,
+      fbw_addr       => fbw_addr,
+      fbw_din        => fbw_din,
+      fbw_dout       => fbw_dout,
+      fbw_ack        => fbw_ack,
+      fb_frame_start => fb_frame_start,
+      fb_line_adv    => fb_line_adv,
+      fb_rdaddr      => fb_rdaddr,
+      fb_rddata      => fb_rddata,
       dac_bck       => dac_bck,
       dac_ws        => dac_ws,
       dac_din       => dac_din,
@@ -689,46 +748,15 @@ begin
       dbg_cpu_sync  => open
     );
 
-  boot_vga_i : entity work.boot_vga_debug
-    generic map (CLK_DIV => 2, CEA_480P => true)
-    port map (
-      clk             => clk_sys,
-      reset_n         => reset_n,
-      sd_init_done    => sd_init_done,
-      sd_sec_read     => sd_sec_read,
-      sd_sec_read_end => sd_sec_read_end,
-      boot_done       => boot_done,
-      boot_error      => boot_error,
-      sd_ncs          => sd_ncs_i,
-      sd_dclk         => sd_dclk_i,
-      sd_mosi_o       => sd_mosi_i,
-      sd_miso_i       => sd_miso,
-      loader_state    => loader_state,
-      sd_sec_state    => sd_sec_state,
-      sd_cmd_state    => sd_cmd_state,
-      sd_cmd_error    => sd_cmd_error,
-      usb_connected   => usb_connected,
-      usb_keycode     => usb_keycode,
-      usb_modif       => usb_modif,
-      usb_ascii       => usb_ascii,
-      usb_phase       => usb_phase,
-      usb_key_event   => usb_key_event,
-      usb_polling     => usb_polling,
-      ram_test_active => ram_test_active,
-      ram_test_done   => ram_test_done,
-      ram_test_error  => ram_test_error,
-      ram_test_phase  => ram_test_phase,
-      ram_test_addr   => ram_test_addr,
-      ram_test_fail_addr => ram_test_fail_addr,
-      ram_test_expected  => ram_test_expected,
-      ram_test_actual    => ram_test_actual,
-      vga_r           => boot_vga_r,
-      vga_g           => boot_vga_g,
-      vga_b           => boot_vga_b,
-      vga_hs          => boot_vga_hs,
-      vga_vs          => boot_vga_vs,
-      vga_de          => boot_vga_de
-    );
+  -- boot_vga_debug removed (the "PIX16 6502 SBC / SD BOOT DEBUG" screen). The
+  -- display shows the SBC's own video from power-on; boot status stays on the LEDs
+  -- and boot_done still parks the CPU until the SD ROM load completes.
+  boot_vga_r  <= (others => '0');
+  boot_vga_g  <= (others => '0');
+  boot_vga_b  <= (others => '0');
+  boot_vga_hs <= '1';
+  boot_vga_vs <= '1';
+  boot_vga_de <= '0';
 
   uart_ser_i : entity work.uart_tx_ser
     generic map (CLK_HZ => 54_000_000, BAUD => BAUD)
@@ -741,12 +769,10 @@ begin
       busy    => uart_tx_busy
     );
 
-  uart_mux_data  <= monitor_tx_data when monitor_active = '1' else
-                    boot_dbg_data   when boot_dbg_active = '1' else
-                    uart_tx_data;
-  uart_mux_valid <= monitor_tx_valid when monitor_active = '1' else
-                    boot_dbg_valid   when boot_dbg_active = '1' else
-                    uart_tx_valid;
+  -- UART TX: the PRG upload monitor preempts the link while active, otherwise the
+  -- CPU's own UART output drives it (the boot-debug stream is gone).
+  uart_mux_data  <= monitor_tx_data  when monitor_active = '1' else uart_tx_data;
+  uart_mux_valid <= monitor_tx_valid when monitor_active = '1' else uart_tx_valid;
 
   hdmi_i : entity work.tang20k_hdmi_tx
     port map (
@@ -878,11 +904,52 @@ begin
       IO_ddr_dqs_n        => ddr_dqs_n
     );
 
-  ddr_bridge_i : entity work.ddr3_byte_bridge
-    generic map (ADDR_BITS => 15, MASK_BIT_MASKS => true)
+  -- The DDR3 IP now backs ONLY the framebuffer. vic_fb_ddr3 is the sole master
+  -- on the app interface (no arbiter); the $4000-$5FFF main-RAM window moved back
+  -- to the always-on bram_byte_bridge below, which freed the BSRAM the DDR3 IP
+  -- FIFOs need.  320x200 8bpp = 64000 bytes, 1 pixel/byte, BL8 = 16-byte bursts.
+  fb_ddr3_i : entity work.vic_fb_ddr3
+    generic map (FB_BASE_WORD => 0, LINE_PIX => 320, NUM_LINES => 200,
+                 APP_ADDR_BITS => 27)
     port map (
       clk_sys   => clk_sys,
       rst_sys_n => reset_n,
+      fb_frame_start => fb_frame_start,
+      fb_line_adv    => fb_line_adv,
+      fb_rdaddr      => fb_rdaddr,
+      fb_rddata      => fb_rddata,
+      cpu_req   => fbw_req,
+      cpu_we    => fbw_we,
+      cpu_addr  => fbw_addr,
+      cpu_din   => fbw_din,
+      cpu_dout  => fbw_dout,
+      cpu_ack   => fbw_ack,
+
+      clk_x1          => ddr_clk_x1,
+      calib_done      => ddr_calib_complete,
+      app_cmd_rdy     => app_cmd_rdy,
+      app_cmd         => app_cmd,
+      app_cmd_en      => app_cmd_en,
+      app_addr        => app_addr27,
+      app_wdata       => app_wdata,
+      app_wdata_mask  => app_wdata_mask,
+      app_wren        => app_wren,
+      app_wdata_end   => app_wdata_end,
+      app_wdata_rdy   => app_wdata_rdy,
+      app_rdata       => app_rdata,
+      app_rdata_valid => app_rdata_valid
+    );
+  end generate;
+
+  -- ── Main-RAM $4000-$5FFF byte backend: ALWAYS on-chip BSRAM ───────────────
+  -- The DDR3 IP is now dedicated to the framebuffer, so the CPU main-RAM window
+  -- always uses the low-power BSRAM bridge (this is what frees the BSRAM the DDR3
+  -- FIFOs need). It is the sole driver of ram_ready and the self-test status.
+  bram_bridge_i : entity work.bram_byte_bridge
+    generic map (BUS_ADDR_BITS => 15, RAM_ADDR_BITS => 13)
+    port map (
+      clk       => clk_sys,
+      reset_n   => reset_n,
       req       => sram_ext_req,
       we        => sram_ext_we,
       addr      => sram_ext_addr,
@@ -890,7 +957,6 @@ begin
       dout      => sram_ext_dout,
       ack       => sram_ext_ack,
       ram_ready => ram_ready,
-
       ram_test_active    => ram_test_active,
       ram_test_done      => ram_test_done,
       ram_test_error     => ram_test_error,
@@ -898,49 +964,11 @@ begin
       ram_test_addr      => ram_test_addr,
       ram_test_fail_addr => ram_test_fail_addr,
       ram_test_expected  => ram_test_expected,
-      ram_test_actual    => ram_test_actual,
-
-      clk_x1              => ddr_clk_x1,
-      init_calib_complete => ddr_calib_complete,
-      dbg_pll_lock        => ddr_pll_lock,
-      app_cmd             => app_cmd,
-      app_cmd_en          => app_cmd_en,
-      app_cmd_rdy         => app_cmd_rdy,
-      app_addr            => app_addr27,
-      app_wren            => app_wren,
-      app_wdata           => app_wdata,
-      app_wdata_end       => app_wdata_end,
-      app_wdata_mask      => app_wdata_mask,
-      app_wdata_rdy       => app_wdata_rdy,
-      app_rdata           => app_rdata,
-      app_rdata_valid     => app_rdata_valid
+      ram_test_actual    => ram_test_actual
     );
-  end generate;
 
-  -- ── Default low-power BSRAM main-RAM backend ─────────────────────────────
-  bram_backend_g : if not USE_DDR3 generate
-    bram_bridge_i : entity work.bram_byte_bridge
-      generic map (BUS_ADDR_BITS => 15, RAM_ADDR_BITS => 13)
-      port map (
-        clk       => clk_sys,
-        reset_n   => reset_n,
-        req       => sram_ext_req,
-        we        => sram_ext_we,
-        addr      => sram_ext_addr,
-        din       => sram_ext_din,
-        dout      => sram_ext_dout,
-        ack       => sram_ext_ack,
-        ram_ready => ram_ready,
-        ram_test_active    => ram_test_active,
-        ram_test_done      => ram_test_done,
-        ram_test_error     => ram_test_error,
-        ram_test_phase     => ram_test_phase,
-        ram_test_addr      => ram_test_addr,
-        ram_test_fail_addr => ram_test_fail_addr,
-        ram_test_expected  => ram_test_expected,
-        ram_test_actual    => ram_test_actual
-      );
-
+  -- ── No-DDR3 fallback: disable the DDR3 device and stub the framebuffer ─────
+  no_ddr_g : if not USE_DDR3 generate
     -- Keep the uninitialised DDR3 device in reset with clocks and termination
     -- disabled. The bidirectional data/strobe pins remain high impedance.
     ddr_addr    <= (others => '0');
@@ -958,10 +986,21 @@ begin
     ddr_dq      <= (others => 'Z');
     ddr_dqs     <= (others => 'Z');
     ddr_dqs_n   <= (others => 'Z');
+    app_addr28  <= (others => '0');
 
-    -- Reuse the existing boot LEDs as generic memory-backend-ready indicators.
+    -- No DDR3 framebuffer: report "calibrated" so boot proceeds, blank the video
+    -- stream, and ack CPU pixel writes one cycle later so a $6000 access to the
+    -- (absent) framebuffer never hangs the CPU.
     ddr_pll_lock       <= ram_ready;
     ddr_calib_complete <= ram_ready;
+    fb_rddata          <= (others => '0');
+    fbw_dout           <= (others => '0');
+    fb_stub_ack : process(clk_sys)
+    begin
+      if rising_edge(clk_sys) then
+        fbw_ack <= fbw_req;
+      end if;
+    end process;
   end generate;
 
   led(0) <= not (boot_done or sd_init_done) when boot_done = '0' else not via_portb(0);

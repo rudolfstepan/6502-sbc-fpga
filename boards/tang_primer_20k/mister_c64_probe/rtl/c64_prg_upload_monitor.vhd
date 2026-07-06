@@ -13,7 +13,11 @@ use ieee.numeric_std.all;
 --                through the same memory port (RAM under ROM/I/O)
 entity c64_prg_upload_monitor is
   generic (
-    ENABLE_DUMP : boolean := false
+    ENABLE_DUMP : boolean := false;
+    -- When true, "G aaaa" parses a hex address and pulses jump_req/jump_addr to
+    -- run an uploaded program there; a bare "G" still just releases the CPU. The
+    -- C64 boards leave this false, so their "G" behaves exactly as before.
+    ENABLE_JUMP : boolean := false
   );
   port (
     clk       : in  std_logic;
@@ -33,7 +37,11 @@ entity c64_prg_upload_monitor is
     mem_addr  : out std_logic_vector(15 downto 0);
     mem_wdata : out std_logic_vector(7 downto 0);
     mem_rdata : in  std_logic_vector(7 downto 0) := (others => '0');
-    mem_ready : in  std_logic
+    mem_ready : in  std_logic;
+
+    -- Optional "run at address" (only with ENABLE_JUMP): 1-clk pulse + target.
+    jump_req  : out std_logic := '0';
+    jump_addr : out std_logic_vector(15 downto 0) := (others => '0')
   );
 end entity;
 
@@ -61,6 +69,7 @@ architecture rtl of c64_prg_upload_monitor is
   signal seen_busy : std_logic := '0';
 
   signal cmd : std_logic_vector(7 downto 0) := (others => '0');
+  signal jump_req_r : std_logic := '0';
   signal addr : unsigned(15 downto 0) := (others => '0');
   signal addr_nibs : integer range 0 to 8 := 0;
   signal hi_nib : std_logic_vector(3 downto 0) := (others => '0');
@@ -98,6 +107,13 @@ architecture rtl of c64_prg_upload_monitor is
   function is_space(c : std_logic_vector(7 downto 0)) return boolean is
   begin
     return c = x"20" or c = x"09" or c = x"0D" or c = x"0A";
+  end function;
+
+  -- End-of-line only (CR/LF), used to tell a bare "G<CR>" (release) from
+  -- "G <addr>" (jump): a plain space after G is a leading separator, not the end.
+  function is_eol(c : std_logic_vector(7 downto 0)) return boolean is
+  begin
+    return c = x"0D" or c = x"0A";
   end function;
 
   function is_hex(c : std_logic_vector(7 downto 0)) return boolean is
@@ -186,6 +202,8 @@ begin
   mem_we <= mem_we_r;
   mem_addr <= std_logic_vector(addr);
   mem_wdata <= write_byte;
+  jump_req <= jump_req_r;
+  jump_addr <= std_logic_vector(addr);
 
   process(clk)
   begin
@@ -199,9 +217,11 @@ begin
         seen_busy <= '0';
         mem_req_r <= '0';
         mem_we_r <= '1';
+        jump_req_r <= '0';
       else
         tx_valid_r <= '0';
         mem_req_r <= '0';
+        jump_req_r <= '0';
         enter_d <= enter_btn;
 
         if wait_uart = '1' then
@@ -285,10 +305,38 @@ begin
                     ret_state <= S_CMD;
                     state <= S_ERROR;
                   end if;
+                elsif ENABLE_JUMP and cmd = asc('G') then
+                  -- G aaaa: collect up to 4 hex nibbles, then jump; a bare
+                  -- "G<CR>" (no nibbles) just releases the CPU like before.
+                  if is_hex(rx_data) and addr_nibs < 4 then
+                    addr <= addr(11 downto 0) & unsigned(hex_nib(rx_data));
+                    addr_nibs <= addr_nibs + 1;
+                  elsif is_eol(rx_data) and addr_nibs = 0 then
+                    cmd <= (others => '0');
+                    state <= S_RELEASE;
+                  elsif is_space(rx_data) and addr_nibs = 0 then
+                    null;   -- leading separator between 'G' and the address
+                  elsif is_space(rx_data) and addr_nibs = 4 then
+                    cmd <= (others => '0');
+                    jump_req_r <= '1';      -- run at addr (mem_addr already = addr)
+                    state <= S_RELEASE;
+                  else
+                    cmd <= (others => '0');
+                    msg <= MSG_ERR;
+                    msg_idx <= 0;
+                    ret_state <= S_CMD;
+                    state <= S_ERROR;
+                  end if;
                 elsif is_space(rx_data) then
                   null;
                 elsif upper(rx_data) = asc('G') then
-                  state <= S_RELEASE;
+                  if ENABLE_JUMP then
+                    cmd <= asc('G');
+                    addr <= (others => '0');
+                    addr_nibs <= 0;
+                  else
+                    state <= S_RELEASE;
+                  end if;
                 elsif upper(rx_data) = asc('L') then
                   cmd <= asc('L');
                   addr <= (others => '0');

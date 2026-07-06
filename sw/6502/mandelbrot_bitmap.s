@@ -1,57 +1,47 @@
 ; ============================================================
-; Mandelbrot Set — 320x200 Bitmap, 16 C64 Colors
-; Standalone split-map ROM: application at $A000, vectors at $FFFA
+; Mandelbrot Set — 320x200, 256 colours (RGB332) from DDR3
 ;
-; 4.12 signed fixed-point arithmetic (range -8.0 .. +7.999)
-; 20 iterations, ~5-8 min on 1 MHz 6502
+; Ported from the old 1bpp hires version to the DDR3 framebuffer:
+;   * $9000 bit 4 = DDR3 320x200 8bpp mode, bits 7:5 = 8 KiB bank (8 banks)
+;   * one colour byte per pixel written to the banked $6000-$7FFF window
+;   * each pixel is coloured by its escape-iteration count (inside = black)
+; The fixed-point escape maths and fpmul are unchanged from the 1bpp version.
 ;
-; Build:
+; Build (split-map ROM, run at $A000):
 ;   ca65 --cpu 65c02 -o mandelbrot_bitmap.o mandelbrot_bitmap.s
 ;   ld65 -C mandelbrot_bitmap.cfg -o ../roms/mandelbrot_bitmap.rom mandelbrot_bitmap.o
-;
 ; Upload:
-;   python tools/upload_monitor_hex.py roms/mandelbrot_bitmap.rom \
-;       --split-rom --port COM15 --baud 115200 --run
+;   python tools/upload_monitor_hex.py roms/mandelbrot_bitmap.rom --split-rom --run
 ; ============================================================
 
-; --- Hardware registers ---
-VIC_MODE    = $9000
+VIC_MODE    = $9000         ; bit4 = DDR3 320x200 8bpp, bits7:5 = 8 KiB bank
+FB_WIN      = $6000         ; banked framebuffer window ($6000-$7FFF)
 UART_DATA   = $8810
 UART_SR     = $8811
 UART_RDRF   = $08
 
-; --- Memory map ---
-BMP_BASE    = $6000         ; bitmap RAM (8 KB, first 8000 bytes visible)
-COL_BASE    = $8400         ; color RAM (1000 bytes)
-
-; --- Mandelbrot constants (4.12 fixed-point) ---
+; Fixed-point 4.12 view: real [-2.0, +1.0), imag [-1.2, +1.2)
 X_LEFT      = $E000         ; -2.0
 CI_START    = $ECCD         ; -1.2
-SX_STEP     = 38            ; 3.0/320 * 4096 ≈ 38
-SY_STEP     = 49            ; 2.4/200 * 4096 ≈ 49
+SX_STEP     = 38            ; 3.0/320 * 4096 ~ 38
+SY_STEP     = 49            ; 2.4/200 * 4096 ~ 49
 ESCAPE_HI   = $40           ; 4.0 in 4.12 = $4000, check high byte >= $40
 MAX_ITER    = 20
 
 ; ============================================================
 .segment "ZEROPAGE"
-
 ZR:         .res 2          ; z real
 ZI:         .res 2          ; z imaginary
 CR:         .res 2          ; c real
 CI:         .res 2          ; c imaginary
-ZR2:        .res 2          ; zr² (positive)
-ZI2:        .res 2          ; zi² (positive)
-TMP:        .res 2          ; scratch
-ITER:       .res 1          ; iteration counter
-BITS:       .res 1          ; accumulated 8-pixel byte
-LASTCOL:    .res 1          ; last escape color in current cell
+ZR2:        .res 2          ; zr^2 (positive)
+ZI2:        .res 2          ; zi^2 (positive)
+TMP:        .res 2          ; scratch (TMP+1 used by the escape sum)
+ITER:       .res 1          ; iteration counter (counts down from MAX_ITER)
 PY:         .res 1          ; pixel Y (0-199)
-PXB:        .res 1          ; byte X (0-39)
-BMPLO:      .res 1          ; bitmap row pointer low
-BMPHI:      .res 1          ; bitmap row pointer high
-COLLO:      .res 1          ; color row pointer low
-COLHI:      .res 1          ; color row pointer high
-YCELL:      .res 1          ; Y within color cell (0-7)
+PX:         .res 2          ; pixel X (0-319, 16-bit)
+PTR:        .res 2          ; framebuffer window pointer
+BANK:       .res 1          ; current 8 KiB bank 0..7
 SIGN:       .res 1          ; multiply sign flag
 MUL_A:      .res 2          ; multiply operand A (destroyed)
 MUL_B:      .res 2          ; multiply operand B (multiplicand)
@@ -66,61 +56,23 @@ RESET:
     ldx #$FF
     txs
 
-    ; --- Enable bitmap mode ---
-    lda #$01
+    ; --- Enable DDR3 320x200 8bpp mode, bank 0, pointer at $6000 ---
+    lda #$10
     sta VIC_MODE
-
-    ; --- Clear bitmap RAM (8000 bytes) ---
-    lda #<BMP_BASE
-    sta TMP
-    lda #>BMP_BASE
-    sta TMP+1
+    lda #<FB_WIN
+    sta PTR
+    lda #>FB_WIN
+    sta PTR+1
     lda #0
-    tay
-    ldx #32                 ; 32 pages = 8192 bytes (covers 8000)
-clr_bmp:
-    sta (TMP),y
-    iny
-    bne clr_bmp
-    inc TMP+1
-    dex
-    bne clr_bmp
+    sta BANK
 
-    ; --- Fill color RAM with white-on-black ($01) ---
-    lda #<COL_BASE
-    sta TMP
-    lda #>COL_BASE
-    sta TMP+1
-    lda #$01                ; fg=white, bg=black
-    ldy #0
-    ldx #4
-clr_col:
-    sta (TMP),y
-    iny
-    bne clr_col
-    inc TMP+1
-    dex
-    bne clr_col
-
-    ; --- Initialize outer loop ---
+    ; --- Initialise outer loop ---
     lda #<CI_START
     sta CI
     lda #>CI_START
     sta CI+1
-
-    lda #<BMP_BASE
-    sta BMPLO
-    lda #>BMP_BASE
-    sta BMPHI
-
-    lda #<COL_BASE
-    sta COLLO
-    lda #>COL_BASE
-    sta COLHI
-
     lda #0
     sta PY
-    sta YCELL
 
 ; ============================================================
 ; Main loop: for PY = 0 to 199
@@ -131,22 +83,14 @@ row_loop:
     sta CR
     lda #>X_LEFT
     sta CR+1
-
+    ; PX = 0
     lda #0
-    sta PXB
+    sta PX
+    sta PX+1
 
-; --- for PXB = 0 to 39 (byte columns) ---
-byte_loop:
-    lda #0
-    sta BITS
-    sta LASTCOL
-
-    ; --- for 8 pixels within this byte ---
-    ldx #0                  ; pixel index 0-7
-pixel_loop:
-    stx TMP                 ; save pixel index
-
-    ; --- Mandelbrot iteration: z = 0, iterate z = z² + c ---
+; --- for PX = 0 to 319 ---
+px_loop:
+    ; --- Mandelbrot iteration: z = 0, iterate z = z^2 + c ---
     lda #0
     sta ZR
     sta ZR+1
@@ -168,11 +112,16 @@ iter_loop:
     sta ZR2
     lda MUL_R+2
     sta ZR2+1
-    ; Check overflow: if ZR2 >= 4.0, escape
+    ; Check overflow: if ZR2 >= 4.0, escape. These branches are too far from
+    ; the escaped handler for a relative branch, so branch over an absolute jmp.
     lda ZR2+1
-    bmi escaped             ; negative = overflow past 8.0
+    bpl :+
+    jmp escaped             ; negative = overflow past 8.0
+:
     cmp #ESCAPE_HI
-    bcs escaped
+    bcc :+
+    jmp escaped
+:
 
     ; --- Compute ZI2 = ZI * ZI ---
     lda ZI
@@ -187,15 +136,19 @@ iter_loop:
     lda MUL_R+2
     sta ZI2+1
     lda ZI2+1
-    bmi escaped
+    bpl :+
+    jmp escaped
+:
     cmp #ESCAPE_HI
-    bcs escaped
+    bcc :+
+    jmp escaped
+:
 
     ; --- Check ZR2 + ZI2 > 4.0 ---
     clc
     lda ZR2
     adc ZI2
-    sta TMP+1               ; temp low (reuse TMP+1, TMP has pixel index)
+    sta TMP+1               ; temp low
     lda ZR2+1
     adc ZI2+1
     bcs escaped             ; carry = overflow
@@ -245,28 +198,46 @@ iter_loop:
     dec ITER
     beq no_escape
     jmp iter_loop
-no_escape:
 
-    ; Did not escape — pixel stays off
-    jmp next_pixel
+no_escape:
+    ; Inside the set: black
+    lda #$00
+    jmp plot
 
 escaped:
-    ; --- Set pixel bit ---
-    ldx TMP                 ; restore pixel index (0-7)
-    lda mask_table,x
-    ora BITS
-    sta BITS
-
-    ; --- Set color from iteration count ---
+    ; Colour from iteration count: A = iterations used (0..MAX_ITER-1)
     lda #MAX_ITER
     sec
-    sbc ITER                ; A = iterations used (1..MAX_ITER)
+    sbc ITER
     tax
-    lda color_table,x       ; look up palette color
-    sta LASTCOL
+    lda color_table,x
 
-next_pixel:
-    ; --- Advance CR by SX ---
+plot:
+    ; A = pixel colour byte; write it to the framebuffer window
+    ldy #0
+    sta (PTR),y
+
+    ; advance the window pointer; hop to the next bank when it passes $7FFF
+    inc PTR
+    bne no_carry
+    inc PTR+1
+    lda PTR+1
+    cmp #$80
+    bne no_carry
+    lda #>FB_WIN
+    sta PTR+1
+    inc BANK
+    lda BANK
+    asl a
+    asl a
+    asl a
+    asl a
+    asl a                   ; bank << 5 -> bits 7:5
+    ora #$10                ; keep bit 4 (DDR3 mode)
+    sta VIC_MODE
+no_carry:
+
+    ; --- Advance CR by SX_STEP ---
     clc
     lda CR
     adc #<SX_STEP
@@ -275,60 +246,22 @@ next_pixel:
     adc #>SX_STEP
     sta CR+1
 
-    ldx TMP                 ; restore pixel index
-    inx
-    cpx #8
-    bcs :+
-    jmp pixel_loop
-:
+    ; --- PX++ ; loop while PX < 320 ---
+    inc PX
+    bne px_chk
+    inc PX+1
+px_chk:
+    lda PX+1
+    beq px_more             ; PX < 256 -> keep going
+    lda PX                  ; PX high == 1: compare low to 320 & $FF = $40
+    cmp #<320
+    bcc px_more
+    jmp row_done            ; PX == 320 -> row finished
+px_more:
+    jmp px_loop
 
-    ; --- Store 8-pixel byte to bitmap RAM ---
-    lda BITS
-    beq skip_bmp            ; all zeros, skip write
-    ldy PXB
-    sta (BMPLO),y
-skip_bmp:
-
-    ; --- Store color to color RAM ---
-    lda LASTCOL
-    beq skip_col
-    ldy PXB
-    sta (COLLO),y
-skip_col:
-
-    ; --- Next byte column ---
-    inc PXB
-    lda PXB
-    cmp #40
-    bcs :+
-    jmp byte_loop
-:
-
-    ; --- Advance bitmap pointer by 40 ---
-    clc
-    lda BMPLO
-    adc #40
-    sta BMPLO
-    bcc :+
-    inc BMPHI
-:
-
-    ; --- Advance color pointer every 8 rows ---
-    inc YCELL
-    lda YCELL
-    cmp #8
-    bcc :+
-    lda #0
-    sta YCELL
-    clc
-    lda COLLO
-    adc #40
-    sta COLLO
-    bcc :+
-    inc COLHI
-:
-
-    ; --- Advance CI by SY ---
+row_done:
+    ; --- Advance CI by SY_STEP ---
     clc
     lda CI
     adc #<SY_STEP
@@ -341,22 +274,18 @@ skip_col:
     inc PY
     lda PY
     cmp #200
-    bcs :+
+    bcs done
     jmp row_loop
-:
 
-    ; ============================================================
-    ; Done — wait for UART key, then text mode
-    ; ============================================================
+done:
+    ; wait for a UART key, then back to text mode
 wait_key:
     lda UART_SR
     and #UART_RDRF
     beq wait_key
-    lda UART_DATA           ; consume key
-
+    lda UART_DATA
     lda #$00
-    sta VIC_MODE            ; back to text mode
-
+    sta VIC_MODE
 halt:
     jmp halt
 
@@ -386,8 +315,7 @@ a_pos:
     jsr neg_b
 b_pos:
 
-    ; --- Unsigned 16x16 → 32 multiply (shift-add, product shifts right) ---
-    ; Multiplier copy in MUL_M shifts out 1 bit/iter; result in MUL_R+0..+3.
+    ; --- Unsigned 16x16 -> 32 multiply (shift-add, product shifts right) ---
     lda MUL_A
     sta MUL_M
     lda MUL_A+1
@@ -472,34 +400,30 @@ neg_b:
 ; ============================================================
 .segment "RODATA"
 
-; Pixel mask table: bit 7 = pixel 0 (leftmost), bit 0 = pixel 7
-mask_table:
-    .byte $80, $40, $20, $10, $08, $04, $02, $01
-
-; Color gradient: iteration count → C64 palette index
-; Index 0 unused, 1-20 = blue→cyan→green→yellow→red→purple
+; Escape-iteration colour gradient in RGB332 (RRRGGGBB).
+; Index = iterations used (0 = escaped immediately/far ... 19 = near the set).
+; Points that never escape are drawn black by the code above, not from here.
 color_table:
-    .byte 0                 ; 0: unused
-    .byte 6                 ; 1: blue
-    .byte 6                 ; 2: blue
-    .byte 14                ; 3: light blue
-    .byte 14                ; 4: light blue
-    .byte 3                 ; 5: cyan
-    .byte 3                 ; 6: cyan
-    .byte 13                ; 7: light green
-    .byte 5                 ; 8: green
-    .byte 7                 ; 9: yellow
-    .byte 7                 ; 10: yellow
-    .byte 10                ; 11: light red
-    .byte 2                 ; 12: red
-    .byte 8                 ; 13: orange
-    .byte 9                 ; 14: brown
-    .byte 4                 ; 15: purple
-    .byte 12                ; 16: gray
-    .byte 15                ; 17: light gray
-    .byte 1                 ; 18: white
-    .byte 11                ; 19: dark gray
-    .byte 11                ; 20: dark gray
+    .byte $03               ; 0  blue (far)
+    .byte $07               ; 1
+    .byte $0F               ; 2  cyan
+    .byte $1F               ; 3  bright cyan
+    .byte $1E               ; 4
+    .byte $1C               ; 5  green
+    .byte $3C               ; 6
+    .byte $5C               ; 7
+    .byte $7C               ; 8
+    .byte $BC               ; 9
+    .byte $FC               ; 10 yellow
+    .byte $F8               ; 11
+    .byte $F4               ; 12 orange
+    .byte $EC               ; 13
+    .byte $E4               ; 14
+    .byte $E0               ; 15 red
+    .byte $E3               ; 16 magenta
+    .byte $E7               ; 17
+    .byte $EB               ; 18
+    .byte $FF               ; 19 white (near the set)
 
 ; ============================================================
 .segment "VECTORS"

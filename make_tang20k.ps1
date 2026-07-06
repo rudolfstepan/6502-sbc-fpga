@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 
 $ScriptDir   = $PSScriptRoot
 $BoardDir    = Join-Path $ScriptDir 'boards\tang_primer_20k'
-$ProjectDir  = Join-Path $BoardDir  'project'
+$ProjectDir  = Join-Path $BoardDir  'sbc\project'
 $Bitstream   = Join-Path $ProjectDir 'impl\pnr\tang_sbc.fs'
 $DeviceCfg   = Join-Path $ProjectDir 'impl\pnr\device.cfg'
 $DeviceCfgText = if (Test-Path $DeviceCfg) {

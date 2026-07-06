@@ -59,6 +59,22 @@ entity sbc_t65_boot_monitor_top is
     sram_ext_dout : in  data_t := (others => '0');      -- read byte (held by bridge)
     sram_ext_ack  : in  std_logic := '0';               -- 1-clk pulse: access complete
 
+    -- DDR3 framebuffer (vic_fb_ddr3 lives at the board top, next to the DDR3 IP).
+    -- CPU pixel-byte port uses the SAME req/ack contract as sram_ext: the CPU is
+    -- held (cpu_rdy='0') for the whole access; payload latched at fbw_req.
+    fbw_req   : out std_logic;                           -- 1-clk pulse: start access
+    fbw_we    : out std_logic;                           -- 1=write pixel, 0=read
+    fbw_addr  : out std_logic_vector(16 downto 0);       -- pixel index (latched)
+    fbw_din   : out data_t;                              -- write byte (latched)
+    fbw_dout  : in  data_t := (others => '0');           -- read byte (held)
+    fbw_ack   : in  std_logic := '0';                    -- 1-clk pulse: complete
+    -- Video streaming port: drives vic_fb_ddr3's double-buffer prefetch and reads
+    -- the current scanline's pixels back for display.
+    fb_frame_start : out std_logic;                      -- 1-clk pulse, frame top
+    fb_line_adv    : out std_logic;                      -- 1-clk pulse per source line
+    fb_rdaddr      : out std_logic_vector(9 downto 0);   -- (line mod 2)*320 + col
+    fb_rddata      : in  std_logic_vector(7 downto 0) := (others => '0');
+
     -- PT8211 audio DAC (I2S-style serial output)
     dac_bck     : out std_logic;
     dac_ws      : out std_logic;
@@ -231,21 +247,32 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vic2_dout : data_t;
   signal vic_raster : std_logic_vector(9 downto 0);
   signal vic_fetch_bitmap : std_logic;
-  signal bitmap_dout      : data_t;
-  -- 16-bit framebuffer address (fb_ram is 38400 bytes for 320x240 4bpp). Old
-  -- bitmap modes use the low 16 KiB; the 320x240 mode banks via vic_mode_reg(7:5).
-  signal bitmap_addr      : std_logic_vector(15 downto 0);
-  signal bitmap_we        : std_logic;
-  signal bitmap_din_mux   : data_t;
-  signal bitmap_cpu_we    : std_logic;
-  signal bitmap_wr_pending : std_logic := '0';
-  signal bitmap_wr_addr   : std_logic_vector(15 downto 0) := (others => '0');
-  -- CPU/monitor bank into the framebuffer: 320x240 (mode bit 4) uses 3 bank bits
-  -- (vic_mode_reg(7:5)); legacy bitmap modes keep the single bank bit (bit 2).
+  -- Framebuffer read byte (latched from the DDR3 controller on a read/monitor
+  -- completion). Consumed by the CPU read mux and the monitor peek path.
+  signal bitmap_dout      : data_t := (others => '0');
+  -- CPU/monitor bank into the framebuffer: the DDR3 320x200 mode (mode bit 4)
+  -- uses 3 bank bits (vic_mode_reg(7:5)) -> 8x 8 KiB = 64 KiB >= 64000 pixels.
   signal bmp_bank         : std_logic_vector(2 downto 0);
-  signal bitmap_wr_data   : data_t := (others => '0');
   signal vram_data_sel    : std_logic := '0';
   signal vram_data_mux    : data_t;
+
+  -- DDR3 framebuffer CPU byte port controller (mirrors sram_acc_ctrl): a CPU
+  -- write is captured into a one-deep latch and drained with priority; CPU reads
+  -- and monitor peeks issue a request and complete on fbw_ack.
+  signal fbw_busy         : std_logic := '0';
+  signal fbw_complete     : std_logic := '0';
+  signal fbw_serving_mon  : std_logic := '0';
+  signal fbw_serving_write : std_logic := '0';
+  signal fbw_wr_pending   : std_logic := '0';
+  signal fbw_wr_addr      : std_logic_vector(16 downto 0) := (others => '0');
+  signal fbw_wr_data      : data_t := (others => '0');
+  signal fbw_rd_addr      : std_logic_vector(16 downto 0) := (others => '0');
+  signal fbw_stall        : std_logic;
+  signal fb_rd_acc        : std_logic;
+  signal fb_wr_strobe     : std_logic;
+  signal mon_fb_acc       : std_logic;
+  signal fbw_cpu_pix      : std_logic_vector(16 downto 0);
+  signal fbw_mon_pix      : std_logic_vector(16 downto 0);
 
   signal char_addr   : std_logic_vector(9 downto 0);
   signal char_glyph_hi : std_logic;
@@ -331,7 +358,7 @@ begin
                 else '0';
 
   cpu_rdy    <= not vic_stealing and not vic_stealing_d and
-                not vram_wr_pending and not bitmap_wr_pending and not monitor_hold
+                not vram_wr_pending and not fbw_stall and not monitor_hold
                 and not sram_stall;
 
   sram_dout  <= sram_ext_dout;
@@ -413,47 +440,112 @@ begin
                  '1' when vram_wr_pending = '1' and vic_stealing = '0' else
                  '0' when vic_stealing = '1' else vram_we;
 
-  -- Bitmap RAM bus mux with deferred-write latch (mirrors VRAM mechanism):
-  -- a CPU bitmap write that collides with a VIC steal is held in
-  -- bitmap_wr_* and committed on the next non-steal cycle. The CPU is kept
-  -- stalled via cpu_rdy until the deferred write completes, so no POKE is lost.
-  bitmap_cpu_we <= cpu_bus_we when dev_sel = DEV_VIC_BMP else '0';
-
-  -- 320x240 mode (bit 4): 3 bank bits (7:5); legacy modes: single bank bit (2).
+  -- ── DDR3 framebuffer CPU byte port ($6000-$7FFF window) ───────────────────
+  -- The framebuffer lives in DDR3 (vic_fb_ddr3 at the board top). The CPU reaches
+  -- it one pixel byte at a time through this req/ack controller, banked exactly
+  -- like the old fb_ram window: mode bit 4 selects the 3-bank (7:5) 64 KiB map,
+  -- covering the 64000-byte 320x200 8bpp frame.
   bmp_bank <= vic_mode_reg(7 downto 5) when vic_mode_reg(4) = '1'
               else "00" & vic_mode_reg(2);
 
-  bitmap_addr <= bmp_bank &
-                 std_logic_vector(resize(unsigned(mon_addr_lat) - ADDR_VIC_BMP_BASE, 13))
-                 when monitor_hold = '1' and
-                   (mon_mem_state = M_BITMAP_RD_WAIT or mon_mem_state = M_BITMAP_RD_READY or
-                    mon_mem_state = M_BITMAP_WR_WAIT) else
-                 vic_addr(15 downto 0)
-                 when vic_stealing = '1' and vic_fetch_bitmap = '1' else
-                 bitmap_wr_addr when bitmap_wr_pending = '1' and vic_stealing = '0' else
-                 bmp_bank &
+  -- 17-bit pixel index = "0" & 3 bank bits & 13-bit offset into the $6000 window.
+  fbw_cpu_pix <= "0" & bmp_bank &
                  std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
-  bitmap_we   <= '1' when monitor_hold = '1' and mon_mem_state = M_BITMAP_WR_WAIT and mon_we_lat = '1' else
-                 '1' when bitmap_wr_pending = '1' and vic_stealing = '0' else
-                 '0' when vic_stealing = '1' else bitmap_cpu_we;
-  bitmap_din_mux <= mon_wdata_lat when monitor_hold = '1' and mon_mem_state = M_BITMAP_WR_WAIT else
-                    bitmap_wr_data when bitmap_wr_pending = '1' and vic_stealing = '0'
-                    else cpu_dout;
+  fbw_mon_pix <= "0" & bmp_bank &
+                 std_logic_vector(resize(unsigned(mon_addr_lat) - ADDR_VIC_BMP_BASE, 13));
 
-  process(clk)
+  -- Access classification (mirrors the sram_ext $4000-$5FFF byte port).
+  fb_rd_acc    <= '1' when monitor_hold = '0' and dev_sel = DEV_VIC_BMP and cpu_we = '0' else '0';
+  fb_wr_strobe <= '1' when monitor_hold = '0' and cpu_bus_we = '1' and dev_sel = DEV_VIC_BMP else '0';
+  mon_fb_acc   <= '1' when monitor_hold = '1' and
+                          (mon_mem_state = M_BITMAP_RD_WAIT or mon_mem_state = M_BITMAP_WR_WAIT) else '0';
+
+  -- Stall the CPU while its framebuffer read is outstanding, a write is queued or
+  -- draining, or the controller is busy with any op.
+  fbw_stall <= '1' when (fb_rd_acc = '1' and fbw_complete = '0')
+                     or fbw_wr_pending = '1'
+                     or fbw_busy = '1'
+               else '0';
+
+  fbw_acc_ctrl : process(clk)
   begin
     if rising_edge(clk) then
-      if cpu_reset_n = '0' or monitor_hold = '1' then
-        bitmap_wr_pending <= '0';
-        bitmap_wr_addr    <= (others => '0');
-        bitmap_wr_data    <= (others => '0');
-      elsif bitmap_wr_pending = '1' and vic_stealing = '0' then
-        bitmap_wr_pending <= '0';
-      elsif bitmap_cpu_we = '1' and vic_stealing = '1' then
-        bitmap_wr_pending <= '1';
-        bitmap_wr_addr    <= bmp_bank &
-                             std_logic_vector(resize(unsigned(cpu_addr) - ADDR_VIC_BMP_BASE, 13));
-        bitmap_wr_data    <= cpu_dout;
+      if reset_n = '0' then
+        fbw_busy          <= '0';
+        fbw_complete      <= '0';
+        fbw_serving_mon   <= '0';
+        fbw_serving_write <= '0';
+        fbw_req           <= '0';
+        fbw_we            <= '0';
+        fbw_addr          <= (others => '0');
+        fbw_din           <= (others => '0');
+        fbw_rd_addr       <= (others => '0');
+        fbw_wr_pending    <= '0';
+        fbw_wr_addr       <= (others => '0');
+        fbw_wr_data       <= (others => '0');
+        bitmap_dout       <= (others => '0');
+      else
+        fbw_req <= '0';
+
+        -- Capture a CPU pixel write the moment its strobe fires.
+        if fb_wr_strobe = '1' then
+          fbw_wr_pending <= '1';
+          fbw_wr_addr    <= fbw_cpu_pix;
+          fbw_wr_data    <= cpu_dout;
+        end if;
+
+        if fbw_busy = '0' then
+          if fbw_complete = '0' then
+            if fbw_wr_pending = '1' then
+              -- drain queued write first (priority)
+              fbw_req           <= '1';
+              fbw_we            <= '1';
+              fbw_addr          <= fbw_wr_addr;
+              fbw_din           <= fbw_wr_data;
+              fbw_busy          <= '1';
+              fbw_serving_mon   <= '0';
+              fbw_serving_write <= '1';
+            elsif fb_rd_acc = '1' then
+              fbw_req           <= '1';
+              fbw_we            <= '0';
+              fbw_addr          <= fbw_cpu_pix;
+              fbw_rd_addr       <= fbw_cpu_pix;
+              fbw_busy          <= '1';
+              fbw_serving_mon   <= '0';
+              fbw_serving_write <= '0';
+            elsif mon_fb_acc = '1' then
+              fbw_req           <= '1';
+              fbw_we            <= mon_we_lat;
+              fbw_addr          <= fbw_mon_pix;
+              fbw_din           <= mon_wdata_lat;
+              fbw_busy          <= '1';
+              fbw_serving_mon   <= '1';
+              fbw_serving_write <= '0';
+            end if;
+          end if;
+        else
+          if fbw_ack = '1' then
+            fbw_busy    <= '0';
+            bitmap_dout <= fbw_dout;   -- latch read byte (ignored for writes)
+            if fbw_serving_write = '1' then
+              fbw_wr_pending <= '0';
+            else
+              fbw_complete <= '1';
+            end if;
+          end if;
+        end if;
+
+        -- Release completion once the requester has moved on.
+        if fbw_complete = '1' then
+          if fbw_serving_mon = '1' then
+            if mon_fb_acc = '0' then
+              fbw_complete    <= '0';
+              fbw_serving_mon <= '0';
+            end if;
+          elsif fb_rd_acc = '0' or fbw_cpu_pix /= fbw_rd_addr then
+            fbw_complete <= '0';
+          end if;
+        end if;
       end if;
     end if;
   end process;
@@ -793,12 +885,11 @@ begin
     port map (clk => clk, we => vram_we_mux,
               addr => vram_addr_mux, din => vram_din_mux, dout => vram_dout);
 
-  -- 320x240 4bpp needs 38400 bytes; fb_ram is sized to exactly that so Gowin
-  -- packs ~19 BSRAM blocks instead of rounding a 16-bit address up to 64 KiB.
-  bitmap_ram_i : entity work.fb_ram
-    generic map (ADDR_WIDTH => 16, DEPTH => 38400)
-    port map (clk => clk, we => bitmap_we,
-              addr => bitmap_addr, din => bitmap_din_mux, dout => bitmap_dout);
+  -- The framebuffer no longer lives in BSRAM: it moved to DDR3 (vic_fb_ddr3 at
+  -- the board top), which frees the ~19 BSRAM blocks the old 38400-byte fb_ram
+  -- consumed so the DDR3 IP's own FIFOs can take BSRAM instead of spilling to
+  -- registers. The CPU reaches the frame through the fbw_* req/ack port above;
+  -- the VIC streams pixels through fb_frame_start/fb_line_adv/fb_rdaddr/fb_rddata.
 
   via_i : entity work.via6522
     port map (
@@ -840,21 +931,28 @@ begin
   sd2_sec_write_addr <= (others => '0');
   sd2_sec_write_data <= (others => '0');
 
-  disk_i : entity work.d64_subsystem
-    port map (
-      clk                    => clk,
-      reset_n                => cpu_reset_n,
-      cs                     => disk_cs,
-      we                     => disk_we,
-      offset                 => std_logic_vector(resize(unsigned(cpu_addr) - ADDR_DISK_BASE, 4)),
-      din                    => cpu_dout,
-      dout                   => disk_dout,
-      sd_sec_read            => sd2_sec_read,
-      sd_sec_read_addr       => sd2_sec_read_addr,
-      sd_sec_read_data       => sd2_sec_read_data,
-      sd_sec_read_data_valid => sd2_sec_read_data_valid,
-      sd_sec_read_end        => sd2_sec_read_end
-    );
+  -- SD2 D64 GoDrive DISABLED for a bring-up test: unwiring d64_subsystem takes it
+  -- and fat32_reader (the -215 ns setup path) out of the netlist. DEV_DISK reads
+  -- return $00 and the SD2 read-request lines are held inactive. Uncomment to
+  -- restore, and remove the three tie-offs just below.
+  disk_dout         <= x"00";
+  sd2_sec_read      <= '0';
+  sd2_sec_read_addr <= (others => '0');
+--  disk_i : entity work.d64_subsystem
+--    port map (
+--      clk                    => clk,
+--      reset_n                => cpu_reset_n,
+--      cs                     => disk_cs,
+--      we                     => disk_we,
+--      offset                 => std_logic_vector(resize(unsigned(cpu_addr) - ADDR_DISK_BASE, 4)),
+--      din                    => cpu_dout,
+--      dout                   => disk_dout,
+--      sd_sec_read            => sd2_sec_read,
+--      sd_sec_read_addr       => sd2_sec_read_addr,
+--      sd_sec_read_data       => sd2_sec_read_data,
+--      sd_sec_read_data_valid => sd2_sec_read_data_valid,
+--      sd_sec_read_end        => sd2_sec_read_end
+--    );
 
   -- ── Sound: 4-voice synth (ADSR + 5 waveforms) + PT8211 DAC ────────────
   -- The Tang build uses the native SID core as its sole synthesizer. Keeping
@@ -1052,12 +1150,17 @@ begin
           when M_VRAM_WR_WAIT =>
             mon_mem_state <= M_READY;
           when M_BITMAP_RD_WAIT =>
-            mon_mem_state <= M_BITMAP_RD_READY;
+            -- DDR3-backed: hold until the framebuffer controller completes.
+            if fbw_complete = '1' then
+              mon_mem_state <= M_BITMAP_RD_READY;
+            end if;
           when M_BITMAP_RD_READY =>
-            mon_rdata_reg <= bitmap_dout;
+            mon_rdata_reg <= bitmap_dout;  -- latched by fbw_acc_ctrl on ack
             mon_mem_state <= M_READY;
           when M_BITMAP_WR_WAIT =>
-            mon_mem_state <= M_READY;
+            if fbw_complete = '1' then
+              mon_mem_state <= M_READY;
+            end if;
           when M_VIA_WAIT =>
             mon_mem_state <= M_VIA_READY;
           when M_VIA_READY =>
@@ -1133,7 +1236,10 @@ begin
       bitmap_mode      => vic_mode_reg(0),
       color256_mode    => vic_mode_reg(1),
       color64_mode     => vic_mode_reg(3),
-      color16_mode     => vic_mode_reg(4),
+      -- Mode bit 4 now selects the DDR3 320x200 8bpp framebuffer (was the
+      -- BSRAM-backed 320x240 4bpp color16 mode, retired with fb_ram).
+      color16_mode     => '0',
+      fb_ddr3_mode     => vic_mode_reg(4),
       cell_bg_mode     => vic_text_attr(0),
       border_color     => vic2_regs(16#20#)(3 downto 0),
       bg_color         => vic2_regs(16#21#)(3 downto 0),
@@ -1144,7 +1250,12 @@ begin
       vga_de       => vga_de,
       vga_r        => vga_r,
       vga_g        => vga_g,
-      vga_b        => vga_b
+      vga_b        => vga_b,
+      -- DDR3 framebuffer streaming to/from vic_fb_ddr3 (at the board top).
+      fb_frame_start => fb_frame_start,
+      fb_line_adv    => fb_line_adv,
+      fb_rdaddr      => fb_rdaddr,
+      fb_rddata      => fb_rddata
     );
 
   dbg_cpu_addr <= cpu_addr;

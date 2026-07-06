@@ -1,84 +1,65 @@
 ; ============================================================
-; Mandelbrot Set — 180x120 packed bitmap, 64 RGB222 colors
-; Coprocessor edition: uses the memory-mapped math coprocessor
-; ($88B0) for the signed fixed-point multiply.
+; Mandelbrot Set — 320x200, 256 colours (RGB332) from DDR3
+; Coprocessor edition: the hardware math coprocessor ($88B0) does the signed
+; 8.24 fixed-point multiply (four writes + four reads instead of shift-add fpmul).
 ;
-; 8.24 signed fixed-point arithmetic (range -128.0 .. +127.999..)
-; The software fpmul (shift-add) is replaced by four register
-; writes + four reads to the hardware DSP multiplier — and 8.24
-; gives a far sharper image than the old 4.12.
+; Ported from the old 180x120 packed-RGB222 (color64) version to the DDR3
+; framebuffer: $9000 bit 4 = DDR3 320x200 8bpp mode, bits 7:5 = 8 KiB bank; one
+; RGB332 colour byte per pixel into the banked $6000-$7FFF window. The 8.24
+; escape maths and the MUL32 coprocessor macro are unchanged.
 ;
 ; Build (split-map application at $A000, vectors at $FFFA):
 ;   ca65 --cpu 65c02 -o mandelbrot_copro.o mandelbrot_copro.s
-;   ld65 -C mandelbrot_bitmap.cfg -o ../roms/mandelbrot_copro.bin mandelbrot_copro.o
-;
+;   ld65 -C mandelbrot_bitmap.cfg -o ../../roms/6502/mandelbrot_copro.bin mandelbrot_copro.o
 ; Upload:
-;   python tools/upload_monitor_hex.py roms/mandelbrot_copro.bin \
-;       --split-rom --port COM15 --baud 115200 --run
+;   python tools/upload_monitor_hex.py roms/6502/mandelbrot_copro.bin --split-rom --run
 ; ============================================================
 
 ; --- Hardware registers ---
-VIC_MODE    = $9000
+VIC_MODE    = $9000         ; bit4 = DDR3 320x200 8bpp, bits7:5 = 8 KiB bank
+FB_WIN      = $6000         ; banked framebuffer window ($6000-$7FFF)
 UART_DATA   = $8810
 UART_SR     = $8811
 UART_RDRF   = $08
 
 ; --- Math coprocessor ($88B0..$88BF) ---
-;   +0..3  W operand A (32-bit signed)   R raw product byte 0..3
-;   +4..7  W operand B                   R raw product byte 4..7
-;   +8..B  R result = (A*B) >> SHIFT (8.24)
-;   +C     W SHIFT amount (default 24)
+;   +0..3  W operand A (32-bit signed)   +4..7 W operand B
+;   +8..B  R result = (A*B) >> SHIFT (8.24)     +C  W SHIFT (default 24)
 MUL         = $88B0
 MUL_A       = MUL+0
 MUL_B       = MUL+4
 MUL_RES     = MUL+8
 MUL_SHIFT   = MUL+12
 
-; --- Memory map ---
-BMP_BASE    = $6000         ; 8 KB CPU window into 16 KB framebuffer
-MODE_RGB0   = $09           ; bitmap + packed RGB222, framebuffer bank 0
-MODE_RGB1   = $0D           ; bitmap + packed RGB222, framebuffer bank 1
-
-; --- Mandelbrot constants (8.24 fixed-point) ---
+; --- Mandelbrot constants (8.24 fixed-point), sampled at 320x200 ---
 ; View: real -2.625..+1.125 (width 3.75), imag -1.25..+1.25 (height 2.5).
-; Zoomed out from the old -2.1..+0.9 / -1.0..+1.0: the old imag range clipped
-; the set's top/bottom bulbs (which reach ~+/-1.13). Now the whole set fits with
-; margin. Both axes share a 1/48 pixel step, so pixels stay square
-; (180*1/48 = 3.75 wide, 120*1/48 = 2.5 tall).
 X_LEFT      = $FD600000     ; -2.625 in 8.24
-CI_START    = $FEC00000     ; -1.25 in 8.24
-SX_STEP     = $00055555     ; 1/48 * 2^24 ~= 349525  (3.75/180 = 2.5/120)
-SY_STEP     = $00055555     ; 1/48 * 2^24 ~= 349525
+CI_START    = $FEC00000     ; -1.25  in 8.24
+SX_STEP     = $00030000     ; 3.75/320 * 2^24 = 196608
+SY_STEP     = $00033333     ; 2.5/200  * 2^24 = 209715
 ESCAPE_INT  = $04           ; |z|^2 >= 4.0 -> integer byte (bits 24-31) >= 4
-MAX_ITER    = 32            ; more contour detail than the old 20
+MAX_ITER    = 32
 
 ; ============================================================
 .segment "ZEROPAGE"
-
-ZR:         .res 4          ; z real        (8.24)
-ZI:         .res 4          ; z imaginary
-CR:         .res 4          ; c real
-CI:         .res 4          ; c imaginary
-ZR2:        .res 4          ; zr^2
-ZI2:        .res 4          ; zi^2
-PROD:       .res 4          ; scratch product (zr*zi)
-SUM:        .res 4          ; zr^2 + zi^2
-ITER:       .res 1          ; iteration counter
-PIXCOLOR:   .res 1          ; RGB222 color for current pixel
-PACKBYTE:   .res 1          ; partial 4-pixel / 3-byte group
-PACKPOS:    .res 1          ; pixel position within packed group (0-3)
-PY:         .res 1          ; pixel Y (0-119)
-PX:         .res 1          ; pixel X (0-179)
-BMPLO:      .res 1          ; bitmap row pointer low
-BMPHI:      .res 1          ; bitmap row pointer high
+ZR:     .res 4              ; z real      (8.24)
+ZI:     .res 4              ; z imaginary
+CR:     .res 4              ; c real
+CI:     .res 4              ; c imaginary
+ZR2:    .res 4              ; zr^2
+ZI2:    .res 4              ; zi^2
+PROD:   .res 4              ; scratch product (zr*zi)
+SUM:    .res 4              ; zr^2 + zi^2
+ITER:   .res 1              ; iteration counter (down from MAX_ITER)
+PY:     .res 1              ; pixel Y (0-199)
+PX:     .res 2              ; pixel X (0-319, 16-bit)
+BMPLO:  .res 1              ; framebuffer window pointer low
+BMPHI:  .res 1              ; framebuffer window pointer high
+BANK:   .res 1             ; current 8 KiB bank 0..7
 
 ; ============================================================
-; Macros: 32-bit fixed-point helpers
+; Macros
 ; ============================================================
-
-; Load a 32-bit immediate into a zero-page quad.
-; Byte extractors use fixed bit-ranges, so they are immune to how
-; ca65 sign-extends the constant.
 .macro LD32I dst, val
     lda #<(val)
     sta dst+0
@@ -90,7 +71,6 @@ BMPHI:      .res 1          ; bitmap row pointer high
     sta dst+3
 .endmacro
 
-; Add a 32-bit immediate to a zero-page quad.
 .macro ADD32I dst, val
     clc
     lda dst+0
@@ -107,22 +87,7 @@ BMPHI:      .res 1          ; bitmap row pointer high
     sta dst+3
 .endmacro
 
-; Copy a zero-page quad.
-.macro MOV32 dst, src
-    lda src+0
-    sta dst+0
-    lda src+1
-    sta dst+1
-    lda src+2
-    sta dst+2
-    lda src+3
-    sta dst+3
-.endmacro
-
 ; dst = (opA * opB) >> 24, signed, via the hardware coprocessor.
-; opA / opB are zero-page quads.  Operands are written low byte first;
-; writing B byte 3 completes the operand set, and by the time the first
-; result byte is read the DSP pipeline (2 clocks) has long settled.
 .macro MUL32 opA, opB, dst
     lda opA+0
     sta MUL_A+0
@@ -162,41 +127,32 @@ RESET:
     lda #24
     sta MUL_SHIFT
 
-    ; --- Enable 180x120 packed RGB222 mode, framebuffer bank 0 ---
-    lda #MODE_RGB0
+    ; --- Enable DDR3 320x200 8bpp mode, bank 0, pointer at $6000 ---
+    lda #$10
     sta VIC_MODE
-
-    ; --- Clear the framebuffer first so the previous render does not linger;
-    ;     the new image then visibly builds up from a black screen. ---
-    jsr clear_fb
-
-    ; --- Initialize outer loop ---
-    LD32I CI, CI_START
-
-    lda #<BMP_BASE
+    lda #<FB_WIN
     sta BMPLO
-    lda #>BMP_BASE
+    lda #>FB_WIN
     sta BMPHI
+    lda #0
+    sta BANK
 
+    ; --- Initialise outer loop ---
+    LD32I CI, CI_START
     lda #0
     sta PY
-    sta PACKPOS
 
 ; ============================================================
-; Main loop: for PY = 0 to 119
+; Main loop: for PY = 0 to 199
 ; ============================================================
 row_loop:
-    ; Reset CR to X_LEFT for this row
     LD32I CR, X_LEFT
-
     lda #0
-    sta PX
+    sta PX+0
+    sta PX+1
 
-; --- for PX = 0 to 179 ---
+; --- for PX = 0 to 319 ---
 pixel_loop:
-    lda #0
-    sta PIXCOLOR            ; points inside the set remain black
-
     ; --- Mandelbrot iteration: z = 0, iterate z = z^2 + c ---
     lda #0
     sta ZR+0
@@ -211,10 +167,8 @@ pixel_loop:
     sta ITER
 
 iter_loop:
-    ; --- ZR2 = ZR * ZR ---
+    ; --- ZR2 = ZR * ZR ; ZI2 = ZI * ZI (hardware coprocessor) ---
     MUL32 ZR, ZR, ZR2
-
-    ; --- ZI2 = ZI * ZI ---
     MUL32 ZI, ZI, ZI2
 
     ; --- SUM = ZR2 + ZI2 ; escape if |z|^2 >= 4.0 ---
@@ -231,10 +185,9 @@ iter_loop:
     lda ZR2+3
     adc ZI2+3
     sta SUM+3
-    ; escape if |z|^2 >= 4.0 (or overflowed into the sign bit).  The MUL32
-    ; macros make the loop body large, so reach 'escaped' via an absolute jmp.
+    ; The MUL32 macros make the body large, so reach 'escaped' via an abs jmp.
     bpl :+
-    jmp escaped             ; defensive: overflow into sign
+    jmp escaped             ; defensive: overflow into the sign bit
 :
     lda SUM+3
     cmp #ESCAPE_INT
@@ -244,7 +197,7 @@ iter_loop:
 
     ; --- ZI = 2 * ZR * ZI + CI ---
     MUL32 ZR, ZI, PROD
-    asl PROD+0              ; PROD = PROD * 2
+    asl PROD+0
     rol PROD+1
     rol PROD+2
     rol PROD+3
@@ -294,176 +247,94 @@ iter_loop:
     dec ITER
     beq no_escape
     jmp iter_loop
+
 no_escape:
-    ; Did not escape — PIXCOLOR remains black.
-    jmp next_pixel
+    lda #$00                ; inside the set: black
+    jmp plot
 
 escaped:
-    ; Map the escape iteration directly to one RGB222 pixel.
     lda #MAX_ITER
     sec
     sbc ITER                ; A = iterations used (0..MAX_ITER-1)
     tax
-    lda color_table,x
-    sta PIXCOLOR
+    lda color_table,x       ; RGB332 colour
 
-next_pixel:
-    ; Pack four 6-bit pixels into three bytes:
-    ; B0=P0[5:0],P1[5:4] B1=P1[3:0],P2[5:2] B2=P2[1:0],P3[5:0].
-    lda PACKPOS
-    beq pack_0
-    cmp #1
-    beq pack_1
-    cmp #2
-    beq pack_2
+plot:
+    ; A = pixel colour byte; write it to the framebuffer window
+    ldy #0
+    sta (BMPLO),y
 
-pack_3:
-    lda PIXCOLOR
-    ora PACKBYTE
-    jsr store_byte
-    jmp packed
+    ; advance the window pointer; hop to the next bank when it passes $7FFF
+    inc BMPLO
+    bne no_carry
+    inc BMPHI
+    lda BMPHI
+    cmp #$80
+    bne no_carry
+    lda #>FB_WIN
+    sta BMPHI
+    inc BANK
+    lda BANK
+    asl a
+    asl a
+    asl a
+    asl a
+    asl a                   ; bank << 5 -> bits 7:5
+    ora #$10                ; keep bit 4 (DDR3 mode)
+    sta VIC_MODE
+no_carry:
 
-pack_0:
-    lda PIXCOLOR
-    asl
-    asl
-    sta PACKBYTE
-    jmp packed
-
-pack_1:
-    lda PIXCOLOR
-    lsr
-    lsr
-    lsr
-    lsr
-    ora PACKBYTE
-    jsr store_byte
-    lda PIXCOLOR
-    and #$0F
-    asl
-    asl
-    asl
-    asl
-    sta PACKBYTE
-    jmp packed
-
-pack_2:
-    lda PIXCOLOR
-    lsr
-    lsr
-    ora PACKBYTE
-    jsr store_byte
-    lda PIXCOLOR
-    and #$03
-    asl
-    asl
-    asl
-    asl
-    asl
-    asl
-    sta PACKBYTE
-
-packed:
-    inc PACKPOS
-    lda PACKPOS
-    and #$03
-    sta PACKPOS
-
-    ; --- Advance CR by SX ---
+    ; --- Advance CR by SX_STEP ---
     ADD32I CR, SX_STEP
 
-    inc PX
-    lda PX
-    cmp #180
-    bcs :+
+    ; --- PX++ ; loop while PX < 320 ---
+    inc PX+0
+    bne px_chk
+    inc PX+1
+px_chk:
+    lda PX+1
+    beq px_more             ; PX < 256 -> keep going
+    lda PX+0                ; PX high == 1: compare low to 320 & $FF = $40
+    cmp #<320
+    bcc px_more
+    jmp row_done
+px_more:
     jmp pixel_loop
-:
 
-    ; --- Advance CI by SY ---
+row_done:
+    ; --- Advance CI by SY_STEP ---
     ADD32I CI, SY_STEP
 
     ; --- Next row ---
     inc PY
     lda PY
-    cmp #120
-    bcs :+
+    cmp #200
+    bcs done
     jmp row_loop
-:
 
-    ; ============================================================
-    ; Done — wait for UART key, then text mode
-    ; ============================================================
+done:
+    ; wait for a UART key, then back to text mode
 wait_key:
     lda UART_SR
     and #UART_RDRF
     beq wait_key
-    lda UART_DATA           ; consume key
-
+    lda UART_DATA
     lda #$00
-    sta VIC_MODE            ; back to text mode
-
+    sta VIC_MODE
 halt:
     jmp halt
-
-; Clear the whole 16 KiB framebuffer (both 8 KiB CPU-window banks) to black.
-; Leaves the mode at MODE_RGB0 / bank 0 so rendering can start writing linearly.
-clear_fb:
-    lda #MODE_RGB0
-    sta VIC_MODE            ; bank 0 in the $6000 window
-    jsr clear_window
-    lda #MODE_RGB1
-    sta VIC_MODE            ; bank 1 in the $6000 window
-    jsr clear_window
-    lda #MODE_RGB0
-    sta VIC_MODE            ; rendering starts in bank 0
-    rts
-
-; Zero $6000-$7FFF (8 KiB) of the currently banked framebuffer window.
-clear_window:
-    lda #<BMP_BASE
-    sta BMPLO
-    lda #>BMP_BASE
-    sta BMPHI
-    lda #0
-    tay                     ; Y = 0 index (stays 0); A = 0 (stays 0)
-@cw:
-    sta (BMPLO),y
-    inc BMPLO
-    bne @cw
-    inc BMPHI
-    ldx BMPHI
-    cpx #$80                ; past $7FFF -> done
-    bne @cw
-    rts
-
-; Write A to the current framebuffer byte and switch CPU banks at 8 KiB.
-store_byte:
-    ldy #0
-    sta (BMPLO),y
-    inc BMPLO
-    bne store_done
-    inc BMPHI
-    lda BMPHI
-    cmp #$80                ; first 8192 bytes completed?
-    bne store_done
-    lda #MODE_RGB1
-    sta VIC_MODE
-    lda #<BMP_BASE
-    sta BMPLO
-    lda #>BMP_BASE
-    sta BMPHI
-store_done:
-    rts
 
 ; ============================================================
 .segment "RODATA"
 
-; Escape iteration -> RRGGBB. Interior pixels bypass the table and stay black.
+; Escape-iteration colour gradient in RGB332 (RRRGGGBB), 32 entries for
+; MAX_ITER=32. Index = iterations used (0 = far, 31 = near the set). Interior
+; pixels are drawn black by the code above, not from this table.
 color_table:
-    .byte $03,$07,$0B,$0F,$0E,$0D,$0C,$1C
-    .byte $2C,$3C,$38,$34,$30,$31,$32,$33
-    .byte $23,$13,$03,$17,$2B,$3F,$3E,$3D
-    .byte $3C,$39,$36,$33,$2A,$15,$2A,$3F
+    .byte $03,$07,$0B,$0F,$13,$17,$1B,$1F    ; blue -> cyan
+    .byte $1E,$1C,$3C,$5C,$7C,$9C,$BC,$DC    ; cyan -> green -> toward yellow
+    .byte $FC,$F8,$F4,$F0,$EC,$E8,$E4,$E0    ; yellow -> red
+    .byte $E1,$E2,$E3,$C3,$A3,$63,$A7,$FF    ; red -> magenta -> violet -> white
 
 ; ============================================================
 .segment "VECTORS"
