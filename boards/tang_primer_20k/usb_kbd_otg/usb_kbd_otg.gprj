@@ -1,0 +1,21 @@
+<?xml version="1" encoding="UTF-8"?>
+<!DOCTYPE gowin-fpga-project>
+<Project>
+    <Template>FPGA</Template>
+    <Version>5</Version>
+    <Device name="GW2A-18C" pn="GW2A-LV18PG256C8/I7">gw2a18c-011</Device>
+    <FileList>
+        <File path="D:/Development/6502-sbc-fpga/third_party/ultraembedded/core_ulpi_wrapper/ulpi_wrapper.v" type="file.verilog" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/third_party/ultraembedded/core_usb_host/src_v/usbh_crc5.v" type="file.verilog" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/third_party/ultraembedded/core_usb_host/src_v/usbh_crc16.v" type="file.verilog" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/third_party/ultraembedded/core_usb_host/src_v/usbh_fifo.v" type="file.verilog" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/third_party/ultraembedded/core_usb_host/src_v/usbh_sie.v" type="file.verilog" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/third_party/ultraembedded/core_usb_host/src_v/usbh_host.v" type="file.verilog" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/boards/tang_primer_20k/usb_kbd_otg/rtl/usb_host_seq.vhd" type="file.vhdl" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/boards/tang_primer_20k/usb_kbd_otg/rtl/ulpi_rec.vhd" type="file.vhdl" enable="1"/>
+        <File path="D:/Development/6502-sbc-fpga/boards/tang_primer_20k/usb_kbd_otg/rtl/usb_kbd_otg_top.vhd" type="file.vhdl" enable="1"/>
+        <File path="usb_kbd_otg.cst" type="file.cst" enable="1"/>
+        <File path="usb_kbd_otg.sdc" type="file.sdc" enable="1"/>
+    </FileList>
+</Project>

@@ -30,7 +30,9 @@ architecture rtl of uart_tx_ser is
 
   -- 10 bits total: [0]=start, [1..8]=data LSB-first, [9]=stop
   signal sr       : std_logic_vector(9 downto 0);
-  signal baud_cnt : unsigned(8 downto 0);          -- 0 .. BAUD_DIV-1
+  signal baud_cnt : unsigned(15 downto 0);         -- 0 .. BAUD_DIV-1 (wide
+                                                   -- enough for fast clocks,
+                                                   -- e.g. 60 MHz/115200 = 520)
   signal bit_cnt  : unsigned(3 downto 0);          -- 0 .. 9
   signal active   : std_logic;
 

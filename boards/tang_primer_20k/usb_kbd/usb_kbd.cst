@@ -1,0 +1,43 @@
+// ============================================================================
+// Physical constraints -- USB HID keyboard bring-up (standalone Tang Primer 20K).
+// Part: GW2A-LV18PG256C8/I7   Device: GW2A-18C
+// Pins reuse the same dock locations as the other Tang 20K builds.
+// ============================================================================
+
+// 27 MHz on-board oscillator
+IO_LOC  "clk_27mhz" H11;
+IO_PORT "clk_27mhz" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// No reset button: the dock buttons (T10 etc.) are dedicated SSPI/config pins
+// and cannot be constrained as GPIO here (PR2017). Reset is power-on only.
+
+// ----------------------------------------------------------------------------
+// USB low-speed (1.5 Mbps) on PMOD 0, Bank 3 / LVCMOS33.
+//
+// Wire a USB-A breakout to these header pins:
+//   usb_dp -> D+ (green)  -> T7   + 15 kOhm resistor D+ to GND
+//   usb_dm -> D- (white)  -> T8   + 15 kOhm resistor D- to GND
+//   VBUS (red)  -> 5 V    (supply externally)
+//   GND  (black)-> GND
+//
+// PULL_MODE=NONE: the 15 kOhm pull-downs are external, as the nand2mario core
+// expects. Do NOT enable internal pulls here.
+// ----------------------------------------------------------------------------
+IO_LOC  "usb_dp" T7;
+IO_PORT "usb_dp" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "usb_dm" T8;
+IO_PORT "usb_dm" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// CH340 USB-UART TX (host receives typed characters at 115200 8N1)
+IO_LOC  "uart_tx" M11;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// LEDs (active-low): show the USB phase nibble 3=idle 4=connected F=error
+IO_LOC  "led[0]" L16;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[1]" L14;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[2]" N14;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[3]" N16;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;

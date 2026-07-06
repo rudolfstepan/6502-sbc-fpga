@@ -1,0 +1,64 @@
+// ============================================================================
+// Physical constraints -- USB-OTG (USB3317 ULPI PHY) bring-up, Tang Primer 20K.
+// Part: GW2A-LV18PG256C8/I7   Device: GW2A-18C
+//
+// ULPI pin locations are taken verbatim from the official Sipeed
+// TangPrimer-20K-example USB demo (USB/usb_serial/src/usb_example.cst). These
+// are the on-board wires from the FPGA to the USB3317 PHY -- no external wiring.
+// ============================================================================
+
+// 27 MHz on-board oscillator (system + UART domain)
+IO_LOC  "clk_27mhz" H11;
+IO_PORT "clk_27mhz" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// No reset button: the dock buttons (T10 etc.) are dedicated SSPI/config pins
+// and cannot be constrained as GPIO here (PR2017). Reset is power-on only.
+
+// ----------------------------------------------------------------------------
+// ULPI bus to the USB3317 PHY (all on-board)
+//   ulpi_clk  = 60 MHz CLKOUT from the PHY (clock-capable pin T15)
+//   ulpi_dir / ulpi_nxt : PHY -> FPGA
+//   ulpi_stp / ulpi_rst : FPGA -> PHY   (ulpi_rst = active-low RESETB)
+//   ulpi_data[7:0]      : bidirectional, direction chosen by ulpi_dir
+// ----------------------------------------------------------------------------
+IO_LOC  "ulpi_clk" T15;
+IO_PORT "ulpi_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "ulpi_dir" K12;
+IO_PORT "ulpi_dir" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "ulpi_nxt" K13;
+IO_PORT "ulpi_nxt" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_LOC  "ulpi_stp" K11;
+IO_PORT "ulpi_stp" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_rst" F10;
+IO_PORT "ulpi_rst" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+IO_LOC  "ulpi_data[7]" R12;
+IO_PORT "ulpi_data[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_data[6]" P13;
+IO_PORT "ulpi_data[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_data[5]" R13;
+IO_PORT "ulpi_data[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_data[4]" T14;
+IO_PORT "ulpi_data[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_data[3]" H13;
+IO_PORT "ulpi_data[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_data[2]" J12;
+IO_PORT "ulpi_data[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_data[1]" H12;
+IO_PORT "ulpi_data[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "ulpi_data[0]" G11;
+IO_PORT "ulpi_data[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// CH340 USB-UART TX (host reads the PHY ID / status report at 115200 8N1)
+IO_LOC  "uart_tx" M11;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// LEDs (active-low): [0]=ULPI clk seen [1]=running [2]=DIR seen [3]=test done
+IO_LOC  "led[0]" L16;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[1]" L14;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[2]" N14;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[3]" N16;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;

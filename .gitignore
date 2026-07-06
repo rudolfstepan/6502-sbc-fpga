@@ -134,6 +134,18 @@ boards/tang_primer_20k/reist/src/*/*.vo
 boards/tang_primer_20k/reist/src/*/*_tmp.v
 boards/tang_primer_20k/reist/src/*/temp/
 
+# ── USB keyboard bring-up PoC projects (Tang Primer 20K / GowinEDA) ────────────
+# Keep RTL, constraints, build scripts and the .gprj; drop the generated impl/
+# tree (netlists, bitstreams, reports, per-project process config) and per-user
+# IDE state. usb_kbd_otg = OTG/ULPI host PoC, usb_otg = ULPI PHY diagnostic,
+# usb_kbd = native bit-bang low/full-speed core.
+boards/tang_primer_20k/usb_kbd_otg/impl/
+boards/tang_primer_20k/usb_kbd_otg/*.gprj.user
+boards/tang_primer_20k/usb_otg/impl/
+boards/tang_primer_20k/usb_otg/*.gprj.user
+boards/tang_primer_20k/usb_kbd/impl/
+boards/tang_primer_20k/usb_kbd/*.gprj.user
+
 
 
 

@@ -8,6 +8,14 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 entity usb_ulpi_diag is
+  generic (
+    -- false: read the four USB3317 ID registers, then stop (status bit0 set)
+    --        and leave the read values in phy_id.
+    -- true : additionally run a scratch-register (0x16) write/read self-test.
+    --        Some PHY/turn-around timings fail this back-read; keep it off for a
+    --        plain "is the PHY alive / what is its ID" bring-up.
+    DO_SCRATCH_TEST : boolean := false
+  );
   port (
     clk       : in  std_logic;
     reset_n   : in  std_logic;
@@ -218,7 +226,11 @@ begin
             if ulpi_dir = '0' then
               if read_addr = "11" then
                 wait_count <= (others => '0');
-                read_state <= W_SCR_CMD;
+                if DO_SCRATCH_TEST then
+                  read_state <= W_SCR_CMD;
+                else
+                  read_state <= R_DONE;   -- 4 ID regs read; report them as-is
+                end if;
               else
                 read_addr <= read_addr + 1;
                 wait_count <= (others => '0');
@@ -322,7 +334,9 @@ begin
             end if;
 
           when R_DONE =>
-            ulpi_id <= scratch_read & ulpi_id(23 downto 0);
+            if DO_SCRATCH_TEST then
+              ulpi_id <= scratch_read & ulpi_id(23 downto 0);
+            end if;
 
           when R_ERROR =>
             ulpi_status(0) <= '0';
