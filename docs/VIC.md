@@ -44,7 +44,7 @@ Only offsets 0–5 are decoded ([`sbc_t65_boot_monitor_top.vhd`](../rtl/core/sbc
 | `$9002` | +2 | CURSOR_Y | Text cursor row 0–24 (writes ≥25 ignored) |
 | `$9003` | +3 | TEXT_COLOR | Default text colour register; foreground source in 80-col mode |
 | `$9004` | +4 | BG_COLOR | Default background colour register (legacy, not wired to display) |
-| `$9005` | +5 | TEXT_ATTR | bit0 = per-cell text background (colour-RAM high nibble, 40-col); bit1 = 80×25 text |
+| `$9005` | +5 | TEXT_ATTR | bit0 = per-cell text background (colour-RAM high nibble, 40-col); bit1 = 80×25 text; bit2 = underline attribute (80-col) |
 
 `TEXT_ATTR` bit 0 switches the 40-column text background source: `0` (default) keeps the
 C64 model — global background from `$D021`, per-cell foreground from colour RAM;
@@ -58,6 +58,17 @@ screen keeps the global background.
 VRAM window remains 2 KiB, 80-column mode uses `$8000`–`$87CF` for character
 codes and has no second per-cell colour plane; foreground comes from `$9003`,
 background from `$D021`.
+
+`TEXT_ATTR` bit 2 adds a lightweight **underline** text attribute in 80-column
+mode. There is no room for a second attribute plane alongside 2000 character
+codes in the 2 KiB VRAM window, so with this bit set a character code's **bit 7**
+no longer selects the upper glyph half but underlines the character instead; the
+glyph index is the low 7 bits (7-bit ASCII). The underline is the bottom font
+row of the 8×16 cell. When the bit is clear the full 8-bit character code selects
+the glyph as before, so existing 80-column software is unaffected. Implemented in
+[`vic_vga.vhd`](../rtl/core/peripherals/vic_vga.vhd) (`underline_mode`), wired to
+`$9005[2]` in the boot-monitor top; MultiCalc uses it to underline command
+hot-keys the way Multiplan did.
 
 A long reset clears MODE to `$00` (text mode) so a returning BASIC text screen is
 never hidden behind a leftover bitmap — see [Reset architecture](./02_MODULES.md).

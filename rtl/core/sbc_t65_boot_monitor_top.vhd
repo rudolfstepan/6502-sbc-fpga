@@ -1271,6 +1271,7 @@ begin
       fb_true_mode     => fb_true_mode,
       cell_bg_mode     => vic_text_attr(0),
       text80_mode      => vic_text_attr(1),
+      underline_mode   => vic_text_attr(2),
       text_color       => vic_text_color(3 downto 0),
       border_color     => vic2_regs(16#20#)(3 downto 0),
       bg_color         => vic2_regs(16#21#)(3 downto 0),

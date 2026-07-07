@@ -90,6 +90,13 @@ entity vic_vga is
     -- (row*80+col), using 8x16 cells. Per-cell colour RAM is disabled in this
     -- compact 2 KiB VRAM layout; the foreground comes from text_color.
     text80_mode   : in  std_logic := '0';
+    -- $9005[2]: underline text attribute (80-column mode only).  When set, a
+    -- character code's bit 7 no longer selects the upper glyph half but instead
+    -- underlines the character; the glyph index is the low 7 bits.  Lets apps
+    -- (e.g. MultiCalc's command menu) underline hot keys without a second
+    -- attribute plane -- there is no room for one alongside 2000 char codes in
+    -- the 2 KiB text window.  Default 0 keeps the plain 8-bit glyph behaviour.
+    underline_mode : in std_logic := '0';
     vic_fetch_bitmap : out std_logic;
 
     -- Default text foreground colour used by 80-column mode.
@@ -213,6 +220,8 @@ architecture rtl of vic_vga is
   signal char_code : data_t;
   signal cell_color : data_t;
   signal pbit      : std_logic;
+  signal char_underline : std_logic;    -- this cell is underlined (attr + bit7)
+  signal underline_pixel : std_logic;   -- underline scanline is lit here
   signal cursor_pixel   : std_logic;
   signal cursor_visible : std_logic := '1';
   signal cursor_cnt     : natural range 0 to CURSOR_BLINK_DIV - 1 := 0;
@@ -602,11 +611,21 @@ begin
                when pack_sub = 2 else
              linebuf(pack_base + 2)(5 downto 0);
 
+  -- Underline text attribute ($9005[2], 80-col only): char_code bit 7 marks the
+  -- cell as underlined instead of selecting the upper glyph half.
+  char_underline <= '1' when underline_mode = '1' and text80_mode = '1' and
+                             char_code(7) = '1'
+                    else '0';
+  -- Light the bottom font row (cline = 7) of an underlined cell.
+  underline_pixel <= '1' when char_underline = '1' and cline = 7 else '0';
+
   -- Char-ROM-Adresse: char_code[6:0] & cline[2:0]; bit 7 selects the upper
-  -- glyph half (umlauts) via glyph_hi.
+  -- glyph half (umlauts) via glyph_hi -- except in underline mode, where bit 7
+  -- is the underline flag, so the glyph index stays 7-bit (glyph_hi forced 0).
   char_addr <= char_code(6 downto 0) &
                std_logic_vector(to_unsigned(cline, 3));
-  char_glyph_hi <= char_code(7);
+  char_glyph_hi <= '0' when (underline_mode = '1' and text80_mode = '1')
+                   else char_code(7);
 
   -- Pixel-Bit aus ROM-Muster; bit 7 im Zeichencode ist Reverse-Video.
   -- The cursor is an OR overlay on the lower scan lines. It never clears
@@ -619,7 +638,7 @@ begin
                   else '0';
   pbit <= char_code(7 - cpix)
           when in_text = '1' and bitmap_mode = '1' else
-          (char_data(7 - cpix) or cursor_pixel)
+          (char_data(7 - cpix) or cursor_pixel or underline_pixel)
           when in_text = '1' else '0';
 
   -- Current raster line for $D011/$D012 (free-running scan counter).
