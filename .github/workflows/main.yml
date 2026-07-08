@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI/CD (6502 only)
 
 on:
   push:
@@ -11,34 +11,27 @@ permissions:
 
 jobs:
   test:
-    name: Integrated Tests (GHDL + Python)
+    name: Integrated tests (6502 only)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y ghdl make
+          sudo apt-get install -y ghdl make python3
 
       - name: Verify tools
         run: |
           ghdl --version
-          python --version
+          python3 --version
           make --version
 
-      - name: Run Python ROM generator smoke check
+      # If your Makefile already has 6502-only targets, use those instead of full test.
+      - name: Run 6502 integrated tests
         run: |
-          python tools/build_c64_roms.py
-
-      - name: Run integrated HDL test suite
-        run: |
+          set -euo pipefail
           make test GHDL=ghdl
 
       - name: Collect test logs
@@ -56,7 +49,7 @@ jobs:
           if-no-files-found: warn
 
   build:
-    name: Build Artifacts
+    name: Build artifacts (6502 only)
     runs-on: ubuntu-latest
     needs: test
     if: ${{ needs.test.result == 'success' }}
@@ -64,33 +57,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Create build output
+      - name: Package 6502 artifacts
         run: |
           set -euo pipefail
           mkdir -p dist
-          python tools/build_c64_roms.py
 
-          cp -f rtl/c64/c64_roms.vhd dist/
-
-          if [ -d roms/test_d64 ]; then
-            cp -r roms/test_d64 dist/
+          # 6502 ROM assets (source inputs)
+          if [ -d roms/6502 ]; then
+            cp -r roms/6502 dist/
           fi
 
+          # Include docs/metadata useful for downstream builds
           {
             echo "Repository: $GITHUB_REPOSITORY"
             echo "Commit: $GITHUB_SHA"
             echo "Run: $GITHUB_RUN_ID"
             echo "Built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Profile: 6502-only"
           } > dist/BUILD_INFO.txt
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fpga-build-artifacts
+          name: fpga-6502-artifacts
           path: dist
           if-no-files-found: error
