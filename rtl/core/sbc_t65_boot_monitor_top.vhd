@@ -79,6 +79,19 @@ entity sbc_t65_boot_monitor_top is
     fb_rdaddr      : out std_logic_vector(10 downto 0);  -- (line mod 2)*640 + col
     fb_rddata      : in  std_logic_vector(15 downto 0) := (others => '0');
 
+    -- Hardware 2D blitter command interface, wired to vic_fb_ddr3 at the board
+    -- top. Decoded from CPU writes to $8840-$884F; blit_busy read back at $884F.
+    blit_op    : out std_logic_vector(2 downto 0);
+    blit_x0    : out unsigned(9 downto 0);
+    blit_y0    : out unsigned(9 downto 0);
+    blit_x1    : out unsigned(9 downto 0);
+    blit_y1    : out unsigned(9 downto 0);
+    blit_color : out std_logic_vector(7 downto 0);
+    blit_page  : out std_logic;
+    blit_gap   : out std_logic_vector(7 downto 0);  -- $884B: DDR3 write pacing
+    blit_start : out std_logic;
+    blit_busy  : in  std_logic := '0';
+
     -- PT8211 audio DAC (I2S-style serial output)
     dac_bck     : out std_logic;
     dac_ws      : out std_logic;
@@ -213,6 +226,8 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal vram_we     : std_logic;
   signal vram_we_mux : std_logic;
   signal vic_reg_we  : std_logic;
+  signal blit_wr     : std_logic;      -- CPU write strobe to $8840-$884F
+  signal blit_dout   : data_t;         -- blitter register read-back
   signal via_cs      : std_logic;
   signal via_cs_mux  : std_logic;
   signal via_we_mux  : std_logic;
@@ -294,6 +309,17 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal disk_we     : std_logic;
   signal disk_dout   : data_t;
   signal disk_irq    : std_logic;
+  signal disk_sd2_sec_read      : std_logic;
+  signal disk_sd2_sec_read_addr : std_logic_vector(31 downto 0);
+  signal sdraw_cs     : std_logic;
+  signal sdraw_we     : std_logic;
+  signal sdraw_dout   : data_t;
+  signal sdraw_irq    : std_logic;
+  signal sdraw_sd2_sec_read       : std_logic;
+  signal sdraw_sd2_sec_read_addr  : std_logic_vector(31 downto 0);
+  signal sdraw_sd2_sec_write      : std_logic;
+  signal sdraw_sd2_sec_write_addr : std_logic_vector(31 downto 0);
+  signal sdraw_sd2_sec_write_data : data_t;
 
   signal via_irq     : std_logic;
   signal uart_irq    : std_logic;
@@ -302,14 +328,9 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal uart_rx_data  : data_t;
   signal uart_rx_valid : std_logic;
 
-  -- PS/2 -> UART injection
   signal kbd_ascii_i     : data_t := (others => '0');
   signal kbd_event_tog_i : std_logic := '0';
-  signal kbd_event_prev  : std_logic := '0';
-  signal kbd_inject      : std_logic := '0';
-  signal merged_rx_data      : data_t;
-  signal merged_rx_valid     : std_logic;
-  signal merged_rx_valid_cpu : std_logic;
+  signal uart_rx_valid_cpu : std_logic;
   signal mon_jump_vector        : addr_t := (others => '0');
   signal mon_jump_reset_cnt     : natural range 0 to 31 := 0;
   signal mon_jump_vector_active : std_logic := '0';
@@ -374,7 +395,7 @@ begin
                 and not sram_stall;
 
   sram_dout  <= sram_ext_dout;
-  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq or disk_irq or cia1_irq);
+  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq or disk_irq or sdraw_irq or cia1_irq);
   usb_cs     <= '1' when monitor_hold = '0' and dev_sel = DEV_USB else '0';
 
   -- Low 16 KB ($0000-$3FFF) is on-chip BRAM. $4000-$5FFF is served through
@@ -385,10 +406,24 @@ begin
   vram_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_TEXT else '0';
   vic_reg_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_REG else '0';
   vic2_we    <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VICII   else '0';
+  blit_wr    <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_VIC_BLIT else '0';
+
+  -- Hardware 2D blitter register file ($8840-$884F). Decodes CPU writes into the
+  -- wide blit command for vic_fb_ddr3 (wired at the board top) and reads BUSY back.
+  blit_regs_i : entity work.vic_blit_regs
+    port map (
+      clk => clk, rst_n => reset_n,
+      wr => blit_wr, addr => cpu_addr(3 downto 0), wdata => cpu_dout,
+      rdata => blit_dout, busy => blit_busy,
+      blit_op => blit_op, blit_x0 => blit_x0, blit_y0 => blit_y0,
+      blit_x1 => blit_x1, blit_y1 => blit_y1, blit_color => blit_color,
+      blit_page => blit_page, blit_gap => blit_gap, blit_start => blit_start);
   via_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_VIA      else '0';
   uart_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_UART     else '0';
   disk_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_DISK     else '0';
   disk_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_DISK     else '0';
+  sdraw_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_SDRAW    else '0';
+  sdraw_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_SDRAW    else '0';
   math_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
   math_we <= cpu_bus_we when monitor_hold = '0' and dev_sel = DEV_MATH     else '0';
   sid_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_SID      else '0';
@@ -621,11 +656,11 @@ begin
 
   monitor_mem_rdata <= mon_rdata_reg;
   monitor_mem_ready <= mon_ready_reg;
-  merged_rx_valid_cpu <= merged_rx_valid when monitor_hold = '0' else '0';
+  uart_rx_valid_cpu <= uart_rx_valid when monitor_hold = '0' else '0';
 
   process(dev_sel, zp_cs, zp_dout, sram_dout, rom_dout, vram_dout, vic_reg_dout, via_dout,
           uart_dout, mon_jump_vector_active, mon_jump_vector, cpu_addr, bitmap_dout,
-          sound_dout, math_dout, sid_dout, disk_dout, vic2_dout, cia1_dout)
+          sound_dout, math_dout, sdraw_dout, sid_dout, disk_dout, vic2_dout, cia1_dout)
   begin
     case dev_sel is
       when DEV_SRAM =>
@@ -654,12 +689,16 @@ begin
         cpu_din <= usb_dout;
       when DEV_DISK =>
         cpu_din <= disk_dout;
+      when DEV_VIC_BLIT =>
+        cpu_din <= blit_dout;
       when DEV_VIC_BMP =>
         cpu_din <= bitmap_dout;
       when DEV_SOUND0 | DEV_SOUND1 | DEV_SOUND2 | DEV_SOUND3 =>
         cpu_din <= sound_dout;
       when DEV_MATH =>
         cpu_din <= math_dout;
+      when DEV_SDRAW =>
+        cpu_din <= sdraw_dout;
       when DEV_SID =>
         -- SID now lives in the free I/O region ($D400), no longer overlapping the
         -- ROM, so reads return the SID register file again.
@@ -946,39 +985,66 @@ begin
       dout    => math_dout
     );
 
-  -- ── D64 GoDrive: 2nd SD card, FAT32 + D64 mount engine ────────────────
-  -- Replaces the raw sd_disk_ctrl on sd2.  The 6502 issues MOUNT (the FAT32
-  -- scan + D64 contiguity check run in hardware) and READ_SECTOR; the 256-byte
-  -- D64 sector is read back through the DATA port.  Read-only: the sd2 write
-  -- channel is held inactive.  Register window is DEV_DISK ($8824), offset =
-  -- cpu_addr - ADDR_DISK_BASE (low 4 bits; the engine ignores offsets > 7).
-  disk_irq <= '0';   -- the D64 engine is polled, no interrupt source
-  sd2_sec_write      <= '0';
-  sd2_sec_write_addr <= (others => '0');
-  sd2_sec_write_data <= (others => '0');
+  -- ── SD2 owners: D64 GoDrive read path + raw-sector read/write path ─────
+  -- The CPU drives only one command path at a time. D64 owns reads while its
+  -- MOUNT/READ_SECTOR engine is active; the raw controller owns its own reads
+  -- and all writes. Both controllers observe the returned byte stream, but only
+  -- the one that requested it is busy and consumes it.
+  sd2_sec_read      <= disk_sd2_sec_read or sdraw_sd2_sec_read;
+  sd2_sec_read_addr <= disk_sd2_sec_read_addr when disk_sd2_sec_read = '1'
+                       else sdraw_sd2_sec_read_addr;
+  sd2_sec_write      <= sdraw_sd2_sec_write;
+  sd2_sec_write_addr <= sdraw_sd2_sec_write_addr;
+  sd2_sec_write_data <= sdraw_sd2_sec_write_data;
 
-  -- SD2 D64 GoDrive DISABLED for a bring-up test: unwiring d64_subsystem takes it
-  -- and fat32_reader (the -215 ns setup path) out of the netlist. DEV_DISK reads
-  -- return $00 and the SD2 read-request lines are held inactive. Uncomment to
-  -- restore, and remove the three tie-offs just below.
-  disk_dout         <= x"00";
-  sd2_sec_read      <= '0';
-  sd2_sec_read_addr <= (others => '0');
---  disk_i : entity work.d64_subsystem
---    port map (
---      clk                    => clk,
---      reset_n                => cpu_reset_n,
---      cs                     => disk_cs,
---      we                     => disk_we,
---      offset                 => std_logic_vector(resize(unsigned(cpu_addr) - ADDR_DISK_BASE, 4)),
---      din                    => cpu_dout,
---      dout                   => disk_dout,
---      sd_sec_read            => sd2_sec_read,
---      sd_sec_read_addr       => sd2_sec_read_addr,
---      sd_sec_read_data       => sd2_sec_read_data,
---      sd_sec_read_data_valid => sd2_sec_read_data_valid,
---      sd_sec_read_end        => sd2_sec_read_end
---    );
+  -- ── D64 GoDrive: 2nd SD card, 6502 FAT16 scan + D64 mount engine ───────
+  -- DEV_DISK ($8824) is the read-only D64 GoDrive path used by LOAD "!",
+  -- LOAD "$", and PRG LOAD from a mounted image.
+  disk_irq <= '0';   -- the D64 engine is polled, no interrupt source
+
+  disk_i : entity work.d64_subsystem
+    port map (
+      clk                    => clk,
+      reset_n                => cpu_reset_n,
+      cs                     => disk_cs,
+      we                     => disk_we,
+      offset                 => std_logic_vector(resize(unsigned(cpu_addr) - ADDR_DISK_BASE, 4)),
+      din                    => cpu_dout,
+      dout                   => disk_dout,
+      sd_sec_read            => disk_sd2_sec_read,
+      sd_sec_read_addr       => disk_sd2_sec_read_addr,
+      sd_sec_read_data       => sd2_sec_read_data,
+      sd_sec_read_data_valid => sd2_sec_read_data_valid,
+      sd_sec_read_end        => sd2_sec_read_end
+    );
+
+  -- ── Raw SD2 sector controller ($88C0-$88CF) ───────────────────────────
+  -- 512-byte buffered block device used by EhBASIC SAVE/LOAD and MultiCalc.
+  sdraw_i : entity work.sd_disk_ctrl
+    generic map (
+      BASE_ADDR => ADDR_SDRAW_BASE
+    )
+    port map (
+      clk                    => clk,
+      reset_n                => cpu_reset_base_n,
+      cs                     => sdraw_cs,
+      we                     => sdraw_we,
+      addr                   => cpu_addr,
+      din                    => cpu_dout,
+      dout                   => sdraw_dout,
+      irq                    => sdraw_irq,
+      sd_init_done           => sd2_init_done,
+      sd_sec_read            => sdraw_sd2_sec_read,
+      sd_sec_read_addr       => sdraw_sd2_sec_read_addr,
+      sd_sec_read_data       => sd2_sec_read_data,
+      sd_sec_read_data_valid => sd2_sec_read_data_valid,
+      sd_sec_read_end        => sd2_sec_read_end,
+      sd_sec_write           => sdraw_sd2_sec_write,
+      sd_sec_write_addr      => sdraw_sd2_sec_write_addr,
+      sd_sec_write_data      => sdraw_sd2_sec_write_data,
+      sd_sec_write_data_req  => sd2_sec_write_data_req,
+      sd_sec_write_end       => sd2_sec_write_end
+    );
 
   -- ── Sound: 4-voice synth (ADSR + 5 waveforms) + PT8211 DAC ────────────
   -- The Tang build uses the native SID core as its sole synthesizer. Keeping
@@ -1058,8 +1124,8 @@ begin
       addr     => uart_addr_mux,
       din      => uart_din_mux,
       dout     => uart_dout,
-      rx_data  => merged_rx_data,
-      rx_valid => merged_rx_valid_cpu,
+      rx_data  => uart_rx_data,
+      rx_valid => uart_rx_valid_cpu,
       tx_data  => uart_tx_data,
       tx_valid => uart_tx_valid,
       tx_busy  => uart_tx_busy,
@@ -1075,23 +1141,6 @@ begin
       data    => uart_rx_data,
       valid   => uart_rx_valid
     );
-
-  -- PS/2 keyboard -> UART injection: detect new keypress and inject ASCII
-  process(clk)
-  begin
-    if rising_edge(clk) then
-      kbd_inject    <= '0';
-      kbd_event_prev <= kbd_event_tog_i;
-      if reset_n = '0' then
-        kbd_event_prev <= '0';
-      elsif kbd_event_tog_i /= kbd_event_prev and kbd_ascii_i /= x"00" then
-        kbd_inject <= '1';
-      end if;
-    end if;
-  end process;
-
-  merged_rx_data  <= kbd_ascii_i when kbd_inject = '1' else uart_rx_data;
-  merged_rx_valid <= kbd_inject or uart_rx_valid;
 
   process(clk)
   begin

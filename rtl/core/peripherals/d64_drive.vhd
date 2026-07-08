@@ -1,8 +1,8 @@
 -- D64 drive: read-only D64 sector engine on top of a raw 512-byte SD read
 -- channel (the sd2 data-disk port).
 --
--- Given mount metadata (the .d64 file's start LBA, resolved by fat32_reader or
--- the boot menu) and a 6502 READ_SECTOR request (D64 track + sector), this
+-- Given mount metadata (the .d64 file's start LBA, resolved by the 6502 FAT16
+-- scanner/menu) and a 6502 READ_SECTOR request (D64 track + sector), this
 -- module:
 --   1. maps track/sector -> linear index -> byte offset (d64_sector_map)
 --   2. computes the SD LBA (file_start_lba + offset/512) and which 256-byte
@@ -24,7 +24,7 @@ entity d64_drive is
     clk         : in  std_logic;
     reset_n     : in  std_logic;
 
-    -- ── Mount control (from boot menu / fat32_reader) ──────────────────────
+    -- ── Mount control (from boot menu / 6502 FAT16 scanner) ────────────────
     mount        : in  std_logic;                      -- pulse: latch metadata, set mounted
     unmount      : in  std_logic;                      -- pulse: clear mounted
     file_start_lba : in std_logic_vector(31 downto 0); -- LBA of byte 0 of the .d64 file

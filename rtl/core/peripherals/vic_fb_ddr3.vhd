@@ -73,6 +73,21 @@ entity vic_fb_ddr3 is
     cpu_dout  : out std_logic_vector(7 downto 0);
     cpu_ack   : out std_logic;
 
+    -- ---- hardware 2D blitter command interface (clk_sys) ---------------------
+    -- Registers are held stable by the CPU; blit_start is a 1-cycle pulse that
+    -- launches the op. The engine runs in clk_x1 and streams pixel writes to the
+    -- app port as a third master (priority: line-fetch > blitter > CPU byte op).
+    blit_op    : in  std_logic_vector(2 downto 0) := (others => '0');
+    blit_x0    : in  unsigned(9 downto 0) := (others => '0');
+    blit_y0    : in  unsigned(9 downto 0) := (others => '0');
+    blit_x1    : in  unsigned(9 downto 0) := (others => '0');
+    blit_y1    : in  unsigned(9 downto 0) := (others => '0');
+    blit_color : in  std_logic_vector(7 downto 0) := (others => '0');
+    blit_page  : in  std_logic := '0';
+    blit_gap_cfg : in std_logic_vector(7 downto 0) := x"0C";  -- write pacing ($884B)
+    blit_start : in  std_logic := '0';
+    blit_busy  : out std_logic;
+
     -- ---- clk_x1 = Gowin DDR3 IP clk_out (app interface, 128-bit) -------------
     clk_x1          : in  std_logic;
     calib_done      : in  std_logic;
@@ -124,10 +139,11 @@ architecture rtl of vic_fb_ddr3 is
   signal cpu_busy_sys : std_logic := '0';
   signal cpu_dout_reg : std_logic_vector(7 downto 0) := (others => '0');
 
-  type st_t is (S_CALIB, S_IDLE,
+  type st_t is (S_CALIB, S_IDLE, S_SELECT,
                 S_FILL_REQ, S_FILL_WAIT, S_FILL_STORE,
                 S_CW_RDREQ, S_CW_RDWAIT, S_CW_WRREQ, S_CW_WRDATA,
-                S_CR_REQ,   S_CR_WAIT);
+                S_CR_REQ,   S_CR_WAIT,
+                S_BLIT_WRREQ, S_BLIT_WRDATA, S_BLIT_WAIT);
   signal st : st_t := S_CALIB;
   signal cw_data : std_logic_vector(127 downto 0) := (others => '0');
 
@@ -138,6 +154,12 @@ architecture rtl of vic_fb_ddr3 is
   signal cur_line   : unsigned(8 downto 0) := (others => '0');
   signal cur_half   : std_logic := '0';
   signal col        : natural range 0 to HIRES_LINE_PIX := 0;   -- pixel column
+  signal fetch_cur_need  : std_logic := '0';
+  signal fetch_next_need : std_logic := '0';
+  signal fetch_cur_line  : unsigned(8 downto 0) := (others => '0');
+  signal fetch_next_line : unsigned(8 downto 0) := (others => '0');
+  signal fetch_cur_half  : std_logic := '0';
+  signal fetch_next_half : std_logic := '0';
   signal fill_data  : std_logic_vector(127 downto 0) := (others => '0');
   signal store_idx  : natural range 0 to 15 := 0;   -- byte index within the burst
   signal lo_latch   : std_logic_vector(7 downto 0) := (others => '0');  -- 16bpp low byte
@@ -149,6 +171,42 @@ architecture rtl of vic_fb_ddr3 is
   signal cpu_lane    : natural range 0 to 15 := 0;
 
   signal wd_cnt   : unsigned(13 downto 0) := (others => '0');
+
+  -- ---- hardware blitter (engine runs in clk_x1) ----
+  signal blit_we      : std_logic;
+  signal blit_addr    : std_logic_vector(17 downto 0);   -- byte index (y*640+x)
+  signal blit_data    : std_logic_vector(7 downto 0);
+  signal blit_ready   : std_logic := '0';
+  signal blit_busy_x1 : std_logic;
+  -- start-pulse CDC: clk_sys toggle -> clk_x1 edge; busy CDC: clk_x1 -> clk_sys.
+  -- clk_sys and clk_x1 are declared asynchronous clock groups in the board SDC,
+  -- so only the toggle/level synchronisers below cross domains.
+  signal blit_start_tgl_sys : std_logic := '0';
+  signal blit_start_tgl_x1  : std_logic_vector(2 downto 0) := (others => '0');
+  signal blit_busy_sync     : std_logic_vector(2 downto 0) := (others => '0');
+  -- clk_x1 capture of the quasi-static command registers. They are written by
+  -- the CPU before the trigger and held stable until busy clears (the register
+  -- file's sticky busy guarantees it), so capturing them on the synchronised
+  -- start edge is safe -- and the engine's inputs then never cross domains.
+  signal bl_op_x1    : std_logic_vector(2 downto 0) := (others => '0');
+  signal bl_x0_x1    : unsigned(9 downto 0) := (others => '0');
+  signal bl_y0_x1    : unsigned(9 downto 0) := (others => '0');
+  signal bl_x1_x1    : unsigned(9 downto 0) := (others => '0');
+  signal bl_y1_x1    : unsigned(9 downto 0) := (others => '0');
+  signal bl_color_x1 : std_logic_vector(7 downto 0) := (others => '0');
+  signal blit_go     : std_logic := '0';
+  -- pixel write latched at dispatch so the app_addr path starts at a local reg
+  signal blit_lat_addr : std_logic_vector(17 downto 0) := (others => '0');
+  signal blit_lat_data : std_logic_vector(7 downto 0) := (others => '0');
+  -- Pacing between blit writes: sustained back-to-back masked writes are a load
+  -- profile the DDR3 write FIFOs never see from the (sparse) CPU path, and on
+  -- hardware they showed periodically dropped bytes. The gap gives the IP the
+  -- same breathing room the proven CPU path has; the display fetch and the CPU
+  -- keep full access to the arbiter while the gap runs. The value comes from
+  -- blit register $884B (captured with the command) so drop-out experiments can
+  -- be tuned from software without re-synthesis; it resets to 12.
+  signal bl_gap_x1 : unsigned(7 downto 0) := x"0C";   -- captured $884B
+  signal blit_gap  : unsigned(7 downto 0) := (others => '0');
 
   -- app word address (16-bit words) for a byte offset within a 16-byte-aligned
   -- frame base. lane = byte within the beat.
@@ -168,6 +226,30 @@ architecture rtl of vic_fb_ddr3 is
 
 begin
 
+  -- Blitter engine (runs in the DDR3 app clock domain). Its command registers
+  -- are quasi-static (held by the CPU across a whole op), launched by the CDC'd
+  -- start pulse; it streams pixel writes which the FSM below turns into masked
+  -- app-port byte writes.
+  blit_i : entity work.vic_blit
+    generic map (LINE_PIX => HIRES_LINE_PIX, ADDR_BITS => 18)
+    port map (
+      clk       => clk_x1,
+      rst_n     => rst_sys_n,
+      op        => bl_op_x1,
+      x0        => bl_x0_x1,
+      y0        => bl_y0_x1,
+      x1        => bl_x1_x1,
+      y1        => bl_y1_x1,
+      color     => bl_color_x1,
+      start     => blit_go,
+      busy      => blit_busy_x1,
+      fbo_we    => blit_we,
+      fbo_addr  => blit_addr,
+      fbo_data  => blit_data,
+      fbo_ready => blit_ready);
+
+  blit_busy <= blit_busy_sync(2);
+
   -- display read (registered, clk_sys)
   process(clk_sys)
   begin
@@ -186,9 +268,14 @@ begin
         fs_tgl_sys <= '0'; adv_tgl_sys <= '0'; cpu_tgl_sys <= '0';
         cpu_busy_sys <= '0'; ack_tgl_sys <= (others => '0');
         cpu_ack <= '0'; cpu_dout_reg <= (others => '0');
+        blit_start_tgl_sys <= '0'; blit_busy_sync <= (others => '0');
       else
         cpu_ack <= '0';
         ack_tgl_sys <= ack_tgl_sys(1 downto 0) & ack_tgl_x1;
+        blit_busy_sync <= blit_busy_sync(1 downto 0) & blit_busy_x1;
+        if blit_start = '1' then
+          blit_start_tgl_sys <= not blit_start_tgl_sys;
+        end if;
         if fb_frame_start = '1' then fs_tgl_sys  <= not fs_tgl_sys;  end if;
         if fb_line_adv   = '1' then adv_tgl_sys <= not adv_tgl_sys; end if;
         if cpu_busy_sys = '0' then
@@ -219,6 +306,8 @@ begin
     variable lstart : natural;                 -- cur_line * lp (pixels)
     variable pixoff : natural;                 -- pixel offset in the frame
     variable byteoff: natural;                 -- byte offset in the frame
+    variable hidx   : natural range 0 to 1;
+    variable nidx   : natural range 0 to 1;
   begin
     if rst_sys_n = '0' then
       st <= S_CALIB;
@@ -229,6 +318,9 @@ begin
       half_line <= (others => (others => '0'));
       half_valid <= (others => '0');
       cur_line <= (others => '0'); cur_half <= '0'; col <= 0;
+      fetch_cur_need <= '0'; fetch_next_need <= '0';
+      fetch_cur_line <= (others => '0'); fetch_next_line <= (others => '0');
+      fetch_cur_half <= '0'; fetch_next_half <= '0';
       fill_data <= (others => '0'); store_idx <= 0; lo_latch <= (others => '0');
       cpu_pending <= '0'; cpu_op_we <= '0';
       cpu_op_addr <= (others => '0'); cpu_op_din <= (others => '0');
@@ -237,14 +329,36 @@ begin
       fs_tgl_x1 <= (others => '0'); adv_tgl_x1 <= (others => '0');
       cpu_tgl_x1 <= (others => '0');
       hires_x1 <= (others => '0'); bpp16_x1 <= (others => '0');
+      blit_start_tgl_x1 <= (others => '0');
+      blit_ready <= '0'; blit_go <= '0';
+      bl_op_x1 <= (others => '0'); bl_color_x1 <= (others => '0');
+      bl_x0_x1 <= (others => '0'); bl_y0_x1 <= (others => '0');
+      bl_x1_x1 <= (others => '0'); bl_y1_x1 <= (others => '0');
+      blit_lat_addr <= (others => '0'); blit_lat_data <= (others => '0');
+      blit_gap <= (others => '0'); bl_gap_x1 <= x"0C";
     elsif rising_edge(clk_x1) then
       app_cmd_en <= '0'; app_wren <= '0'; app_wdata_end <= '0';  -- 1-cycle pulses
+      blit_ready <= '0'; blit_go <= '0';
 
       fs_tgl_x1  <= fs_tgl_x1(1 downto 0)  & fs_tgl_sys;
       adv_tgl_x1 <= adv_tgl_x1(1 downto 0) & adv_tgl_sys;
       cpu_tgl_x1 <= cpu_tgl_x1(1 downto 0) & cpu_tgl_sys;
       hires_x1   <= hires_x1(1 downto 0)   & hires;
       bpp16_x1   <= bpp16_x1(1 downto 0)   & bpp16;
+      blit_start_tgl_x1 <= blit_start_tgl_x1(1 downto 0) & blit_start_tgl_sys;
+
+      -- blit command: capture the (quasi-static, sticky-busy-guarded) registers
+      -- into this domain on the synchronised start edge, then kick the engine.
+      if blit_start_tgl_x1(2) /= blit_start_tgl_x1(1) then
+        bl_op_x1    <= blit_op;
+        bl_x0_x1    <= blit_x0;
+        bl_y0_x1    <= blit_y0;
+        bl_x1_x1    <= blit_x1;
+        bl_y1_x1    <= blit_y1;
+        bl_color_x1 <= blit_color;
+        bl_gap_x1   <= unsigned(blit_gap_cfg);
+        blit_go     <= '1';
+      end if;
 
       -- active geometry from the synced mode selects (modes are exclusive).
       b16 := bpp16_x1(2);
@@ -273,20 +387,53 @@ begin
       if st = S_IDLE or st = S_CALIB then wd_cnt <= (others => '0');
       else wd_cnt <= wd_cnt + 1; end if;
 
+      if blit_gap /= 0 then blit_gap <= blit_gap - 1; end if;
+
       case st is
         when S_CALIB =>
           if calib_done = '1' then st <= S_IDLE; end if;
 
         when S_IDLE =>
-          if half_valid(to_integer(disp_idx(0 downto 0))) = '0'
-             or half_line(to_integer(disp_idx(0 downto 0))) /= disp_idx then
-            cur_line <= disp_idx; cur_half <= disp_idx(0); col <= 0;
+          -- Register line-buffer miss checks before arbitrating.  This keeps
+          -- disp_idx/half_line comparisons out of the same 100 MHz path that
+          -- drives the FSM state and DDR command request.
+          hidx := to_integer(disp_idx(0 downto 0));
+          nidx := 1 - hidx;
+          fetch_cur_line <= disp_idx;
+          fetch_cur_half <= disp_idx(0);
+          if half_valid(hidx) = '0' or half_line(hidx) /= disp_idx then
+            fetch_cur_need <= '1';
+          else
+            fetch_cur_need <= '0';
+          end if;
+          if to_integer(disp_idx) + 1 < nlines then
+            fetch_next_line <= disp_idx + 1;
+            fetch_next_half <= not disp_idx(0);
+            if half_valid(nidx) = '0' or half_line(nidx) /= disp_idx + 1 then
+              fetch_next_need <= '1';
+            else
+              fetch_next_need <= '0';
+            end if;
+          else
+            fetch_next_line <= disp_idx;
+            fetch_next_half <= not disp_idx(0);
+            fetch_next_need <= '0';
+          end if;
+          st <= S_SELECT;
+
+        when S_SELECT =>
+          if fetch_cur_need = '1' then
+            cur_line <= fetch_cur_line; cur_half <= fetch_cur_half; col <= 0;
             st <= S_FILL_REQ;
-          elsif to_integer(disp_idx) + 1 < nlines
-                and (half_valid(1 - to_integer(disp_idx(0 downto 0))) = '0'
-                     or half_line(1 - to_integer(disp_idx(0 downto 0))) /= disp_idx + 1) then
-            cur_line <= disp_idx + 1; cur_half <= not disp_idx(0); col <= 0;
+          elsif fetch_next_need = '1' then
+            cur_line <= fetch_next_line; cur_half <= fetch_next_half; col <= 0;
             st <= S_FILL_REQ;
+          elsif blit_we = '1' and blit_gap = 0 then
+            -- latch the pixel locally so the app_addr arithmetic below starts
+            -- at a register instead of reaching into the engine's datapath
+            blit_lat_addr <= blit_addr;
+            blit_lat_data <= blit_data;
+            st <= S_BLIT_WRREQ;          -- blitter has priority over CPU byte ops
           elsif cpu_pending = '1' then
             cpu_op_we   <= cpu_we;
             cpu_op_addr <= cpu_addr;
@@ -388,6 +535,38 @@ begin
             cpu_dout_x1 <= app_rdata(ln*8 + 7 downto ln*8);
             ack_tgl_x1  <= not ack_tgl_x1;
             cpu_pending <= '0';
+            st <= S_IDLE;
+          end if;
+
+        -- blitter pixel write (masked single byte into the 16-byte burst).
+        -- blit_addr is held stable by the engine while blit_we is asserted.
+        when S_BLIT_WRREQ =>
+          if app_cmd_rdy = '1' then
+            app_addr   <= burst_addr(HIRES_BASE_WORD,
+                                     to_integer(unsigned(blit_lat_addr)));
+            app_cmd    <= CMD_WRITE;
+            app_cmd_en <= '1';
+            st <= S_BLIT_WRDATA;
+          end if;
+        when S_BLIT_WRDATA =>
+          if app_wdata_rdy = '1' then
+            ln := lane_of(to_integer(unsigned(blit_lat_addr)));
+            app_wdata(ln*8 + 7 downto ln*8) <= blit_lat_data;
+            app_wdata_mask <= (others => '1');
+            app_wdata_mask(ln) <= '0';
+            app_wren       <= '1';
+            app_wdata_end  <= '1';
+            -- Unlike the CPU byte port, a blit does NOT invalidate the line
+            -- buffer per pixel: the display refetches every scanline each frame
+            -- anyway (half_valid clears at fb_frame_start), so blit writes appear
+            -- next frame. Invalidating per pixel would force a full line refetch
+            -- for every pixel and slow the blit by ~40x.
+            blit_ready  <= '1';               -- release the engine for next pixel
+            blit_gap    <= bl_gap_x1;
+            st <= S_BLIT_WAIT;
+          end if;
+        when S_BLIT_WAIT =>
+          if blit_we = '0' then               -- engine consumed ready, advanced
             st <= S_IDLE;
           end if;
 

@@ -1,7 +1,7 @@
 -- SD Disk Controller: bridges 6502 memory-mapped registers to sd_card_top
 -- sector read/write interface with an internal 512-byte transfer buffer.
 --
--- Register map (offset from ADDR_DISK_BASE $8824, accent on 12-byte window):
+-- Register map (offset from BASE_ADDR, default ADDR_DISK_BASE $8824):
 --   +0  CMD      W: command (01=read, 02=write)  R: last command
 --   +1  STATUS   R: bit7=init_done bit2=data_ready bit1=error bit0=busy
 --   +2  SECT_0   Sector LBA byte 0 (LSB)
@@ -21,6 +21,9 @@ use ieee.numeric_std.all;
 use work.sbc_pkg.all;
 
 entity sd_disk_ctrl is
+  generic (
+    BASE_ADDR : unsigned(15 downto 0) := ADDR_DISK_BASE
+  );
   port (
     clk       : in  std_logic;
     reset_n   : in  std_logic;
@@ -80,7 +83,7 @@ architecture rtl of sd_disk_ctrl is
   signal buf_rd_addr : unsigned(8 downto 0);
   signal buf_rd_data : data_t := (others => '0');
 
-  -- A CPU access to the DATA register ($882A) holds cs high for the whole CPU
+  -- A CPU access to the DATA register (BASE_ADDR+6) holds cs high for the whole CPU
   -- cycle (2 system clocks, cpu_enable toggling), while the write strobe `we`
   -- pulses for only one of them.  To advance buf_ptr exactly once per access --
   -- and to do it AFTER the data has been written/read so buf_rd_data stays
@@ -90,7 +93,7 @@ architecture rtl of sd_disk_ctrl is
   signal data_acc_prev : std_logic := '0';     -- registered, for edge detect
 
 begin
-  reg_offset <= resize(unsigned(addr) - ADDR_DISK_BASE, 4);
+  reg_offset <= resize(unsigned(addr) - BASE_ADDR, 4);
   irq <= '0';
 
   sd_sec_read_addr  <= reg_sect;
@@ -99,7 +102,7 @@ begin
   buf_rd_addr <= sd_ptr when busy = '1' else buf_ptr;
   sd_sec_write_data <= buf_rd_data;
   data_acc <= '1' when cs = '1' and busy = '0' and
-              resize(unsigned(addr) - ADDR_DISK_BASE, 4) = 6 else '0';
+              resize(unsigned(addr) - BASE_ADDR, 4) = 6 else '0';
 
   -- Main process: register access + controller FSM
   process(clk)

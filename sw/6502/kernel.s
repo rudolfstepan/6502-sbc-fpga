@@ -19,7 +19,7 @@
 ;   $F024  JMP DISK_LOAD   Load PRG by name into BASIC memory (C=0 ok)
 ;   $F027  JMP DISK_SAVE   Reserved (write support; not yet implemented)
 ;
-; The D64 GoDrive (FAT32 + D64 virtual disk) lives at $8824; see
+; The D64 GoDrive (FAT16 root scan in software + D64 virtual disk) lives at $8824; see
 ; fpga/docs/D64_DRIVE.md.  The disk routines mirror fpga/sw/disk.s.
 ;
 ; EhBASIC owns almost all of zero page up to $FF. It marks $EB-$EE as unused.
@@ -31,7 +31,8 @@
 ;
 ; Hardware:
 ;   VIC video RAM  $8000-$87FF  (80 x 25 = 2000 bytes in text80 mode)
-;   VIA 6522       $8800-$880F  (keyboard on Port A / CA1)
+;   VIA 6522       $8800-$880F
+;   PS/2 keyboard  $8820-$8823  (status/key/modifier/ascii)
 ; ============================================================
 
 COLS        = 80
@@ -43,6 +44,10 @@ VIA_DDRA    = $8803
 VIA_IFR     = $880D
 VIA_IER     = $880E
 CA1_BIT     = $02
+
+KBD_STATUS  = $8820         ; bit 0 = key_ready
+KBD_ASCII   = $8823         ; read clears key_ready
+KBD_READY   = $01
 
 ; ── D64 GoDrive register map (d64_subsystem at DEV_DISK $8824) ──────────────
 DISK_STATUS  = $8824        ; R  bit0 BUSY bit1 DONE bit2 ERROR bit3 MOUNTED
@@ -70,11 +75,6 @@ VIC_CURSOR_X = $9001
 VIC_CURSOR_Y = $9002
 VIC_TEXT_ATTR = $9005
 VIC_TEXT_80   = $02
-
-UART_DATA   = $8810         ; write = TX byte, read = RX byte
-UART_SR     = $8811         ; bit 4 = TDRE (TX ready), bit 3 = RDRF (RX data)
-UART_TDRE   = $10
-UART_RDRF   = $08
 
 ; Cursor position is tracked in ZP BRAM and mirrored to the VIC cursor
 ; registers ($9001/$9002), where the text VIC draws a blinking cursor cell.
@@ -200,7 +200,6 @@ no_suppress:
     ; Get A back for comparison
     tsx
     lda $0103,x             ; peek at saved A (3 bytes down from SP)
-    jsr uart_put            ; mirror to UART (preserves A, $0D -> CR+LF)
 
     cmp #$0D
     beq newline_cr
@@ -334,14 +333,16 @@ no_pending:
     jsr replay_next
     bcs got_char
 
-    lda UART_SR             ; check UART RX first
-    and #UART_RDRF
+    lda KBD_STATUS
+    and #KBD_READY
     beq try_via
-    lda UART_DATA           ; read byte (clears RDRF)
+    lda KBD_ASCII
+    beq nothing
     jsr handle_screen_key
     bcc nothing
     jsr to_upper
     jmp got_char
+
 try_via:
     lda VIA_IFR
     and #CA1_BIT
@@ -652,15 +653,6 @@ done:
 ; CLRSCR -- fill VIC RAM with spaces, reset cursor to (0,0)
 ; ------------------------------------------------------------
 .proc CLRSCR
-    ; Diagnostic: busy-wait for TDRE then send '*' to confirm kernel alive
-    pha
-clrscr_diag:
-    lda UART_SR
-    and #UART_TDRE
-    beq clrscr_diag
-    lda #'*'
-    sta UART_DATA
-    pla
     ; Fill the active 80x25 character area ($8000-$87CF) with spaces.
     lda #<VIC_BASE
     sta SCRPTR_LO
@@ -1047,6 +1039,10 @@ DK_STARTL   = $0365     ; PRG start (load) address
 DK_STARTH   = $0366
 DK_ENDL     = $0367     ; PRG end address (last+1)
 DK_ENDH     = $0368
+DK_MOUNTLBA0 = $0369    ; currently mounted D64 image start LBA mirror
+DK_MOUNTLBA1 = $036A    ; ($882C-$882F are write-only on the hardware side)
+DK_MOUNTLBA2 = $036B
+DK_MOUNTLBA3 = $036C
 DK_NUML     = $037A     ; print_dec16 working value low
 DK_NUMH     = $037B     ; print_dec16 working value high
 DK_DIG      = $037C     ; print_dec16 current digit
@@ -1064,16 +1060,19 @@ FT_PRG      = $02
 
 ; ------------------------------------------------------------
 ; DISK_MOUNT -- ensure an image is mounted.  Idempotent: if a disk is already
-; mounted (e.g. one picked in the DISKS menu), leave it as-is; only scan FAT32
-; and mount the first .d64 when nothing is mounted yet.  C=0 ok, C=1 fail.
+; mounted (e.g. one picked in the DISKS menu), leave it as-is; otherwise scan
+; the FAT16 root and mount the first .d64.  C=0 ok, C=1 fail.
 ; ------------------------------------------------------------
 .proc DISK_MOUNT
     lda DISK_STATUS
     and #STAT_MOUNTED
     bne already            ; something already mounted -> keep the menu's choice
-    lda #DCMD_MOUNT
-    sta DISK_COMMAND
-    jsr disk_wait
+    jsr DISK_ENUM
+    bcs fail
+    lda FAT_CNT
+    beq fail
+    lda #0
+    jsr DISK_MOUNT_LBA
     lda DISK_STATUS
     and #STAT_ERROR
     bne fail
@@ -1100,14 +1099,134 @@ loop:
 .endproc
 
 ; ------------------------------------------------------------
-; disk_read_sector -- A=track, X=sector -> buffer.  C=0 ok, C=1 error.
+; disk_read_sector -- A=track, X=sector -> 256-byte buffer. C=0 ok, C=1 error.
+;
+; Use the raw SD LBA path instead of the D64 READ_SECTOR engine.  The raw path
+; is already needed for FAT16 enumeration and has proven reliable on hardware;
+; it also avoids a lower-half read failure seen when loading T18/S1 from a
+; packed .d64 through the drive engine.
 ; ------------------------------------------------------------
 .proc disk_read_sector
-    sta DISK_TRACK
-    stx DISK_SECTOR
-    lda #DCMD_READ
-    sta DISK_COMMAND
-    jsr disk_wait
+    sta F32B+3             ; requested track
+    stx F32B+2             ; requested sector
+    lda #0
+    sta F32B+0             ; 16-bit D64 sector index
+    sta F32B+1
+
+    lda F32B+3
+    cmp #1
+    bcs :+
+    jmp err
+:
+    cmp #18
+    bcc trk_1_17
+    cmp #25
+    bcc trk_18_24
+    cmp #31
+    bcc trk_25_30
+    cmp #36
+    bcc trk_31_35
+    jmp err
+
+trk_1_17:
+    lda F32B+2
+    cmp #21
+    bcc :+
+    jmp err
+:
+    lda F32B+3
+    sec
+    sbc #1
+    tax
+    jsr idx_mul21
+    jmp add_sector
+
+trk_18_24:
+    lda F32B+2
+    cmp #19
+    bcc :+
+    jmp err
+:
+    lda #<357
+    sta F32B+0
+    lda #>357
+    sta F32B+1
+    lda F32B+3
+    sec
+    sbc #18
+    tax
+    jsr idx_mul19
+    jmp add_sector
+
+trk_25_30:
+    lda F32B+2
+    cmp #18
+    bcc :+
+    jmp err
+:
+    lda #<490
+    sta F32B+0
+    lda #>490
+    sta F32B+1
+    lda F32B+3
+    sec
+    sbc #25
+    tax
+    jsr idx_mul18
+    jmp add_sector
+
+trk_31_35:
+    lda F32B+2
+    cmp #17
+    bcc :+
+    jmp err
+:
+    lda #<598
+    sta F32B+0
+    lda #>598
+    sta F32B+1
+    lda F32B+3
+    sec
+    sbc #31
+    tax
+    jsr idx_mul17
+
+add_sector:
+    clc
+    lda F32B+0
+    adc F32B+2
+    sta F32B+0
+    lda F32B+1
+    adc #0
+    sta F32B+1
+
+    lda F32B+0
+    and #1
+    sta F32B+2             ; half selector: 0=lower, 1=upper
+    lsr F32B+1             ; index /= 2 -> SD LBA delta
+    ror F32B+0
+
+    clc
+    lda DK_MOUNTLBA0
+    adc F32B+0
+    sta F32A+0
+    lda DK_MOUNTLBA1
+    adc F32B+1
+    sta F32A+1
+    lda DK_MOUNTLBA2
+    adc #0
+    sta F32A+2
+    lda DK_MOUNTLBA3
+    adc #0
+    sta F32A+3
+
+    lda F32B+2
+    beq lower
+    jsr raw_read_lba_hi
+    jmp chk
+lower:
+    jsr raw_read_lba
+chk:
     lda DISK_STATUS
     and #STAT_ERROR
     bne err
@@ -1115,6 +1234,67 @@ loop:
     rts
 err:
     sec
+    rts
+
+idx_mul21:
+    cpx #0
+    beq mul_done
+@lp:
+    clc
+    lda F32B+0
+    adc #21
+    sta F32B+0
+    lda F32B+1
+    adc #0
+    sta F32B+1
+    dex
+    bne @lp
+mul_done:
+    rts
+
+idx_mul19:
+    cpx #0
+    beq mul_done
+@lp:
+    clc
+    lda F32B+0
+    adc #19
+    sta F32B+0
+    lda F32B+1
+    adc #0
+    sta F32B+1
+    dex
+    bne @lp
+    rts
+
+idx_mul18:
+    cpx #0
+    beq mul_done
+@lp:
+    clc
+    lda F32B+0
+    adc #18
+    sta F32B+0
+    lda F32B+1
+    adc #0
+    sta F32B+1
+    dex
+    bne @lp
+    rts
+
+idx_mul17:
+    cpx #0
+    beq mul_done
+@lp:
+    clc
+    lda F32B+0
+    adc #17
+    sta F32B+0
+    lda F32B+1
+    adc #0
+    sta F32B+1
+    dex
+    bne @lp
     rts
 .endproc
 
@@ -1581,12 +1761,11 @@ fin:
 .endproc
 
 ; ============================================================
-; FAT32 directory enumeration of .d64 files (for the D64 select menu).
+; FAT16 directory enumeration of .d64 files (for the D64 select menu).
 ;
-; The 6502 reads the FAT32 root via the raw-sector debug read ($05) and computes
-; each .d64 file's start LBA, mirroring rtl/.../fat32_reader.vhd.  It then mounts
-; a chosen LBA via CMD_MOUNT_LBA.  This is the one place the 6502 touches FAT32 —
-; only to drive the on-screen menu; normal disk access stays D64-only.
+; The 6502 reads the FAT16 root directory via the raw-sector read ($05) and
+; computes each .d64 file's start LBA.  It then mounts a chosen LBA via
+; CMD_MOUNT_LBA.  Normal disk access stays D64-only after mounting.
 ;
 ; Tables (page 3): up to FAT_MAX entries, name (12 bytes: 11 + nul) + 4-byte LBA.
 ; ============================================================
@@ -1596,9 +1775,11 @@ FAT_MAX     = 20
 SCREEN_REPLAY_BUF: .res COLS + 1
 FAT_RES:    .res 2          ; reserved sectors
 FAT_NFATS:  .res 1          ; number of FATs
-FAT_SPF:    .res 4          ; sectors per FAT (32-bit)
+FAT_SPF:    .res 4          ; sectors per FAT (low 16 bits used for FAT16)
 FAT_SPC:    .res 1          ; sectors per cluster
-FAT_DSTART: .res 4          ; data_start LBA (32-bit) = part_lba+reserved+nfats*spf
+FAT_ROOT:   .res 4          ; FAT16 root directory LBA
+FAT_RSECT:  .res 2          ; FAT16 root directory sectors
+FAT_DSTART: .res 4          ; data_start LBA (root_lba + root sectors)
 FAT_PLBA:   .res 4          ; partition start LBA (0 for superfloppy)
 FAT_CNT:    .res 1          ; number of .d64 files found
 FAT_NAMES:  .res 12 * FAT_MAX   ; 8.3 names, nul-terminated
@@ -1606,7 +1787,7 @@ FAT_LBAS:   .res 4 * FAT_MAX    ; start LBA per file
 ; 32-bit scratch for the math
 F32A:       .res 4
 F32B:       .res 4
-FAT_SECIDX: .res 1          ; current root sector index (0..spc-1)
+FAT_RLEFT:  .res 2          ; root sectors left while scanning
 FAT_TMP:    .res 1
 FAT_EIDX:   .res 1          ; scan_half entry index (X is clobbered by append_file)
 
@@ -1673,15 +1854,38 @@ FAT_EIDX:   .res 1          ; scan_half entry index (X is clobbered by append_fi
     beq is_bpb
     cmp #$E9
     beq is_bpb
-    ; --- MBR: partition 0 start LBA at offset 454..457 (446+8) ---
-    ; read upper half (offset 446 is in bytes 256..511)
+
+    ; --- MBR: require boot signature and a FAT16 partition type. ---
     lda #0
     sta F32A+0
     sta F32A+1
     sta F32A+2
     sta F32A+3
     jsr raw_read_lba_hi
-    lda #(454-256)
+    lda #$FE               ; 510-256
+    sta DISK_PTR_LO
+    lda DISK_DATA
+    cmp #$55
+    beq :+
+    jmp scan_fail
+:
+    lda DISK_DATA
+    cmp #$AA
+    beq :+
+    jmp scan_fail
+:
+    lda #$C2               ; 446 + 4 - 256: partition type
+    sta DISK_PTR_LO
+    lda DISK_DATA
+    cmp #$04               ; FAT16 <32M
+    beq mbr_part
+    cmp #$06               ; FAT16
+    beq mbr_part
+    cmp #$0E               ; FAT16 LBA
+    beq mbr_part
+    jmp scan_fail
+mbr_part:
+    lda #$C6               ; 446 + 8 - 256: partition start LBA
     sta DISK_PTR_LO
     lda DISK_DATA
     sta FAT_PLBA+0
@@ -1703,106 +1907,111 @@ FAT_EIDX:   .res 1          ; scan_half entry index (X is clobbered by append_fi
     jsr raw_read_lba
 is_bpb:
     ; --- parse BPB fields from the current buffer (lower half of BPB sector) ---
+    lda #11
+    sta DISK_PTR_LO
+    lda DISK_DATA          ; bytes per sector low, must be 512 ($0200)
+    cmp #0
+    beq :+
+    jmp scan_fail
+:
+    lda DISK_DATA
+    cmp #2
+    beq :+
+    jmp scan_fail
+:
     lda #13
     sta DISK_PTR_LO
     lda DISK_DATA          ; +13 spc
+    bne :+
+    jmp scan_fail
+:
     sta FAT_SPC
     lda DISK_DATA          ; +14 reserved lo
     sta FAT_RES+0
     lda DISK_DATA          ; +15 reserved hi
     sta FAT_RES+1
     lda DISK_DATA          ; +16 num fats
+    bne :+
+    jmp scan_fail
+:
     sta FAT_NFATS
-    ; spf at +36..39
-    lda #36
+    lda DISK_DATA          ; +17 root entries lo
+    sta FAT_RSECT+0
+    lda DISK_DATA          ; +18 root entries hi
+    sta FAT_RSECT+1
+    ldx #4                 ; root sectors = root entries / 16
+root_shift:
+    lsr FAT_RSECT+1
+    ror FAT_RSECT+0
+    dex
+    bne root_shift
+    lda FAT_RSECT+0
+    ora FAT_RSECT+1
+    bne :+
+    jmp scan_fail
+:
+    ; FAT16 sectors-per-FAT at +22..23
+    lda #22
     sta DISK_PTR_LO
     lda DISK_DATA
     sta FAT_SPF+0
     lda DISK_DATA
     sta FAT_SPF+1
-    lda DISK_DATA
+    lda #0
     sta FAT_SPF+2
-    lda DISK_DATA
     sta FAT_SPF+3
-    ; root_clus at +44..47
-    lda #44
-    sta DISK_PTR_LO
-    lda DISK_DATA
-    sta F32B+0             ; reuse F32B for root_clus
-    lda DISK_DATA
-    sta F32B+1
-    lda DISK_DATA
-    sta F32B+2
-    lda DISK_DATA
-    sta F32B+3
 
-    ; --- data_start = part_lba + reserved + nfats*spf ---
-    ; F32A = nfats * spf
+    ; --- derive root_lba and data_start ---
     jsr calc_data_start
 
-    ; --- root dir LBA = data_start + (root_clus-2)*spc ; scan its sectors ---
-    ; (root_clus is in F32B); compute first root sector into FAT_DSTART-relative
-    ; We scan spc sectors of the root cluster, reading 16 dir entries each (lower
-    ; half = first 8 entries, upper half = next 8) and collecting .d64 names.
-    ; root_base = data_start + (root_clus-2)*spc
-    sec
-    lda F32B+0
-    sbc #2
-    sta F32B+0
-    lda F32B+1
-    sbc #0
-    sta F32B+1
-    lda F32B+2
-    sbc #0
-    sta F32B+2
-    lda F32B+3
-    sbc #0
-    sta F32B+3
-    ; F32B = (root_clus-2) * spc  (spc is a power of two; multiply by shifting)
-    jsr mul_f32b_spc
-    ; root_base (F32A) = data_start + F32B
-    clc
-    lda FAT_DSTART+0
-    adc F32B+0
+    ; scan FAT16's fixed root directory, 16 entries per sector
+    lda FAT_ROOT+0
     sta F32A+0
-    lda FAT_DSTART+1
-    adc F32B+1
+    lda FAT_ROOT+1
     sta F32A+1
-    lda FAT_DSTART+2
-    adc F32B+2
+    lda FAT_ROOT+2
     sta F32A+2
-    lda FAT_DSTART+3
-    adc F32B+3
+    lda FAT_ROOT+3
     sta F32A+3
+    lda FAT_RSECT+0
+    sta FAT_RLEFT+0
+    lda FAT_RSECT+1
+    sta FAT_RLEFT+1
 
-    ; scan up to spc sectors
-    lda #0
-    sta FAT_SECIDX
 scan_sector:
-    ; read this root sector (F32A already = root_base + secidx after increments)
+    lda FAT_RLEFT+0
+    ora FAT_RLEFT+1
+    beq done_ok
     jsr raw_read_lba
     jsr scan_half_lower
     bcs done_ok            ; end-of-dir marker hit
-    ; upper half (entries 8..15)
-    ; re-read upper half of the same LBA
     jsr raw_read_lba_hi
     jsr scan_half_upper
     bcs done_ok
-    ; next sector: F32A += 1, secidx++
     inc F32A+0
     bne :+
     inc F32A+1
+    bne :+
+    inc F32A+2
+    bne :+
+    inc F32A+3
 :
-    inc FAT_SECIDX
-    lda FAT_SECIDX
-    cmp FAT_SPC
-    bcc scan_sector
+    lda FAT_RLEFT+0
+    bne :+
+    dec FAT_RLEFT+1
+:
+    dec FAT_RLEFT+0
+    jmp scan_sector
 done_ok:
     clc
     rts
+scan_fail:
+    sec
+    rts
 .endproc
 
-; calc_data_start -- FAT_DSTART = FAT_PLBA + FAT_RES + FAT_NFATS*FAT_SPF
+; calc_data_start -- FAT_ROOT = PLBA + RES + NFATS*SPF,
+;                    FAT_DSTART = FAT_ROOT + FAT_RSECT
 .proc calc_data_start
     ; F32A = nfats * spf (nfats is small, 1 or 2; just add spf nfats times)
     lda #0
@@ -1829,32 +2038,47 @@ addloop:
     dex
     bne addloop
 added:
-    ; FAT_DSTART = FAT_PLBA + FAT_RES(16-bit) + F32A
+    ; FAT_ROOT = FAT_PLBA + FAT_RES(16-bit) + F32A
     clc
     lda FAT_PLBA+0
     adc FAT_RES+0
-    sta FAT_DSTART+0
+    sta FAT_ROOT+0
     lda FAT_PLBA+1
     adc FAT_RES+1
-    sta FAT_DSTART+1
+    sta FAT_ROOT+1
     lda FAT_PLBA+2
     adc #0
-    sta FAT_DSTART+2
+    sta FAT_ROOT+2
     lda FAT_PLBA+3
     adc #0
-    sta FAT_DSTART+3
+    sta FAT_ROOT+3
     clc
-    lda FAT_DSTART+0
+    lda FAT_ROOT+0
     adc F32A+0
-    sta FAT_DSTART+0
-    lda FAT_DSTART+1
+    sta FAT_ROOT+0
+    lda FAT_ROOT+1
     adc F32A+1
-    sta FAT_DSTART+1
-    lda FAT_DSTART+2
+    sta FAT_ROOT+1
+    lda FAT_ROOT+2
     adc F32A+2
-    sta FAT_DSTART+2
-    lda FAT_DSTART+3
+    sta FAT_ROOT+2
+    lda FAT_ROOT+3
     adc F32A+3
+    sta FAT_ROOT+3
+
+    ; FAT_DSTART = FAT_ROOT + root directory sectors (16-bit)
+    clc
+    lda FAT_ROOT+0
+    adc FAT_RSECT+0
+    sta FAT_DSTART+0
+    lda FAT_ROOT+1
+    adc FAT_RSECT+1
+    sta FAT_DSTART+1
+    lda FAT_ROOT+2
+    adc #0
+    sta FAT_DSTART+2
+    lda FAT_ROOT+3
+    adc #0
     sta FAT_DSTART+3
     rts
 .endproc
@@ -1879,7 +2103,7 @@ done:
 ; 0..7 of the sector, at buffer offsets i*32). Collect .d64 matches. C=1 if a
 ; $00 end-of-dir entry is seen.
 ; (CMD_RAW_READ fills raw_buf[0..255] with card bytes 0..255 of the LBA, with no
-; offset, so FAT32 32-byte entries start at buffer offset 0.)
+; offset, so FAT16 32-byte entries start at buffer offset 0.)
 .proc scan_half_lower
     lda #0
     sta FAT_EIDX            ; entry index 0..7 (eval_entry->append_file clobbers X)
@@ -1947,9 +2171,8 @@ copy:
     cmp #$E5
     beq cont               ; deleted
     lda DK_ENTRY+11        ; attr
-    and #$0F
-    cmp #$0F
-    beq cont               ; LFN
+    and #$18
+    bne cont               ; LFN/volume label/directory
     ; extension at bytes 8,9,10 must be "D64"
     lda DK_ENTRY+8
     cmp #'D'
@@ -2004,15 +2227,13 @@ ncopy:
     lda #0
     sta FAT_NAMES,y        ; nul-terminate
 
-    ; first_cluster = (DK_ENTRY[20..21] << 16) | DK_ENTRY[26..27]
-    ; F32B = first_cluster
+    ; FAT16 first_cluster = DK_ENTRY[26..27]
     lda DK_ENTRY+26
     sta F32B+0
     lda DK_ENTRY+27
     sta F32B+1
-    lda DK_ENTRY+20
+    lda #0
     sta F32B+2
-    lda DK_ENTRY+21
     sta F32B+3
     ; F32B -= 2
     sec
@@ -2062,12 +2283,16 @@ ncopy:
     tay                    ; Y = index*4
     lda FAT_LBAS,y
     sta DISK_RAW_LBA0
+    sta DK_MOUNTLBA0
     lda FAT_LBAS+1,y
     sta DISK_RAW_LBA1
+    sta DK_MOUNTLBA1
     lda FAT_LBAS+2,y
     sta DISK_RAW_LBA2
+    sta DK_MOUNTLBA2
     lda FAT_LBAS+3,y
     sta DISK_RAW_LBA3
+    sta DK_MOUNTLBA3
     lda #CMD_MOUNT_LBA
     sta DISK_COMMAND
     jmp disk_wait
@@ -2150,16 +2375,17 @@ cancel:
 ; raw byte in A.
 .proc menu_getkey
 loop:
-    lda UART_SR             ; UART RX first
-    and #UART_RDRF
+    lda KBD_STATUS          ; PS/2 keyboard ASCII register
+    and #KBD_READY
     beq try_via
-    lda UART_DATA           ; read byte (clears RDRF)
-    rts
+    lda KBD_ASCII           ; read byte (clears key_ready)
+    bne got_key
 try_via:
-    lda VIA_IFR             ; keyboard via VIA CA1
+    lda VIA_IFR             ; optional keyboard via VIA CA1
     and #CA1_BIT
     beq loop
     lda VIA_ORA             ; read byte (clears the CA1 flag)
+got_key:
     rts
 .endproc
 
@@ -2218,42 +2444,6 @@ done:
     ldx #<menu_foot
     ldy #>menu_foot
     jmp STROUT
-.endproc
-
-; ------------------------------------------------------------
-; uart_put -- send char in A to hardware UART ($8810)
-;             $0D -> CR + LF;  $0A -> ignored (VIC handles it)
-;             Preserves: A, X, Y
-; ------------------------------------------------------------
-.proc uart_put
-    cmp #$0A                ; ignore LF
-    beq up_done
-    pha
-    cmp #$0D                ; CR -> send CR then LF
-    bne up_char
-up_cr_wait:
-    lda UART_SR
-    and #UART_TDRE
-    beq up_cr_wait
-    lda #$0D
-    sta UART_DATA
-up_lf_wait:
-    lda UART_SR
-    and #UART_TDRE
-    beq up_lf_wait
-    lda #$0A
-    sta UART_DATA
-    pla
-    rts
-up_char:
-up_char_wait:
-    lda UART_SR
-    and #UART_TDRE
-    beq up_char_wait
-    pla
-    sta UART_DATA
-up_done:
-    rts
 .endproc
 
 ; ============================================================

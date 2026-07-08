@@ -58,9 +58,9 @@ architecture rtl of sid6581 is
   attribute syn_keep of sid_tick_pulse : signal is 1;
 
   -- State-variable filter ($D415-$D418): cutoff/resonance/routing + LP/BP/HP.
-  -- Updated once per SID tick over a 5-step pipeline (voice-mix, HP, BP, LP,
-  -- output) so no multiply+add chain sits in one 54 MHz path.  ~54 system
-  -- clocks are available per SID tick, far more than the 5 stages used.
+  -- Updated once per SID tick over a short pipeline so no multiply+add chain
+  -- sits in one 54 MHz path. ~54 system clocks are available per SID tick, far
+  -- more than the stages used here.
   constant FLT_BND : integer := 2097152;          -- state saturation (+/-2^21)
   constant D418_DAC_STEP : integer := 512;        -- final-sample units per volume LSB
   constant D418_DC_SHIFT : natural := 12;         -- ~4 ms DC blocker at SID rate
@@ -68,12 +68,18 @@ architecture rtl of sid6581 is
   signal hp_s       : signed(25 downto 0) := (others => '0');
   signal fcoef_s    : signed(14 downto 0) := (others => '0');
   signal dcoef_s    : signed(17 downto 0) := (others => '0');
+  signal cut_seg_s   : unsigned(2 downto 0) := (others => '0');
+  signal cut_frac_s  : unsigned(7 downto 0) := (others => '0');
+  signal cut_base_s  : unsigned(12 downto 0) := (others => '0');
+  signal cut_delta_s : unsigned(11 downto 0) := (others => '0');
+  signal cut_prod_s  : unsigned(19 downto 0) := (others => '0');
+  signal res4_s      : unsigned(3 downto 0) := (others => '0');
   signal d418_lp_s   : signed(17 downto 0) := (others => '0');
   signal dir_lat    : signed(21 downto 0) := (others => '0');
   signal flt_lat    : signed(21 downto 0) := (others => '0');
   signal total_lat  : signed(27 downto 0) := (others => '0');
   signal modev_lat  : data_t := (others => '0');
-  signal fstage     : integer range 0 to 5 := 0;
+  signal fstage     : integer range 0 to 7 := 0;
 
   -- phi2 cycles between envelope steps (reSID rate-counter periods, ADSR nibble)
   function rate_period(n : natural) return natural is
@@ -100,20 +106,6 @@ architecture rtl of sid6581 is
     end if;
   end function;
 
-  -- 11-bit cutoff register -> Q16 filter coefficient (2*pi*fc/fs, fs=phi2).
-  -- Piecewise-linear approximation of an exponential "dark 6581" curve so that
-  -- mid-range register values stay genuinely low (e.g. FC=1240 -> ~2 kHz, not
-  -- ~7.5 kHz of a linear map). 8 equal 256-wide segments, endpoints at 2048.
-  function cutoff_coeff(cut11 : natural) return natural is
-    type y_arr is array (0 to 8) of natural;
-    constant YB  : y_arr := (50, 89, 159, 282, 502, 891, 1586, 2819, 5015);
-    variable seg : natural;
-    variable frac : natural;
-  begin
-    seg  := cut11 / 256;            -- 0..7 (top 3 bits)
-    frac := cut11 mod 256;          -- 0..255 within the segment
-    return YB(seg) + (YB(seg+1) - YB(seg)) * frac / 256;
-  end function;
 begin
   -- Write registers ($00-$18) read back the last written value; $19/$1A (POTX/
   -- POTY) have no paddle hardware -> $FF; $1B = OSC3 (voice-3 oscillator MSB, the
@@ -273,8 +265,9 @@ begin
   end process;
 
   -- Voice mixing + state-variable filter, advanced once per SID tick.
-  -- Stage 0: mix routed/direct voices, derive coefficients, compute HP.
-  -- Stage 1: integrate BP (needs HP).  Stage 2: integrate LP, mix, output.
+  -- The cutoff curve is intentionally staged because the source register used
+  -- to feed a piecewise interpolation function directly, which became the
+  -- post-blitter critical path in the Tang 20K build.
   out_proc : process(clk)
     variable base, p12, pw, wav12, src, lower : integer;
     variable msb : std_logic;
@@ -285,7 +278,7 @@ begin
     variable amp  : signed(20 downto 0);
     variable c    : signed(19 downto 0);
     variable dir_v, flt_v : signed(21 downto 0);
-    variable cut11, res4, dcoef_i : integer;
+    variable dcoef_i : integer;
     variable dcoef : signed(17 downto 0);
     variable dbp  : signed(43 downto 0);
     variable fhp, fbp : signed(40 downto 0);
@@ -299,6 +292,10 @@ begin
     if rising_edge(clk) then
       if reset_n = '0' then
         lp_s <= (others => '0'); bp_s <= (others => '0'); hp_s <= (others => '0');
+        fcoef_s <= (others => '0'); dcoef_s <= (others => '0');
+        cut_seg_s <= (others => '0'); cut_frac_s <= (others => '0');
+        cut_base_s <= (others => '0'); cut_delta_s <= (others => '0');
+        cut_prod_s <= (others => '0'); res4_s <= (others => '0');
         d418_lp_s <= (others => '0');
         sample_out <= (others => '0');
         fstage <= 0;
@@ -350,19 +347,44 @@ begin
               flt_lat   <= flt_v;
               modev_lat <= regs(24);
 
-              -- ---- coefficients (Q16): nonlinear cutoff, resonance -> damping.
-              -- The 6581 resonance is weak: map res 0..15 to Q ~0.7..2 (damping
-              -- 1.41..0.5) so resonant peaks colour the tone without slamming the
-              -- output limiter into hard clipping.
-              cut11 := to_integer(unsigned(regs(22)) & unsigned(regs(21)(2 downto 0)));
-              fcoef_s <= to_signed(cutoff_coeff(cut11), fcoef_s'length);
-              res4  := to_integer(unsigned(regs(23)(7 downto 4)));
-              dcoef_i := 92000 - res4 * 3949;
-              dcoef_s <= to_signed(dcoef_i, dcoef_s'length);
+              -- Latch cutoff/resonance fields.  The 11-bit cutoff is split into
+              -- segment (top 3 bits) and interpolation fraction (low 8 bits).
+              cut_seg_s  <= unsigned(regs(22)(7 downto 5));
+              cut_frac_s <= unsigned(regs(22)(4 downto 0)) & unsigned(regs(21)(2 downto 0));
+              res4_s     <= unsigned(regs(23)(7 downto 4));
               fstage <= 1;
             end if;
 
           when 1 =>
+            -- ---- cutoff segment lookup + resonance damping ----
+            -- Endpoints for the nonlinear "dark 6581" cutoff curve:
+            -- 50, 89, 159, 282, 502, 891, 1586, 2819, 5015.
+            case cut_seg_s is
+              when "000" => cut_base_s <= to_unsigned(50,   cut_base_s'length);
+                            cut_delta_s <= to_unsigned(39,   cut_delta_s'length);
+              when "001" => cut_base_s <= to_unsigned(89,   cut_base_s'length);
+                            cut_delta_s <= to_unsigned(70,   cut_delta_s'length);
+              when "010" => cut_base_s <= to_unsigned(159,  cut_base_s'length);
+                            cut_delta_s <= to_unsigned(123,  cut_delta_s'length);
+              when "011" => cut_base_s <= to_unsigned(282,  cut_base_s'length);
+                            cut_delta_s <= to_unsigned(220,  cut_delta_s'length);
+              when "100" => cut_base_s <= to_unsigned(502,  cut_base_s'length);
+                            cut_delta_s <= to_unsigned(389,  cut_delta_s'length);
+              when "101" => cut_base_s <= to_unsigned(891,  cut_base_s'length);
+                            cut_delta_s <= to_unsigned(695,  cut_delta_s'length);
+              when "110" => cut_base_s <= to_unsigned(1586, cut_base_s'length);
+                            cut_delta_s <= to_unsigned(1233, cut_delta_s'length);
+              when others => cut_base_s <= to_unsigned(2819, cut_base_s'length);
+                             cut_delta_s <= to_unsigned(2196, cut_delta_s'length);
+            end case;
+            -- The 6581 resonance is weak: map res 0..15 to Q ~0.7..2 (damping
+            -- 1.41..0.5) so resonant peaks colour the tone without clipping.
+            dcoef_i := 92000 - to_integer(res4_s) * 3949;
+            dcoef_s <= to_signed(dcoef_i, dcoef_s'length);
+            fstage <= 2;
+
+          when 2 =>
+            cut_prod_s <= cut_delta_s * cut_frac_s;
             -- ---- HP = in - LP - damping*BP ----
             -- Split out from voice mixing so the regs -> waveform -> flt_v ->
             -- hp_s chain (the new worst path after the first pipeline split)
@@ -371,9 +393,15 @@ begin
             dbp := resize(dcoef_s * bp_s, dbp'length);
             hp_s <= resize(flt_lat, hp_s'length) - resize(lp_s, hp_s'length)
                     - resize(shift_right(dbp, 16), hp_s'length);
-            fstage <= 2;
+            fstage <= 3;
 
-          when 2 =>
+          when 3 =>
+            fcoef_s <= signed(resize(cut_base_s + resize(shift_right(cut_prod_s, 8),
+                                                         cut_base_s'length),
+                                      fcoef_s'length));
+            fstage <= 4;
+
+          when 4 =>
             -- ---- BP += f*HP, with saturation ----
             fhp := resize(fcoef_s * hp_s, fhp'length);
             bp_sum := resize(bp_s, bp_sum'length)
@@ -385,14 +413,12 @@ begin
             else
               bp_s <= resize(bp_sum, bp_s'length);
             end if;
-            fstage <= 3;
+            fstage <= 5;
 
-          when 3 =>
+          when 5 =>
             -- ---- LP += f*BP, with saturation ----
             -- This stage ends here (register lp_s) to keep the multiply+add+
-            -- saturate path short.  The output mixing/scaling/clipping moves to
-            -- stage 3 so the long bp_s -> sample_out path no longer all settles
-            -- in one 54 MHz cycle (it was the design's worst critical path).
+            -- saturate path short.
             fbp := resize(fcoef_s * bp_s, fbp'length);
             lp_sum := resize(lp_s, lp_sum'length)
                       + resize(shift_right(fbp, 16), lp_sum'length);
@@ -404,9 +430,9 @@ begin
               lp_new := resize(lp_sum, lp_new'length);
             end if;
             lp_s <= lp_new;
-            fstage <= 4;
+            fstage <= 6;
 
-          when 4 =>
+          when 6 =>
             -- ---- select filter modes, mix with direct path ----
             -- Ends here (register total) so the mode-sum + master multiply +
             -- clip no longer all sit in one 54 MHz path.
@@ -415,9 +441,9 @@ begin
             if modev_lat(5) = '1' then filt_out := filt_out + resize(bp_s,  filt_out'length); end if;
             if modev_lat(6) = '1' then filt_out := filt_out + resize(hp_s,  filt_out'length); end if;
             total_lat <= resize(dir_lat, total_lat'length) + filt_out;
-            fstage <= 5;
+            fstage <= 7;
 
-          when 5 =>
+          when 7 =>
             -- ---- scale by master volume, add $D418 digi DAC, clip to 16-bit ----
             master := '0' & unsigned(modev_lat(3 downto 0));
             scaled := resize(total_lat * signed('0' & std_logic_vector(master)), scaled'length);

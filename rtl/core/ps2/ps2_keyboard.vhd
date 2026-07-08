@@ -443,6 +443,27 @@ architecture rtl of ps2_keyboard is
     end if;
   end function;
 
+  -- Cursor/Home typematic repeats can leave one pending navigation byte after
+  -- the key is released.  Drop that pending byte on the matching PS/2 break so
+  -- scrolling stops immediately, while ordinary typed characters remain latched.
+  function break_clears_pending(sc      : std_logic_vector(7 downto 0);
+                                ext     : std_logic;
+                                pending : std_logic_vector(7 downto 0))
+    return boolean is
+  begin
+    if ext = '1' then
+      case sc is
+        when x"6B" => return pending = x"9D";                   -- Cursor left
+        when x"74" => return pending = x"1D";                   -- Cursor right
+        when x"75" => return pending = x"91";                   -- Cursor up
+        when x"72" => return pending = x"11";                   -- Cursor down
+        when x"6C" => return pending = x"13" or pending = x"93"; -- Home / Shift+Home
+        when others => return false;
+      end case;
+    end if;
+    return false;
+  end function;
+
 begin
 
   -- Synchronise PS/2 clock into system domain and detect falling edge
@@ -541,12 +562,15 @@ begin
               end case;
             end if;
 
-            -- On make (not break), latch scancode and ASCII
+            -- On make (not break), latch scancode and ASCII.  On selected
+            -- break codes, discard a matching pending repeat immediately.
             if is_break = '0' then
               scancode_r <= rx_byte;
               ascii_r    <= sc2_to_ascii_sel(rx_byte, modif_r, is_ext);
               key_ready  <= '1';
               key_ev_tog <= not key_ev_tog;
+            elsif break_clears_pending(rx_byte, is_ext, ascii_r) then
+              key_ready <= '0';
             end if;
 
             is_break <= '0';

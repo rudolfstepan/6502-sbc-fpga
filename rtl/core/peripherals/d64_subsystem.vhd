@@ -1,15 +1,13 @@
 -- D64 subsystem: the 6502-facing D64 GoDrive controller.
 --
--- Wraps fat32_reader (find + verify the .d64 on a FAT32 card) and d64_drive
--- (read-only D64 sector engine), arbitrating the single raw sd2 SD read channel
--- between them.  fat32_reader runs only during MOUNT; d64_drive runs only during
--- READ_SECTOR -- they are mutually exclusive in time, so the arbiter is a simple
--- "whoever owns the channel now" mux gated by which command is in flight.
+-- Wraps d64_drive (read-only D64 sector engine) and a raw sector read window
+-- used by the 6502 kernel to parse a FAT16 SD card in software.  The kernel
+-- computes a .d64 start LBA, then mounts it with CMD_MOUNT_LBA.
 --
 -- Register interface (offsets from the module's base; the bus decoder selects
 -- the module and passes a small offset):
 --   +0  STATUS   R  bit0 BUSY, bit1 DONE, bit2 ERROR, bit3 MOUNTED,
---                    bit4 WRITE_PROTECT, bit6 IMAGE_READY (fat scan ok)
+--                    bit4 WRITE_PROTECT, bit6 IMAGE_READY (LBA mounted)
 --   +1  COMMAND  W  $00 NOP, $01 READ_SECTOR, $03 MOUNT, $04 UNMOUNT,
 --                    $0A RESET
 --   +2  TRACK    RW input track for READ_SECTOR (1-based)
@@ -19,8 +17,8 @@
 --   +6  PTR_LO   RW buffer pointer low 8 bits (0..255)
 --   +7  PTR_HI   R  reserved (buffer is 256 bytes, high byte always 0)
 --
--- MOUNT uses the start LBA resolved by fat32_reader.  The 6502 issues MOUNT,
--- polls STATUS until BUSY clears, then checks ERROR / MOUNTED.
+-- Legacy CMD_MOUNT is intentionally not implemented here: removing the old
+-- FAT32 hardware scanner saves enough logic for the Tang 20K build.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -60,7 +58,7 @@ architecture rtl of d64_subsystem is
   constant RES_INVALID_CMD: std_logic_vector(7 downto 0) := x"0A";
 
   -- Which engine currently owns the SD read channel.
-  type owner_t is (OWN_NONE, OWN_FAT, OWN_DRIVE, OWN_RAW);
+  type owner_t is (OWN_NONE, OWN_DRIVE, OWN_RAW);
   signal owner : owner_t := OWN_NONE;
 
   -- Raw-LBA debug read: captures the lower 256 bytes of any card block into a
@@ -83,25 +81,12 @@ architecture rtl of d64_subsystem is
   signal busy_r     : std_logic := '0';
   signal done_r     : std_logic := '0';
   signal error_r    : std_logic := '0';
-  signal img_ready  : std_logic := '0';     -- fat scan succeeded at least once
+  signal img_ready  : std_logic := '0';     -- an image LBA was mounted
   signal buf_ptr    : unsigned(7 downto 0) := (others => '0');
-
-  -- fat32_reader interface
-  signal fat_busy    : std_logic;
-  signal fat_ready   : std_logic;
-  signal fat_error   : std_logic;
-  signal fat_result  : std_logic_vector(7 downto 0);
-  signal fat_lba     : std_logic_vector(31 downto 0);
-  signal fat_size    : std_logic_vector(31 downto 0);
-  signal fat_sd_read : std_logic;
-  signal fat_sd_addr : std_logic_vector(31 downto 0);
-  signal fat_start_p : std_logic := '0';
 
   -- d64_drive interface
   signal drv_mount    : std_logic := '0';
   signal drv_unmount  : std_logic := '0';
-  signal drv_mount_lba : std_logic_vector(31 downto 0);  -- muxed mount source
-  signal mount_by_lba  : std_logic := '0';               -- '1' = use raw_lba
   signal drv_rd_req   : std_logic := '0';
   signal drv_busy     : std_logic;
   signal drv_done     : std_logic;
@@ -113,11 +98,8 @@ architecture rtl of d64_subsystem is
   signal drv_sd_read  : std_logic;
   signal drv_sd_addr  : std_logic_vector(31 downto 0);
 
-  -- Pending MOUNT: after fat32_reader finds the file, pulse drive mount.
-  signal mount_pending : std_logic := '0';
-
-  -- Pending MOUNT_LBA: the 6502 supplied a raw LBA to mount directly.  Like
-  -- mount_pending, the actual drv_mount pulse is deferred to the main FSM so it
+  -- Pending MOUNT_LBA: the 6502 supplied a raw LBA to mount directly.  The
+  -- actual drv_mount pulse is deferred to the main FSM so it
   -- is issued cleanly when the drive engine is idle (a same-cycle pulse from the
   -- command decode could be missed on hardware if the drive had just finished a
   -- read and was not yet back in its idle state -- a race GHDL does not show).
@@ -132,52 +114,14 @@ architecture rtl of d64_subsystem is
   -- Registered previous state of a DATA-port access, for falling-edge detect.
   signal data_acc_prev : std_logic := '0';
 
-  -- Debug observability from fat32_reader.  A debug selector written to offset 7
-  -- picks which 32-bit value is read back through offsets 8..11 (LSB..MSB):
-  --   0=data_start 1=fat_start 2=root_lba 3=spf 4={reserved,file_lba_lo16}
-  signal fat_dbg_data_start : std_logic_vector(31 downto 0);
-  signal fat_dbg_fat_start  : std_logic_vector(31 downto 0);
-  signal fat_dbg_root_lba   : std_logic_vector(31 downto 0);
-  signal fat_dbg_spf        : std_logic_vector(31 downto 0);
-  signal fat_dbg_reserved   : std_logic_vector(15 downto 0);
-  signal dbg_sel            : unsigned(2 downto 0) := (others => '0');
-  signal dbg_word           : std_logic_vector(31 downto 0);
 begin
-  fat_i : entity work.fat32_reader
-    port map (
-      clk      => clk,
-      reset_n  => reset_n,
-      start    => fat_start_p,
-      busy     => fat_busy,
-      ready    => fat_ready,
-      error    => fat_error,
-      result   => fat_result,
-      file_start_lba => fat_lba,
-      file_size      => fat_size,
-      dbg_data_start => fat_dbg_data_start,
-      dbg_fat_start  => fat_dbg_fat_start,
-      dbg_root_lba   => fat_dbg_root_lba,
-      dbg_spf        => fat_dbg_spf,
-      dbg_reserved   => fat_dbg_reserved,
-      sd_sec_read            => fat_sd_read,
-      sd_sec_read_addr       => fat_sd_addr,
-      sd_sec_read_data       => sd_sec_read_data,
-      sd_sec_read_data_valid => sd_sec_read_data_valid,
-      sd_sec_read_end        => sd_sec_read_end
-    );
-
-  -- Mount source: normally the LBA resolved by fat32_reader (CMD_MOUNT), but a
-  -- CMD_MOUNT_LBA lets the 6502 mount a specific LBA it found itself (used by the
-  -- D64 selection menu, which enumerates .d64 files via raw reads).
-  drv_mount_lba <= raw_lba when mount_by_lba = '1' else fat_lba;
-
   drv_i : entity work.d64_drive
     port map (
       clk            => clk,
       reset_n        => reset_n,
       mount          => drv_mount,
       unmount        => drv_unmount,
-      file_start_lba => drv_mount_lba,
+      file_start_lba => raw_lba,
       write_protect_in => '1',
       rd_req         => drv_rd_req,
       rd_track       => reg_track,
@@ -199,21 +143,11 @@ begin
 
   -- Arbiter: the active owner drives the shared SD read request lines.  Read
   -- *data* fans out to all engines (only the active one consumes it).
-  sd_sec_read <= fat_sd_read when owner = OWN_FAT else
-                 drv_sd_read when owner = OWN_DRIVE else
+  sd_sec_read <= drv_sd_read when owner = OWN_DRIVE else
                  raw_sd_read when owner = OWN_RAW else
                  '0';
-  sd_sec_read_addr <= fat_sd_addr when owner = OWN_FAT else
-                      raw_lba     when owner = OWN_RAW else
+  sd_sec_read_addr <= raw_lba     when owner = OWN_RAW else
                       drv_sd_addr;
-
-  -- Debug word selected by dbg_sel, read back through offsets 8..11.
-  dbg_word <= fat_dbg_data_start when dbg_sel = 0 else
-              fat_dbg_fat_start  when dbg_sel = 1 else
-              fat_dbg_root_lba   when dbg_sel = 2 else
-              fat_dbg_spf        when dbg_sel = 3 else
-              fat_lba            when dbg_sel = 4 else
-              (x"0000" & fat_dbg_reserved);
 
   -- Synchronous raw-buffer read port (1-cycle latency), mirrors the drive port.
   process(clk)
@@ -227,7 +161,7 @@ begin
   -- Offsets 8..11 read back the selected debug word (LSB..MSB).
   process(offset, busy_r, done_r, error_r, drv_mounted, drv_wp, img_ready,
           reg_track, reg_sector, reg_result, drv_buf_data, raw_buf_data,
-          raw_active, buf_ptr, dbg_word)
+          raw_active, buf_ptr, raw_lba)
   begin
     case to_integer(unsigned(offset)) is
       when 0 => dout <= '0' & img_ready & '0' & drv_wp & drv_mounted
@@ -242,10 +176,10 @@ begin
           dout <= drv_buf_data;
         end if;
       when 6  => dout <= std_logic_vector(buf_ptr);
-      when 8  => dout <= dbg_word(7 downto 0);
-      when 9  => dout <= dbg_word(15 downto 8);
-      when 10 => dout <= dbg_word(23 downto 16);
-      when 11 => dout <= dbg_word(31 downto 24);
+      when 8  => dout <= raw_lba(7 downto 0);
+      when 9  => dout <= raw_lba(15 downto 8);
+      when 10 => dout <= raw_lba(23 downto 16);
+      when 11 => dout <= raw_lba(31 downto 24);
       when others => dout <= x"00";
     end case;
   end process;
@@ -265,13 +199,10 @@ begin
         error_r      <= '0';
         img_ready    <= '0';
         buf_ptr      <= (others => '0');
-        fat_start_p  <= '0';
         drv_mount    <= '0';
         drv_unmount  <= '0';
         drv_rd_req   <= '0';
-        mount_pending <= '0';
         mount_lba_pending <= '0';
-        mount_by_lba <= '0';
         raw_lba      <= (others => '0');
         raw_sd_read  <= '0';
         raw_active   <= '0';
@@ -279,10 +210,8 @@ begin
         raw_byte_cnt <= (others => '0');
         raw_wr_idx   <= (others => '0');
         data_acc_prev <= '0';
-        dbg_sel       <= (others => '0');
       else
         -- default pulses low
-        fat_start_p <= '0';
         drv_mount   <= '0';
         drv_unmount <= '0';
         drv_rd_req  <= '0';
@@ -302,26 +231,21 @@ begin
                   eng_started <= '0';
                   raw_active  <= '0';   -- DATA port now follows the drive buffer
                 elsif din = CMD_MOUNT then
-                  busy_r       <= '1';
-                  owner        <= OWN_FAT;
-                  fat_start_p  <= '1';
-                  mount_pending <= '1';
-                  eng_started  <= '0';
-                  mount_by_lba <= '0';   -- fat32_reader supplies the LBA
+                  reg_result <= RES_INVALID_CMD;
+                  error_r    <= '1';
+                  done_r     <= '1';
                 elsif din = CMD_RAW_READ then
                   busy_r     <= '1';
                   owner      <= OWN_RAW;
                   raw_active <= '1';
                   raw_state  <= RAW_REQ;
                 elsif din = CMD_MOUNT_LBA then
-                  -- mount the LBA the 6502 placed in $882C-$882F (no FAT scan).
-                  -- Select raw_lba as the mount source and defer the drv_mount
+                  -- Mount the LBA the 6502 placed in $882C-$882F.  Defer the drv_mount
                   -- pulse to the main FSM (mount_lba_pending), so it is issued
                   -- when the drive engine is guaranteed idle.
-                  mount_by_lba      <= '1';
                   mount_lba_pending <= '1';
                   busy_r            <= '1';
-                  owner             <= OWN_NONE;  -- not a fat/drive/raw op
+                  owner             <= OWN_NONE;  -- not a drive/raw op
                   raw_active        <= '0';       -- DATA port follows drive buf
                   eng_started       <= '0';
                 elsif din = CMD_UNMOUNT then
@@ -342,7 +266,7 @@ begin
             when 2 => reg_track  <= din;
             when 3 => reg_sector <= din;
             when 6 => buf_ptr    <= unsigned(din);
-            when 7 => dbg_sel    <= unsigned(din(2 downto 0));  -- debug-word select
+            when 7 => null;
             -- raw debug LBA (little-endian) at offsets 8..11
             when 8  => raw_lba(7 downto 0)   <= din;
             when 9  => raw_lba(15 downto 8)  <= din;
@@ -370,36 +294,13 @@ begin
 
         -- Observe the owned engine starting (busy high) before honouring its
         -- terminal status.
-        if owner = OWN_FAT and fat_busy = '1' then
+        if owner = OWN_DRIVE and drv_busy = '1' then
           eng_started <= '1';
-        elsif owner = OWN_DRIVE and drv_busy = '1' then
-          eng_started <= '1';
-        end if;
-
-        -- ── MOUNT completion: fat scan -> drive mount ──────────────────────
-        if owner = OWN_FAT and mount_pending = '1' and eng_started = '1' then
-          if fat_error = '1' then
-            mount_pending <= '0';
-            owner         <= OWN_NONE;
-            busy_r        <= '0';
-            error_r       <= '1';
-            reg_result    <= fat_result;
-          elsif fat_ready = '1' then
-            mount_pending <= '0';
-            owner         <= OWN_NONE;
-            busy_r        <= '0';
-            done_r        <= '1';
-            error_r       <= '0';
-            reg_result    <= RES_OK;
-            img_ready     <= '1';
-            drv_mount     <= '1';   -- latch start LBA into the drive
-          end if;
         end if;
 
         -- ── MOUNT_LBA: pulse drive mount once the engine is idle ───────────
-        -- drv_mount_lba is already raw_lba (mount_by_lba='1').  Wait until the
-        -- drive is not busy, then pulse drv_mount for exactly one cycle so the
-        -- engine latches the new start LBA, and complete the command.
+        -- Wait until the drive is not busy, then pulse drv_mount for exactly one
+        -- cycle so the engine latches raw_lba, and complete the command.
         if mount_lba_pending = '1' and drv_busy = '0' then
           mount_lba_pending <= '0';
           drv_mount         <= '1';   -- latch raw_lba into the drive (S_IDLE)

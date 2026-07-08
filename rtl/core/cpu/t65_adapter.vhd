@@ -1,6 +1,6 @@
--- T65 CPU Adapter: Interface wrapper for the T65 6502 CPU core
+-- T65 CPU Adapter: Interface wrapper for the T65 65C02-capable CPU core
 -- Adapts the T65 VHDL processor core to the standard system bus interface
--- The T65 is a cycle-accurate 6502 emulation. This adapter:
+-- The T65 is used in 65C02 mode. This adapter:
 --  - Translates T65 control signals to standard bus signals
 --  - Truncates 24-bit T65 addresses to 16-bit bus addresses
 --  - Generates write-enable signal from R/W_n and VDA (Valid Data Address)
@@ -62,11 +62,11 @@ begin
   we <= (not t65_r_w_n) and t65_vda;
 
   -- Instantiate T65 CPU core
-  -- This is the main 6502 processor with cycle-accurate instruction execution
+  -- Mode "01" enables the 65C02 instruction subset in this T65 version.
   core_i : entity work.T65
     port map (
       -- CPU mode and configuration
-      Mode    => "00",           -- 6502 emulation mode (not 65C02 or 65816)
+      Mode    => "01",           -- 65C02 mode (not NMOS 6502 or 65816)
       BCD_en  => '1',            -- Enable Binary-Coded-Decimal arithmetic
 
       -- System clock and control

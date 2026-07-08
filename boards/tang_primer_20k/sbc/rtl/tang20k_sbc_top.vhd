@@ -19,6 +19,7 @@
 -- LED[0]/LED[1] show boot status until boot_done, then LED[3:0] follow VIA PB[3:0].
 library ieee;
 use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 use work.sbc_pkg.all;
 
 entity tang20k_sbc_top is
@@ -407,6 +408,17 @@ architecture rtl of tang20k_sbc_top is
   signal fb_line_adv    : std_logic;
   signal fb_rdaddr      : std_logic_vector(10 downto 0);
   signal fb_rddata      : std_logic_vector(15 downto 0);
+  -- hardware 2D blitter command wiring (core top -> vic_fb_ddr3)
+  signal blit_op    : std_logic_vector(2 downto 0);
+  signal blit_x0    : unsigned(9 downto 0);
+  signal blit_y0    : unsigned(9 downto 0);
+  signal blit_x1    : unsigned(9 downto 0);
+  signal blit_y1    : unsigned(9 downto 0);
+  signal blit_color : std_logic_vector(7 downto 0);
+  signal blit_page  : std_logic;
+  signal blit_gap   : std_logic_vector(7 downto 0);
+  signal blit_start : std_logic;
+  signal blit_busy  : std_logic;
 begin
   -- key(0) is the reset button: a short press soft-resets only the CPU (the
   -- running program restarts via its reset vector, ROM/boot/SRAM kept), a long
@@ -557,45 +569,33 @@ begin
     );
 
   -- Second SD card (data disk) — same Alinx SPI core, separate GPIO pins.
-  -- SD2 (D64 GoDrive card) DISABLED for the bring-up test: sd2_i is unwired so the
-  -- disk/FAT32 subsystem is fully out of the netlist. All of its outputs are held
-  -- inactive here. Uncomment sd2_i below and drop these tie-offs to restore.
-  sd2_ncs_i          <= '1';   -- chip-select high = SD2 idle
-  sd2_dclk_i         <= '0';
-  sd2_mosi_i         <= '0';
-  sd2_init_done      <= '0';
-  sd2_sec_read_data  <= (others => '0');
-  sd2_sec_read_valid <= '0';
-  sd2_sec_read_end   <= '0';
-  sd2_sec_write_req  <= '0';
-  sd2_sec_write_end  <= '0';
---  sd2_i : sd_card_top
---    generic map (
---      SPI_LOW_SPEED_DIV  => 268,
---      SPI_HIGH_SPEED_DIV => 2
---    )
---    port map (
---      clk                    => clk_sys,
---      rst                    => rst,
---      SD_nCS                 => sd2_ncs_i,
---      SD_DCLK                => sd2_dclk_i,
---      SD_MOSI                => sd2_mosi_i,
---      SD_MISO                => sd2_miso,
---      sd_init_done           => sd2_init_done,
---      sd_sec_read            => sd2_sec_read,
---      sd_sec_read_addr       => sd2_sec_read_addr,
---      sd_sec_read_data       => sd2_sec_read_data,
---      sd_sec_read_data_valid => sd2_sec_read_valid,
---      sd_sec_read_end        => sd2_sec_read_end,
---      sd_sec_write           => sd2_sec_write,
---      sd_sec_write_addr      => sd2_sec_write_addr,
---      sd_sec_write_data      => sd2_sec_write_data,
---      sd_sec_write_data_req  => sd2_sec_write_req,
---      sd_sec_write_end       => sd2_sec_write_end,
---      debug_sec_state        => open,
---      debug_cmd_state        => open,
---      debug_cmd_error        => open
---    );
+  sd2_i : sd_card_top
+    generic map (
+      SPI_LOW_SPEED_DIV  => 268,
+      SPI_HIGH_SPEED_DIV => 2
+    )
+    port map (
+      clk                    => clk_sys,
+      rst                    => rst,
+      SD_nCS                 => sd2_ncs_i,
+      SD_DCLK                => sd2_dclk_i,
+      SD_MOSI                => sd2_mosi_i,
+      SD_MISO                => sd2_miso,
+      sd_init_done           => sd2_init_done,
+      sd_sec_read            => sd2_sec_read,
+      sd_sec_read_addr       => sd2_sec_read_addr,
+      sd_sec_read_data       => sd2_sec_read_data,
+      sd_sec_read_data_valid => sd2_sec_read_valid,
+      sd_sec_read_end        => sd2_sec_read_end,
+      sd_sec_write           => sd2_sec_write,
+      sd_sec_write_addr      => sd2_sec_write_addr,
+      sd_sec_write_data      => sd2_sec_write_data,
+      sd_sec_write_data_req  => sd2_sec_write_req,
+      sd_sec_write_end       => sd2_sec_write_end,
+      debug_sec_state        => open,
+      debug_cmd_state        => open,
+      debug_cmd_error        => open
+    );
 
   loader_i : sd_rom_loader
     port map (
@@ -739,6 +739,16 @@ begin
       fb_line_adv    => fb_line_adv,
       fb_rdaddr      => fb_rdaddr,
       fb_rddata      => fb_rddata,
+      blit_op    => blit_op,
+      blit_x0    => blit_x0,
+      blit_y0    => blit_y0,
+      blit_x1    => blit_x1,
+      blit_y1    => blit_y1,
+      blit_color => blit_color,
+      blit_page  => blit_page,
+      blit_gap   => blit_gap,
+      blit_start => blit_start,
+      blit_busy  => blit_busy,
       dac_bck       => dac_bck,
       dac_ws        => dac_ws,
       dac_din       => dac_din,
@@ -959,6 +969,17 @@ begin
       cpu_din   => fbw_din,
       cpu_dout  => fbw_dout,
       cpu_ack   => fbw_ack,
+
+      blit_op    => blit_op,
+      blit_x0    => blit_x0,
+      blit_y0    => blit_y0,
+      blit_x1    => blit_x1,
+      blit_y1    => blit_y1,
+      blit_color => blit_color,
+      blit_page  => blit_page,
+      blit_gap_cfg => blit_gap,
+      blit_start => blit_start,
+      blit_busy  => blit_busy,
 
       clk_x1          => ddr_clk_x1,
       calib_done      => ddr_calib_complete,

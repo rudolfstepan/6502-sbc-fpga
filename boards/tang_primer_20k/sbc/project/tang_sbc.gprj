@@ -21,6 +21,8 @@
         <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/uart6551.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/vic_vga.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/vic_blit.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/vic_blit_regs.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/vic_fb_ddr3.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/audio/legacy_sound/sound_voice_full.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/audio/legacy_sound/sound_chip4.vhd" type="file.vhdl" enable="1"/>
@@ -29,8 +31,8 @@
         <File path="../../../../rtl/core/peripherals/pt8211_dac.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/d64_sector_map.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/d64_drive.vhd" type="file.vhdl" enable="1"/>
-        <File path="../../../../rtl/core/peripherals/fat32_reader.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/d64_subsystem.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/sd_disk_ctrl.vhd" type="file.vhdl" enable="1"/>
 
         <!-- Memory -->
         <File path="../../../../rtl/core/mem/sync_ram.vhd" type="file.vhdl" enable="1"/>

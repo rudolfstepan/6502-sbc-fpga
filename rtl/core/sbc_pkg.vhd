@@ -70,6 +70,10 @@ package sbc_pkg is
   constant ADDR_MATH_BASE       : unsigned(15 downto 0) := x"88B0";
   constant ADDR_MATH_LAST       : unsigned(15 downto 0) := x"88BF";
 
+  -- Raw SD2 sector controller: 512-byte buffered read/write data disk (16 bytes)
+  constant ADDR_SDRAW_BASE      : unsigned(15 downto 0) := x"88C0";
+  constant ADDR_SDRAW_LAST      : unsigned(15 downto 0) := x"88CF";
+
   -- VIC Sprite data: Sprite pattern storage (256 bytes)
   constant ADDR_VIC_SPD_BASE    : unsigned(15 downto 0) := x"8900";
   constant ADDR_VIC_SPD_LAST    : unsigned(15 downto 0) := x"89FF";
@@ -133,6 +137,7 @@ package sbc_pkg is
     DEV_VIC_REG,   -- VIC control registers
     DEV_VIC_BMP,   -- Bitmap frame buffer
     DEV_MATH,      -- Fixed-point math coprocessor
+    DEV_SDRAW,     -- Raw SD2 sector controller
     DEV_SID,       -- MOS 6581-compatible audio registers
     DEV_VICII,     -- VIC-II colour registers ($D020-$D02F): border/background
     DEV_CIA1,      -- CIA-1 ($DC00-$DC0F): Timer A + interrupt control

@@ -32,6 +32,7 @@ RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/peripherals/d64_sector_map.vhd \
       rtl/core/peripherals/d64_drive.vhd rtl/core/peripherals/fat32_reader.vhd \
       rtl/core/peripherals/d64_subsystem.vhd \
+      rtl/core/peripherals/sd_disk_ctrl.vhd \
       rtl/core/peripherals/uart6551.vhd rtl/core/peripherals/vic_core.vhd \
       rtl/core/peripherals/uart_rx_ser.vhd rtl/core/peripherals/uart_tx_ser.vhd \
       rtl/core/peripherals/vic_pixel_gen.vhd rtl/core/peripherals/vic_vga.vhd \
