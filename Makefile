@@ -314,9 +314,9 @@ reist:
 	$(GHDL) -r $(GHDL_FLAGS) tb_reist_bench $(GHDL_RUN_FLAGS) --stop-time=50ms
 
 roms:
-	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(CHESS_ROM_HEX) ../roms/chess.rom
-	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(SBC_ROM_HEX) ../roms/kernel.rom@0x0000 ../roms/msbasic.rom@0x1000
-	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(SBC_EHBASIC_ROM_HEX) ../roms/kernel.rom@0x0000 ../roms/ehbasic.rom@0x1000
+	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(CHESS_ROM_HEX) sim/hex/rom_welcome.hex
+	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(SBC_ROM_HEX) sim/hex/rom_welcome.hex
+	$(PYTHON) tools/bin_to_vhdl_hex.py --size 0x4000 --output $(SBC_EHBASIC_ROM_HEX) sim/hex/rom_welcome.hex
 
 sd-boot-image:
 	$(PYTHON) tools/make_sd_boot_image.py --output $(SBC_EHBASIC_SD_IMG) roms/fpga_ehbasic_16kb.rom@0x0000

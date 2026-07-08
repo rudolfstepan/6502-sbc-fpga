@@ -1,0 +1,84 @@
+name: CI/CD (6502 only)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Integrated tests (6502 only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghdl make python3
+
+      - name: Verify tools
+        run: |
+          ghdl --version
+          python3 --version
+          make --version
+
+      # If your Makefile already has 6502-only targets, use those instead of full test.
+      - name: Run 6502 integrated tests
+        run: |
+          set -euo pipefail
+          make test GHDL=ghdl
+
+      - name: Collect test logs
+        if: always()
+        run: |
+          mkdir -p artifacts/test-logs
+          if [ -d work ]; then cp -r work artifacts/test-logs/work; fi
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: artifacts/test-logs
+          if-no-files-found: warn
+
+  build:
+    name: Build artifacts (6502 only)
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ needs.test.result == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package 6502 artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # 6502 ROM assets (source inputs)
+          if [ -d roms/6502 ]; then
+            cp -r roms/6502 dist/
+          fi
+
+          # Include docs/metadata useful for downstream builds
+          {
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Commit: $GITHUB_SHA"
+            echo "Run: $GITHUB_RUN_ID"
+            echo "Built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Profile: 6502-only"
+          } > dist/BUILD_INFO.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpga-6502-artifacts
+          path: dist
+          if-no-files-found: error
