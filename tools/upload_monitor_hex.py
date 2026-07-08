@@ -155,6 +155,86 @@ def load_prg_image(image: Path, length: int | None = None) -> tuple[int, bytes]:
     return address, data
 
 
+def parse_basic_call(content: bytes) -> int | None:
+    """Return the decimal address after a tokenized EhBASIC CALL, if present."""
+    token_call = 0x9C
+    for pos, byte in enumerate(content):
+        if byte != token_call:
+            continue
+        pos += 1
+        while pos < len(content) and content[pos] == 0x20:
+            pos += 1
+        start = pos
+        while pos < len(content) and ord("0") <= content[pos] <= ord("9"):
+            pos += 1
+        if pos > start:
+            return int(content[start:pos].decode("ascii"))
+    return None
+
+
+def parse_basic_loader(load_address: int, data: bytes) -> tuple[int, int | None, int] | None:
+    """Parse a tokenized BASIC program at the start of a PRG payload.
+
+    Returns (basic_end_offset, call_address, line_count). basic_end_offset includes
+    the final zero link pointer. If the payload is not a plausible BASIC program,
+    returns None so the caller can fall back to a normal contiguous PRG upload.
+    """
+    pos = 0
+    call_address: int | None = None
+    line_count = 0
+    data_end = load_address + len(data)
+
+    while True:
+        if pos + 2 > len(data):
+            return None
+        next_ptr = data[pos] | (data[pos + 1] << 8)
+        if next_ptr == 0:
+            return pos + 2, call_address, line_count
+
+        current_addr = load_address + pos
+        next_pos = next_ptr - load_address
+        if next_ptr <= current_addr or next_ptr > data_end or pos + 4 > len(data):
+            return None
+
+        line_end = pos + 4
+        while line_end < len(data) and data[line_end] != 0:
+            line_end += 1
+        if line_end >= len(data) or line_end >= next_pos:
+            return None
+
+        found_call = parse_basic_call(data[pos + 4 : line_end])
+        if found_call is not None and call_address is None:
+            call_address = found_call
+
+        line_count += 1
+        pos = next_pos
+
+
+def prg_segments(image: Path, length: int | None = None) -> tuple[tuple[tuple[Path, int, bytes], ...], int]:
+    load_address, data = load_prg_image(image, length)
+    parsed = parse_basic_loader(load_address, data)
+    if parsed is None:
+        return ((image, load_address, data),), load_address
+
+    basic_end_offset, call_address, line_count = parsed
+    if (
+        line_count == 0
+        or call_address is None
+        or call_address <= load_address
+        or call_address >= load_address + len(data)
+        or basic_end_offset > call_address - load_address
+    ):
+        return ((image, load_address, data),), load_address
+
+    basic = data[:basic_end_offset]
+    machine = data[call_address - load_address :]
+    print(
+        f"Parsed PRG BASIC loader: ${load_address:04X}-{load_address + len(basic) - 1:04X}, "
+        f"CALL ${call_address:04X}, machine {len(machine)} bytes"
+    )
+    return ((image, load_address, basic), (image, call_address, machine)), call_address
+
+
 def upload_segment(
     port, image: Path, address: int, args: argparse.Namespace, data: bytes | None = None
 ) -> None:
@@ -215,9 +295,7 @@ def upload(args: argparse.Namespace) -> None:
         run_address = 0xA000
     elif args.prg:
         image = Path(args.image)
-        load_address, data = load_prg_image(image, args.length)
-        segments = ((image, load_address, data),)
-        run_address = load_address
+        segments, run_address = prg_segments(image, args.length)
     else:
         image = Path(args.image)
         if args.address == 0xC000 and image.is_file() and image.stat().st_size == 0x4000:
@@ -227,6 +305,9 @@ def upload(args: argparse.Namespace) -> None:
             )
         segments = ((image, args.address, None),)
         run_address = args.address
+
+    if args.run_address is not None:
+        run_address = args.run_address
 
     serial = require_pyserial()
     print(f"Opening {args.port} @ {args.baud} baud")
@@ -253,6 +334,12 @@ def upload(args: argparse.Namespace) -> None:
             response = read_some(port, args.wait_done)
             if args.verbose and response:
                 print(response.decode("ascii", errors="replace"), end="")
+        elif args.release:
+            print("Releasing CPU")
+            write_line(port, "G", args.command_delay)
+            response = read_some(port, args.wait_done)
+            if args.verbose and response:
+                print(response.decode("ascii", errors="replace"), end="")
 
     print("Upload complete")
 
@@ -272,6 +359,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wait-done", type=float, default=0.8, help="seconds to read after . or G")
     parser.add_argument("--progress", type=int, default=1024, help="progress interval in bytes, 0 disables")
     parser.add_argument("--run", action="store_true", help="send G <address> after upload")
+    parser.add_argument(
+        "--run-address",
+        type=lambda s: int(s, 0),
+        help="override the start address used by --run after uploading",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="send bare G after upload, releasing the CPU without changing PC",
+    )
     parser.add_argument("--no-wake", action="store_true",
                         help="skip the magic wake (monitor already active, e.g. via key)")
     parser.add_argument("--wake-retries", type=int, default=3, help="magic wake attempts")
@@ -290,7 +387,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--prg", action="store_true",
-        help="treat image as a PRG with two-byte little-endian load address",
+        help=(
+            "treat image as a PRG with two-byte load address; tokenized BASIC "
+            "loaders with CALL are split into BASIC and machine-code uploads"
+        ),
     )
     parser.add_argument("--build-demo", action="store_true", help="generate the default demo ROM first")
     parser.add_argument("--verbose", action="store_true", help="print monitor responses")
@@ -303,6 +403,8 @@ def main() -> None:
         raise SystemExit("ERROR: --ehbasic and --split-rom are mutually exclusive")
     if args.prg and (args.ehbasic or args.split_rom):
         raise SystemExit("ERROR: --prg cannot be combined with --ehbasic or --split-rom")
+    if args.run and args.release:
+        raise SystemExit("ERROR: --run and --release are mutually exclusive")
     if args.build_ehbasic and not args.ehbasic:
         raise SystemExit("ERROR: --build-ehbasic requires --ehbasic")
     if args.build_demo:
