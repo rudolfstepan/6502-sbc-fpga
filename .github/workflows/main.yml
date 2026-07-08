@@ -1,0 +1,96 @@
+name: CI/CD
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Integrated Tests (GHDL + Python)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghdl make
+
+      - name: Verify tools
+        run: |
+          ghdl --version
+          python --version
+          make --version
+
+      - name: Run Python ROM generator smoke check
+        run: |
+          python tools/build_c64_roms.py
+
+      - name: Run integrated HDL test suite
+        run: |
+          make test GHDL=ghdl
+
+      - name: Collect test logs
+        if: always()
+        run: |
+          mkdir -p artifacts/test-logs
+          if [ -d work ]; then cp -r work artifacts/test-logs/work; fi
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: artifacts/test-logs
+          if-no-files-found: warn
+
+  build:
+    name: Build Artifacts
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ needs.test.result == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Create build output
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python tools/build_c64_roms.py
+
+          cp -f rtl/c64/c64_roms.vhd dist/
+
+          if [ -d roms/test_d64 ]; then
+            cp -r roms/test_d64 dist/
+          fi
+
+          {
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Commit: $GITHUB_SHA"
+            echo "Run: $GITHUB_RUN_ID"
+            echo "Built at: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > dist/BUILD_INFO.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpga-build-artifacts
+          path: dist
+          if-no-files-found: error
