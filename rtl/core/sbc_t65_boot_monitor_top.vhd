@@ -11,8 +11,14 @@ entity sbc_t65_boot_monitor_top is
     BAUD   : positive := 115_200;
     -- Forwarded to vic_vga: true selects exact CEA-861 720x480p (pillarboxed).
     CEA_480P : boolean := false;
+    -- Forwarded to vic_vga: true selects standard 640x480 VGA timings.
+    VGA_640  : boolean := false;
     -- PS/2 keyboard layout: "DE" (German QWERTZ) or "US" (US QWERTY).
-    KBD_LAYOUT : string := "DE"
+    KBD_LAYOUT : string := "DE";
+    -- true: use the low-speed nand2mario USB HID host instead of PS/2.
+    USE_USB_HID : boolean := false;
+    -- Optional synthesis-time preload for the 16 KiB split ROM image.
+    ROM_INIT_BUILTIN : boolean := false
   );
   port (
     clk          : in  std_logic;
@@ -72,6 +78,14 @@ entity sbc_t65_boot_monitor_top is
     -- 16bpp RGB565 (both feed vic_fb_ddr3 at the board top). 320x200 8bpp = neither.
     fb_hires  : out std_logic;
     fb_true   : out std_logic;
+    -- Runtime framebuffer backend select ($884C bit 0 in the blitter window):
+    -- '1' routes the fbw port, blitter and display fetch to the DDR3 backend,
+    -- '0' to the board's default backend (e.g. SDRAM0). Only effective while
+    -- fb_ddr3_ready is high; $884C reads back bit7 = DDR3 ready, bit6 =
+    -- effective backend, bit0 = the latch. ($9007 is NOT used: existing
+    -- software writes frame acks to the emulator's ISR there.)
+    fb_ddr3_sel   : out std_logic;
+    fb_ddr3_ready : in  std_logic := '0';
     -- Video streaming port: drives vic_fb_ddr3's double-buffer prefetch and reads
     -- the current scanline's pixels back for display (16-bit: RGB565, or low byte).
     fb_frame_start : out std_logic;                      -- 1-clk pulse, frame top
@@ -89,6 +103,8 @@ entity sbc_t65_boot_monitor_top is
     blit_color : out std_logic_vector(7 downto 0);
     blit_page  : out std_logic;
     blit_gap   : out std_logic_vector(7 downto 0);  -- $884B: DDR3 write pacing
+    blit_dstx  : out unsigned(9 downto 0);          -- $884D + COLOR(1:0): COPY dst
+    blit_dsty  : out unsigned(9 downto 0);          -- $884E + COLOR(2)
     blit_start : out std_logic;
     blit_busy  : in  std_logic := '0';
 
@@ -100,6 +116,10 @@ entity sbc_t65_boot_monitor_top is
     -- PS/2 keyboard (directly on PMOD GPIO pins)
     ps2_clk  : in std_logic;
     ps2_data : in std_logic;
+    -- Optional low-speed USB HID keyboard (nand2mario bit-bang core).
+    usb_clk : in std_logic := '0';
+    usb_dm  : inout std_logic := 'Z';
+    usb_dp  : inout std_logic := 'Z';
 
     -- Keyboard diagnostic outputs (for boot debug display)
     usb_connected : out std_logic;
@@ -137,6 +157,8 @@ entity sbc_t65_boot_monitor_top is
 end entity;
 
 architecture rtl of sbc_t65_boot_monitor_top is
+  constant VIC_CLK_DIV : positive := (CLK_HZ + 26_999_999) / 27_000_000;
+
   signal cpu_reset_n : std_logic;
   signal cpu_reset_base_n : std_logic;
   signal cpu_addr    : addr_t := (others => '0');
@@ -280,6 +302,7 @@ architecture rtl of sbc_t65_boot_monitor_top is
   signal fb_hires_mode    : std_logic;                       -- mode bit5, gated
   signal fb_true_mode     : std_logic;                       -- mode bit6, gated (16bpp)
   signal vic_fb_bank      : std_logic_vector(4 downto 0) := (others => '0');  -- $9006
+  signal vic_fb_backend   : std_logic := '0';                -- $9007 bit 0
   signal vram_data_sel    : std_logic := '0';
   signal vram_data_mux    : data_t;
 
@@ -419,7 +442,9 @@ begin
       rdata => blit_dout, busy => blit_busy,
       blit_op => blit_op, blit_x0 => blit_x0, blit_y0 => blit_y0,
       blit_x1 => blit_x1, blit_y1 => blit_y1, blit_color => blit_color,
-      blit_page => blit_page, blit_gap => blit_gap, blit_start => blit_start);
+      blit_page => blit_page, blit_gap => blit_gap,
+      blit_dstx => blit_dstx, blit_dsty => blit_dsty,
+      blit_start => blit_start);
   via_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_VIA      else '0';
   uart_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_UART     else '0';
   disk_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_DISK     else '0';
@@ -499,6 +524,10 @@ begin
   fb_true_mode  <= vic_mode_reg(6) and not vic_mode_reg(5) and not vic_mode_reg(4);
   fb_hires       <= fb_hires_mode;   -- geometry selects to vic_fb_ddr3 (board top)
   fb_true        <= fb_true_mode;
+  -- Effective backend select: the $9007 latch only takes effect while the DDR3
+  -- controller reports ready, so software can never strand the fbw port on an
+  -- uncalibrated backend.
+  fb_ddr3_sel    <= vic_fb_backend and fb_ddr3_ready;
   bmp_bank <= vic_mode_reg(7 downto 5) when vic_mode_reg(4) = '1'
               else "00" & vic_mode_reg(2);
   -- 640x400 (32 banks) and 320x200 16bpp (128000 B = 16 banks) both bank via the
@@ -662,7 +691,8 @@ begin
 
   process(dev_sel, zp_cs, zp_dout, sram_dout, rom_dout, vram_dout, vic_reg_dout, via_dout,
           uart_dout, mon_jump_vector_active, mon_jump_vector, cpu_addr, bitmap_dout,
-          sound_dout, math_dout, sdraw_dout, sid_dout, disk_dout, vic2_dout, cia1_dout)
+          sound_dout, math_dout, sdraw_dout, sid_dout, disk_dout, vic2_dout, cia1_dout,
+          blit_dout, vic_fb_backend, fb_ddr3_ready)
   begin
     case dev_sel is
       when DEV_SRAM =>
@@ -692,7 +722,15 @@ begin
       when DEV_DISK =>
         cpu_din <= disk_dout;
       when DEV_VIC_BLIT =>
-        cpu_din <= blit_dout;
+        -- $884C = framebuffer backend select/status: bit7 = DDR3 ready, bit6 =
+        -- effective backend, bit0 = select latch. Other offsets read the
+        -- blitter register file ($884F = busy).
+        if cpu_addr(3 downto 0) = x"C" then
+          cpu_din <= fb_ddr3_ready & (vic_fb_backend and fb_ddr3_ready) &
+                     "00000" & vic_fb_backend;
+        else
+          cpu_din <= blit_dout;
+        end if;
       when DEV_VIC_BMP =>
         cpu_din <= bitmap_dout;
       when DEV_SOUND0 | DEV_SOUND1 | DEV_SOUND2 | DEV_SOUND3 =>
@@ -728,29 +766,40 @@ begin
         vic_mode_reg <= (others => '0');   -- back to text mode
         vic_text_attr <= (others => '0');  -- back to global background
         vic_fb_bank  <= (others => '0');   -- hi-res framebuffer bank -> 0
-      elsif vic_reg_we = '1' then
-        case cpu_addr(3 downto 0) is
-          when x"0" =>
-            vic_mode_reg <= cpu_dout;
-          when x"1" =>
-            if unsigned(cpu_dout(6 downto 0)) < to_unsigned(80, 7) then
-              vic_cursor_x <= cpu_dout(6 downto 0);
-            end if;
-          when x"2" =>
-            if unsigned(cpu_dout(4 downto 0)) < to_unsigned(25, 5) then
-              vic_cursor_y <= cpu_dout(4 downto 0);
-            end if;
-          when x"3" =>
-            vic_text_color <= cpu_dout;
-          when x"4" =>
-            vic_bg_color <= cpu_dout;
-          when x"5" =>
-            vic_text_attr <= cpu_dout;
-          when x"6" =>
-            vic_fb_bank <= cpu_dout(4 downto 0);   -- 640x400 framebuffer bank 0..31
-          when others =>
-            null;
-        end case;
+        vic_fb_backend <= '0';             -- back to the default (SDRAM0) backend
+      else
+        if vic_reg_we = '1' then
+          case cpu_addr(3 downto 0) is
+            when x"0" =>
+              vic_mode_reg <= cpu_dout;
+            when x"1" =>
+              if unsigned(cpu_dout(6 downto 0)) < to_unsigned(80, 7) then
+                vic_cursor_x <= cpu_dout(6 downto 0);
+              end if;
+            when x"2" =>
+              if unsigned(cpu_dout(4 downto 0)) < to_unsigned(25, 5) then
+                vic_cursor_y <= cpu_dout(4 downto 0);
+              end if;
+            when x"3" =>
+              vic_text_color <= cpu_dout;
+            when x"4" =>
+              vic_bg_color <= cpu_dout;
+            when x"5" =>
+              vic_text_attr <= cpu_dout;
+            when x"6" =>
+              vic_fb_bank <= cpu_dout(4 downto 0);   -- 640x400 framebuffer bank 0..31
+            when others =>
+              -- $9007 stays untouched: existing software treats it as the
+              -- emulator's VIC interrupt-status register and writes frame
+              -- acks there (the water demo does, every frame).
+              null;
+          end case;
+        end if;
+        -- Framebuffer backend select moved to the blitter window: $884C bit 0
+        -- (1 = DDR3, 0 = board default). $9007 was the wrong home for it.
+        if blit_wr = '1' and cpu_addr(3 downto 0) = x"C" then
+          vic_fb_backend <= cpu_dout(0);
+        end if;
       end if;
     end if;
   end process;
@@ -937,7 +986,7 @@ begin
   end process;
 
   rom_i : entity work.boot_shadow_rom
-    generic map (ADDR_WIDTH => 14)
+    generic map (ADDR_WIDTH => 14, INIT_BUILTIN => ROM_INIT_BUILTIN)
     port map (
       clk       => clk,
       cpu_addr  => rom_addr_mux,
@@ -1158,29 +1207,50 @@ begin
     end if;
   end process;
 
-  ps2_kbd_i : entity work.ps2_keyboard
-    generic map (
-      CLK_HZ     => CLK_HZ,
-      KBD_LAYOUT => KBD_LAYOUT
-    )
-    port map (
-      clk            => clk,
-      reset_n        => reset_n,
-      ps2_clk        => ps2_clk,
-      ps2_data       => ps2_data,
-      cs             => usb_cs,
-      we             => cpu_bus_we,
-      addr           => cpu_addr(1 downto 0),
-      dout           => usb_dout,
-      irq            => usb_irq,
-      diag_connected => usb_connected,
-      diag_keycode   => usb_keycode,
-      diag_modif     => usb_modif,
-      diag_ascii     => kbd_ascii_i,
-      diag_phase     => usb_phase,
-      diag_key_event => kbd_event_tog_i,
-      diag_polling   => usb_polling
-    );
+  uart_kbd_g : if not USE_USB_HID generate
+    uart_kbd_i : entity work.uart_keyboard
+      port map (
+        clk            => clk,
+        reset_n        => reset_n,
+        rx_data        => uart_rx_data,
+        rx_valid       => uart_rx_valid_cpu,
+        cs             => usb_cs,
+        we             => cpu_bus_we,
+        addr           => cpu_addr(1 downto 0),
+        dout           => usb_dout,
+        irq            => usb_irq,
+        diag_connected => usb_connected,
+        diag_keycode   => usb_keycode,
+        diag_modif     => usb_modif,
+        diag_ascii     => kbd_ascii_i,
+        diag_phase     => usb_phase,
+        diag_key_event => kbd_event_tog_i,
+        diag_polling   => usb_polling
+      );
+  end generate;
+
+  usb_hid_g : if USE_USB_HID generate
+    usb_hid_i : entity work.usb_hid_host
+      port map (
+        clk            => clk,
+        reset_n        => reset_n,
+        usb_clk        => usb_clk,
+        usb_dm         => usb_dm,
+        usb_dp         => usb_dp,
+        cs             => usb_cs,
+        we             => cpu_bus_we,
+        addr           => cpu_addr(1 downto 0),
+        dout           => usb_dout,
+        irq            => usb_irq,
+        diag_connected => usb_connected,
+        diag_keycode   => usb_keycode,
+        diag_modif     => usb_modif,
+        diag_ascii     => kbd_ascii_i,
+        diag_phase     => usb_phase,
+        diag_key_event => kbd_event_tog_i,
+        diag_polling   => usb_polling
+      );
+  end generate;
 
   usb_ascii     <= kbd_ascii_i;
   usb_key_event <= kbd_event_tog_i;
@@ -1194,9 +1264,10 @@ begin
 
   vic_i : entity work.vic_vga
     generic map (
-      CLK_DIV => CLK_HZ / 27_000_000,
+      CLK_DIV => VIC_CLK_DIV,
       CURSOR_BLINK_DIV => CLK_HZ / 2,
-      CEA_480P => CEA_480P
+      CEA_480P => CEA_480P,
+      VGA_640  => VGA_640
     )
     port map (
       clk          => clk,

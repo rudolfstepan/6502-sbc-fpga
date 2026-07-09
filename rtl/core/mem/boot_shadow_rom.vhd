@@ -1,7 +1,9 @@
 -- Boot-loaded shadow ROM.
 --
--- During boot, an external loader writes the firmware image into this RAM.
--- After boot, the CPU reads it as ROM at $C000-$FFFF.
+-- During boot, an external loader can write the firmware image into this RAM.
+-- The Tang Mega 138K build deliberately keeps this RAM empty at synthesis time
+-- and loads Kernel/BASIC from SD card, so the generated boot_rom_init_pkg is not
+-- pulled into the bitstream.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -10,7 +12,8 @@ use work.sbc_pkg.all;
 
 entity boot_shadow_rom is
   generic (
-    ADDR_WIDTH : positive := 14
+    ADDR_WIDTH : positive := 14;
+    INIT_BUILTIN : boolean := false
   );
   port (
     clk       : in  std_logic;
@@ -25,11 +28,23 @@ entity boot_shadow_rom is
 end entity;
 
 architecture rtl of boot_shadow_rom is
-  type ram_t is array (0 to (2 ** ADDR_WIDTH) - 1) of data_t;
-  signal ram : ram_t := (others => x"EA");
+  type ram_t is array (0 to 16383) of data_t;
+
+  function initial_ram(use_builtin : boolean) return ram_t is
+  begin
+    -- Built-in ROM contents used to live in boot_rom_init_pkg. Leave the generic
+    -- in place for board-top compatibility, but keep the synthesis image empty.
+    return (others => x"EA");
+  end function;
+
+  signal ram : ram_t := initial_ram(INIT_BUILTIN);
   attribute ram_style : string;
   attribute ram_style of ram : signal is "block";
 begin
+  assert ADDR_WIDTH = 14
+    report "boot_shadow_rom expects ADDR_WIDTH=14"
+    severity failure;
+
   process(clk)
   begin
     if rising_edge(clk) then

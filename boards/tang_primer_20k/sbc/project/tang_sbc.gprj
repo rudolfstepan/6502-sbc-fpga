@@ -20,6 +20,7 @@
         <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/uart6551.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/uart_keyboard.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/vic_vga.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/vic_blit.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/peripherals/vic_blit_regs.vhd" type="file.vhdl" enable="1"/>
@@ -38,6 +39,7 @@
         <File path="../../../../rtl/core/mem/sync_ram.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/mem/fb_ram.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/mem/char_rom.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/mem/boot_rom_init_pkg.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/mem/boot_shadow_rom.vhd" type="file.vhdl" enable="1"/>
 
         <!-- PS/2 keyboard -->

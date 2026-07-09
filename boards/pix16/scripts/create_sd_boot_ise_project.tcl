@@ -36,6 +36,7 @@ xfile add ../../third_party/t65/rtl/T65.vhd
 xfile add ../../rtl/core/sbc_pkg.vhd
 xfile add ../../rtl/core/bus_decode.vhd
 xfile add ../../rtl/core/mem/sync_ram.vhd
+xfile add ../../rtl/core/mem/boot_rom_init_pkg.vhd
 xfile add ../../rtl/core/mem/boot_shadow_rom.vhd
 xfile add ../../rtl/core/mem/sdram_if.vhd
 xfile add ../../rtl/core/mem/sdram_ctrl.vhd

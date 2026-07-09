@@ -25,6 +25,7 @@ T65_RTL = third_party/t65/rtl/T65_Pack.vhd third_party/t65/rtl/T65_ALU.vhd \
 RTL = rtl/core/sbc_pkg.vhd rtl/core/bus_decode.vhd \
       rtl/core/mem/sync_ram.vhd rtl/core/mem/fb_ram.vhd rtl/core/mem/rom.vhd \
       boards/tang_primer_20k/sbc/rtl/bram_byte_bridge.vhd \
+      rtl/core/mem/boot_rom_init_pkg.vhd \
       rtl/core/mem/boot_shadow_rom.vhd \
       rtl/core/mem/sdram_if.vhd rtl/core/mem/sdram_ctrl.vhd \
       rtl/core/mem/char_rom.vhd \
@@ -66,10 +67,10 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_hdmi_encoder.vhd
 
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
-        clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k d64-test-image test-d64 test-d64-map \
+        clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k tang_mega_138k tang_mega_138k-sbc tang_mega_138k-flash tang_mega_138k-hdmi-test tang_mega_138k-hdmi-test-flash tang_primer_console_138k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-c1541-d64-source test-c1541-d64-sdram \
-        test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem tunes-d64 \
-        sid-disks reist adventure-rom multipart-d64 test-c64-vic test-c64-input \
+        test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem test-sdram-fb tunes-d64 \
+        sid-disks reist adventure-rom blit-demo-roms blitcopy-rom blitdemo-rom multipart-d64 test-c64-vic test-c64-input \
         c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
         c64-graphics-test-prg c64-sprite-test-prg c64-d016-scroll-test-prg \
         c64-math-copro-test-prg c64-mandelbrot-prg c64-mandelbrot-copro-prg \
@@ -366,6 +367,36 @@ adventure-rom:
 	@rm -f roms/adventure.o
 	@echo "Built roms/adventure.rom (16 KB). Upload with roms/upload/adventure.bat"
 
+## Blitter COPY/COPYT hardware smoke test (16 KB split ROM; copies, overlap
+## moves in both directions, transparent copy, bouncing-box animation).
+blitcopy-rom:
+	$(CA65) --cpu 65c02 -o sw/6502/blitcopy.o sw/6502/blitcopy.s
+	$(LD65) -C sw/6502/mandelbrot_bitmap.cfg -o roms/6502/blitcopy.bin sw/6502/blitcopy.o
+	@rm -f sw/6502/blitcopy.o
+	@echo "Built roms/6502/blitcopy.bin. Upload with roms/6502/upload/blitcopy.bat"
+
+## Amiga-style blitter feature demo (copper bars, line kaleidoscope, 24 bobs
+## via COPYT, overlap-move slider) as an uploadable 16 KB split ROM.
+blitdemo-rom:
+	$(CA65) --cpu 65c02 -o sw/6502/blitdemo.o sw/6502/blitdemo.s
+	$(LD65) -C sw/6502/mandelbrot_bitmap.cfg -o roms/6502/blitdemo.bin sw/6502/blitdemo.o
+	@rm -f sw/6502/blitdemo.o
+	@echo "Built roms/6502/blitdemo.bin. Upload with roms/6502/upload/blitdemo.bat"
+
+## Blitter demos as uploadable 16 KB split-ROM images, like the mandelbrot ROMs.
+## Each wraps the unmodified PRG from the emulator repo (prg_rom_wrapper.inc
+## copies it to its load address at reset). Upload: roms/6502/upload/<name>_rom.bat
+EMU_DISK ?= ../6502-sbc-emulator/data/disk
+BLIT_DEMO_ROMS = blittest cube space fireworks water
+
+roms/6502/%_rom.bin: sw/6502/%_rom.s sw/6502/prg_rom_wrapper.inc $(EMU_DISK)/%.prg
+	$(CA65) --cpu 65c02 --bin-include-dir $(EMU_DISK) -o sw/6502/$*_rom.o $<
+	$(LD65) -C sw/6502/mandelbrot_bitmap.cfg -o $@ sw/6502/$*_rom.o
+	@rm -f sw/6502/$*_rom.o
+
+blit-demo-roms: $(BLIT_DEMO_ROMS:%=roms/6502/%_rom.bin)
+	@echo "Built $(BLIT_DEMO_ROMS:%=roms/6502/%_rom.bin)"
+
 ## Multi-part loader demo: two RAM PRGs on a D64; PART1 chain-loads + runs PART2.
 ## On hardware: LOAD "PART1" : CALL 8192  (press a key -> PART2 auto-loads).
 MP_DIR = roms/test_d64/mp
@@ -448,6 +479,14 @@ test-fat32: fat32-card-image
 	$(GHDL) -r $(GHDL_FLAGS) tb_fat32_reader $(GHDL_RUN_FLAGS) --stop-time=300ms
 	$(GHDL) -r $(GHDL_FLAGS) tb_fat32_reader -gIMG_PATH=$(FAT32_CARD_PAD_IMG) $(GHDL_RUN_FLAGS) --stop-time=300ms
 	$(GHDL) -r $(GHDL_FLAGS) tb_fat32_reader -gIMG_PATH=$(FAT32_CARD_SF_IMG) -gCARD_SECTORS=386 -gEXP_START_LBA=42 $(GHDL_RUN_FLAGS) --stop-time=300ms
+
+## Tang Mega 138K: SDRAM0 framebuffer line prefetch + CPU byte port (GHDL).
+test-sdram-fb:
+	$(GHDL) -a $(GHDL_FLAGS) rtl/core/sbc_pkg.vhd \
+	  rtl/core/peripherals/vic_blit.vhd rtl/core/mem/sdram_ctrl.vhd \
+	  boards/tang_mega_138k/sbc/rtl/sdram_fb.vhd sim/tb/tb_sdram_fb.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_sdram_fb
+	$(GHDL) -r $(GHDL_FLAGS) tb_sdram_fb $(GHDL_RUN_FLAGS) --stop-time=5ms
 
 ## D64 GoDrive: focused GHDL run of the full subsystem (mount + read end-to-end).
 test-d64-subsystem: fat32-card-image
@@ -566,3 +605,19 @@ pipistrello-c64:
 
 tang_primer_20k:
 	$(MAKE) -C boards/tang_primer_20k
+
+tang_mega_138k-sbc:
+	$(MAKE) -C boards/tang_mega_138k/sbc
+
+tang_mega_138k: tang_mega_138k-sbc
+
+tang_mega_138k-flash:
+	$(MAKE) -C boards/tang_mega_138k/sbc flash
+
+tang_mega_138k-hdmi-test:
+	$(MAKE) -C boards/tang_mega_138k/hdmi_test
+
+tang_mega_138k-hdmi-test-flash:
+	$(MAKE) -C boards/tang_mega_138k/hdmi_test flash
+
+tang_primer_console_138k: tang_mega_138k-sbc

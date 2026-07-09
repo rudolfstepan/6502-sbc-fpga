@@ -8,11 +8,18 @@
 -- Register map (offset within $8840):
 --   0 X0_LO  1 X0_HI(9:8)  2 Y0_LO  3 Y0_HI(8)
 --   4 X1_LO  5 X1_HI       6 Y1_LO  7 Y1_HI
---   8 COLOR  9 OP(FILL=0,LINE=3)  10 PAGE(0)
+--   8 COLOR  9 OP(FILL=0,COPY=1,COPYT=2,LINE=3)  10 PAGE(0)
 --   11 GAP (idle clk_x1 cycles inserted between blit pixel writes; DDR3 write
 --      pacing -- tunable from software so drop-out experiments need no
 --      re-synthesis; resets to 12)
+--   12 (read/write handled by the core: framebuffer backend select/status)
+--   13 DST_X_LO  14 DST_Y_LO (COPY destination top-left; the high bits ride
+--      in the otherwise unused COLOR register: COLOR(1:0) = DST_X(9:8),
+--      COLOR(2) = DST_Y(8))
 --   15 TRIGGER/BUSY
+--
+-- COPY/COPYT copy the inclusive source rect (x0,y0)-(x1,y1) to the DST
+-- top-left, overlap-safe (usable as MOVE); COPYT skips $00 source bytes.
 -- ---------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
@@ -38,6 +45,8 @@ entity vic_blit_regs is
     blit_color : out std_logic_vector(7 downto 0);
     blit_page  : out std_logic;
     blit_gap   : out std_logic_vector(7 downto 0);
+    blit_dstx  : out unsigned(9 downto 0);
+    blit_dsty  : out unsigned(9 downto 0);
     blit_start : out std_logic
   );
 end entity;
@@ -97,6 +106,9 @@ begin
   blit_color <= regs(8);
   blit_page  <= regs(10)(0);
   blit_gap   <= regs(11);
+  -- COPY destination: low bytes in 13/14, high bits in COLOR (unused by COPY)
+  blit_dstx  <= unsigned(std_logic_vector'(regs(8)(1 downto 0) & regs(13)));
+  blit_dsty  <= unsigned(std_logic_vector'("0" & regs(8)(2) & regs(14)));
   blit_start <= start_i;
 
   rdata <= (7 => busy_sticky, others => '0') when addr = x"F"

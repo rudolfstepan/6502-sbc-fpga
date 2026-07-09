@@ -10,6 +10,7 @@ add_file -type vhdl {../../../../rtl/core/peripherals/math_copro.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_tx_ser.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_rx_ser.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart6551.vhd}
+add_file -type vhdl {../../../../rtl/core/peripherals/uart_keyboard.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/vic_vga.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/vic_blit.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/vic_blit_regs.vhd}
@@ -26,6 +27,7 @@ add_file -type vhdl {../../../../rtl/core/peripherals/sd_disk_ctrl.vhd}
 add_file -type vhdl {../../../../rtl/core/mem/sync_ram.vhd}
 add_file -type vhdl {../../../../rtl/core/mem/fb_ram.vhd}
 add_file -type vhdl {../../../../rtl/core/mem/char_rom.vhd}
+add_file -type vhdl {../../../../rtl/core/mem/boot_rom_init_pkg.vhd}
 add_file -type vhdl {../../../../rtl/core/mem/boot_shadow_rom.vhd}
 add_file -type verilog {../../../../rtl/core/boot/sd_rom_loader.v}
 add_file -type vhdl {../../../../rtl/core/ps2/ps2_keyboard.vhd}

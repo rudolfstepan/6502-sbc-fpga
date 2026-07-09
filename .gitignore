@@ -126,6 +126,25 @@ boards/tang_primer_20k/sbc/project/src/*/temp/
 # Local copy of Sipeed's standalone DDR test used only during board bring-up.
 boards/tang_primer_20k/diagnostics/ddr3_reference/
 
+# ── Tang Mega 138K / Tang Console (GowinEDA) ──────────────────────────────────
+# Same policy as the Tang Primer 20K: keep sources, constraints, build scripts,
+# the .gprj and the IP .ipc/.v wrappers; drop the generated impl/ trees except
+# the tracked device.cfg (dual-purpose pin settings for the GUI), per-user IDE
+# state and IP scratch files.
+boards/tang_mega_138k/*/project/impl/*
+!boards/tang_mega_138k/*/project/impl/pnr/
+boards/tang_mega_138k/*/project/impl/pnr/*
+!boards/tang_mega_138k/*/project/impl/pnr/device.cfg
+boards/tang_mega_138k/*/project/tmp/
+boards/tang_mega_138k/*/project/*.gprj.user
+boards/tang_mega_138k/*/project/src/*/*.mod
+boards/tang_mega_138k/*/project/src/*/*.vo
+boards/tang_mega_138k/*/project/src/*/*_tmp.v
+boards/tang_mega_138k/*/project/src/*/temp/
+
+# Local scratch checkout of Sipeed's usb_hid_host example used during bring-up.
+.tmp_sipeed_usb_hid_host_138k/
+
 # ── REIST benchmark project (standalone) ──────────────────────────────────────
 # Keep RTL, the Gowin projects (.gprj/.cst/.sdc/.tcl), and the IP .ipc/.v;
 # drop the generated impl/ trees, per-user IDE state, and IP scratch files.

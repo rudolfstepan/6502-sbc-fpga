@@ -85,6 +85,8 @@ entity vic_fb_ddr3 is
     blit_color : in  std_logic_vector(7 downto 0) := (others => '0');
     blit_page  : in  std_logic := '0';
     blit_gap_cfg : in std_logic_vector(7 downto 0) := x"0C";  -- write pacing ($884B)
+    blit_dstx  : in  unsigned(9 downto 0) := (others => '0'); -- COPY destination
+    blit_dsty  : in  unsigned(9 downto 0) := (others => '0');
     blit_start : in  std_logic := '0';
     blit_busy  : out std_logic;
 
@@ -143,7 +145,8 @@ architecture rtl of vic_fb_ddr3 is
                 S_FILL_REQ, S_FILL_WAIT, S_FILL_STORE,
                 S_CW_RDREQ, S_CW_RDWAIT, S_CW_WRREQ, S_CW_WRDATA,
                 S_CR_REQ,   S_CR_WAIT,
-                S_BLIT_WRREQ, S_BLIT_WRDATA, S_BLIT_WAIT);
+                S_BLIT_WRREQ, S_BLIT_WRDATA, S_BLIT_WAIT,
+                S_BLITRD_REQ, S_BLITRD_WAIT, S_BLITRD_ACK);
   signal st : st_t := S_CALIB;
   signal cw_data : std_logic_vector(127 downto 0) := (others => '0');
 
@@ -184,6 +187,17 @@ architecture rtl of vic_fb_ddr3 is
   signal blit_data    : std_logic_vector(7 downto 0);
   signal blit_ready   : std_logic := '0';
   signal blit_busy_x1 : std_logic;
+  -- COPY source read channel + one-burst read cache. The copy walks the
+  -- source sequentially, so caching the last 16-byte burst turns ~15 of 16
+  -- reads into same-cycle hits. The cache is invalidated whenever any write
+  -- path touches its burst (rare during a direction-correct copy).
+  signal blit_rd         : std_logic;
+  signal blit_rd_addr    : std_logic_vector(17 downto 0);
+  signal blit_rdata_r    : std_logic_vector(7 downto 0) := (others => '0');
+  signal blit_rd_ready_r : std_logic := '0';
+  signal rc_valid : std_logic := '0';
+  signal rc_addr  : std_logic_vector(13 downto 0) := (others => '0');
+  signal rc_data  : std_logic_vector(127 downto 0) := (others => '0');
   -- start-pulse CDC: clk_sys toggle -> clk_x1 edge; busy CDC: clk_x1 -> clk_sys.
   -- clk_sys and clk_x1 are declared asynchronous clock groups in the board SDC,
   -- so only the toggle/level synchronisers below cross domains.
@@ -200,6 +214,8 @@ architecture rtl of vic_fb_ddr3 is
   signal bl_x1_x1    : unsigned(9 downto 0) := (others => '0');
   signal bl_y1_x1    : unsigned(9 downto 0) := (others => '0');
   signal bl_color_x1 : std_logic_vector(7 downto 0) := (others => '0');
+  signal bl_dstx_x1  : unsigned(9 downto 0) := (others => '0');
+  signal bl_dsty_x1  : unsigned(9 downto 0) := (others => '0');
   signal blit_go     : std_logic := '0';
   -- pixel latched while the combine buffer is being flushed for it
   signal blit_lat_addr : std_logic_vector(17 downto 0) := (others => '0');
@@ -260,12 +276,18 @@ begin
       x1        => bl_x1_x1,
       y1        => bl_y1_x1,
       color     => bl_color_x1,
+      dst_x     => bl_dstx_x1,
+      dst_y     => bl_dsty_x1,
       start     => blit_go,
       busy      => blit_busy_x1,
       fbo_we    => blit_we,
       fbo_addr  => blit_addr,
       fbo_data  => blit_data,
-      fbo_ready => blit_ready);
+      fbo_ready => blit_ready,
+      fbi_re    => blit_rd,
+      fbi_addr  => blit_rd_addr,
+      fbi_data  => blit_rdata_r,
+      fbi_ready => blit_rd_ready_r);
 
   blit_busy <= blit_busy_sync(2);
 
@@ -358,9 +380,12 @@ begin
       blit_gap <= (others => '0'); bl_gap_x1 <= x"0C";
       wc_valid <= '0'; wc_pend <= '0'; wc_addr <= (others => '0');
       wc_data <= (others => '0'); wc_mask <= (others => '1');
+      bl_dstx_x1 <= (others => '0'); bl_dsty_x1 <= (others => '0');
+      blit_rdata_r <= (others => '0'); blit_rd_ready_r <= '0';
+      rc_valid <= '0'; rc_addr <= (others => '0'); rc_data <= (others => '0');
     elsif rising_edge(clk_x1) then
       app_cmd_en <= '0'; app_wren <= '0'; app_wdata_end <= '0';  -- 1-cycle pulses
-      blit_ready <= '0'; blit_go <= '0';
+      blit_ready <= '0'; blit_go <= '0'; blit_rd_ready_r <= '0';
 
       fs_tgl_x1  <= fs_tgl_x1(1 downto 0)  & fs_tgl_sys;
       adv_tgl_x1 <= adv_tgl_x1(1 downto 0) & adv_tgl_sys;
@@ -378,6 +403,8 @@ begin
         bl_x1_x1    <= blit_x1;
         bl_y1_x1    <= blit_y1;
         bl_color_x1 <= blit_color;
+        bl_dstx_x1  <= blit_dstx;
+        bl_dsty_x1  <= blit_dsty;
         bl_gap_x1   <= unsigned(blit_gap_cfg);
         blit_go     <= '1';
       end if;
@@ -467,6 +494,10 @@ begin
             -- Keep the blitter and CPU byte window coherent in DDR3.
             st <= S_CW_WRREQ;
           elsif blit_we = '1' then
+            -- any blit write into the read-cached burst invalidates the cache
+            if rc_valid = '1' and blit_addr(17 downto 4) = rc_addr then
+              rc_valid <= '0';
+            end if;
             if wc_valid = '1' and blit_addr(17 downto 4) = wc_addr then
               -- same burst: merge into the combine buffer, no DDR3 traffic
               ln := lane_of(to_integer(unsigned(blit_addr)));
@@ -493,6 +524,23 @@ begin
                 st <= S_BLIT_WRREQ;
               end if;
             end if;
+          elsif blit_rd = '1' then
+            -- blitter COPY source read. Serve from the one-burst read cache
+            -- when possible; otherwise make the source coherent first (flush
+            -- whichever combine buffer covers it) and then read the burst.
+            if rc_valid = '1' and blit_rd_addr(17 downto 4) = rc_addr then
+              ln := lane_of(to_integer(unsigned(blit_rd_addr)));
+              blit_rdata_r    <= rc_data(ln*8 + 7 downto ln*8);
+              blit_rd_ready_r <= '1';
+              st <= S_BLITRD_ACK;
+            elsif cpu_wc_dirty = '1' and blit_rd_addr(17 downto 4) = cpu_wc_addr then
+              st <= S_CW_WRREQ;
+            elsif wc_valid = '1' and blit_rd_addr(17 downto 4) = wc_addr then
+              wc_pend <= '0';
+              st <= S_BLIT_WRREQ;
+            else
+              st <= S_BLITRD_REQ;
+            end if;
           elsif wc_valid = '1' and blit_busy_x1 = '0' and blit_gap = 0 then
             -- engine finished its op: flush the last combine buffer lazily
             wc_pend <= '0';
@@ -506,6 +554,9 @@ begin
               if cpu_wc_dirty = '1' and cpu_addr(17 downto 4) = cpu_wc_addr then
                 ln := lane_of(to_integer(unsigned(cpu_addr)));
                 cw_data(ln*8 + 7 downto ln*8) <= cpu_din;
+                if rc_valid = '1' and cpu_addr(17 downto 4) = rc_addr then
+                  rc_valid <= '0';   -- keep the blit read cache coherent
+                end if;
                 ack_tgl_x1  <= not ack_tgl_x1;
                 cpu_pending <= '0';
               elsif cpu_wc_dirty = '1' then
@@ -592,6 +643,9 @@ begin
             cw_data(ln*8 + 7 downto ln*8) <= cpu_op_din;
             cpu_wc_addr <= cpu_op_addr(17 downto 4);
             cpu_wc_dirty <= '1';
+            if rc_valid = '1' and cpu_op_addr(17 downto 4) = rc_addr then
+              rc_valid <= '0';   -- CPU wrote into the blit read-cached burst
+            end if;
             ack_tgl_x1  <= not ack_tgl_x1;
             cpu_pending <= '0';
             st <= S_IDLE;
@@ -668,6 +722,31 @@ begin
           end if;
         when S_BLIT_WAIT =>
           if blit_we = '0' then               -- engine consumed ready, advanced
+            st <= S_IDLE;
+          end if;
+
+        -- blitter COPY source read: one BL8 burst read fills the read cache,
+        -- the requested lane byte goes to the engine immediately
+        when S_BLITRD_REQ =>
+          if app_cmd_rdy = '1' then
+            app_addr   <= burst_addr(HIRES_BASE_WORD,
+                                     to_integer(unsigned(blit_rd_addr)));
+            app_cmd    <= CMD_READ;
+            app_cmd_en <= '1';
+            st <= S_BLITRD_WAIT;
+          end if;
+        when S_BLITRD_WAIT =>
+          if app_rdata_valid = '1' then
+            rc_data  <= app_rdata;
+            rc_addr  <= blit_rd_addr(17 downto 4);
+            rc_valid <= '1';
+            ln := lane_of(to_integer(unsigned(blit_rd_addr)));
+            blit_rdata_r    <= app_rdata(ln*8 + 7 downto ln*8);
+            blit_rd_ready_r <= '1';
+            st <= S_BLITRD_ACK;
+          end if;
+        when S_BLITRD_ACK =>
+          if blit_rd = '0' then               -- engine consumed ready, advanced
             st <= S_IDLE;
           end if;
 

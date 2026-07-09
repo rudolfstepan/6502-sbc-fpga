@@ -15,7 +15,8 @@ entity sdram_ctrl is
     T_WR        : natural := 3;      -- write recovery (clocks)
     CAS_LAT     : natural := 3;      -- CAS latency (clocks)
     REFRESH_CYC : natural := 375;    -- refresh period  (375 = 7.5 us @ 50 MHz)
-    INIT_CYC    : natural := 15000   -- power-on wait   (300 us @ 50 MHz)
+    INIT_CYC    : natural := 15000;  -- power-on wait   (300 us @ 50 MHz)
+    MODE_REG    : std_logic_vector(12 downto 0) := "0000000110000"
   );
   port (
     clk               : in    std_logic;
@@ -232,10 +233,11 @@ begin
 
           when S_INIT_MRS =>
             state <= S_INIT_TMRD;
-            -- Mode: CAS=3, burst-length=1, sequential
+            -- Default mode: CAS=3, burst-length=1, sequential. Framebuffer
+            -- users can override MODE_REG for BL8 reads and single writes.
             ras_r <= '0'; cas_r <= '0'; we_r <= '0';
             ba_r  <= (others => '0');
-            addr_r<= "0000000110000";  -- CAS=3, BL=1
+            addr_r<= MODE_REG;
 
           when S_INIT_TMRD =>
             if end_tmrd then state <= S_INIT_DONE; end if;
