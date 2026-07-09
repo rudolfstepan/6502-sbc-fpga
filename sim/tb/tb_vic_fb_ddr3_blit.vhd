@@ -171,6 +171,11 @@ begin
     do_blit(OP_FILL, 1,1, 5,3, x"AB"); ref_fill(ref, 1,1, 5,3, x"AB");
     do_blit(OP_LINE, 0,0, 9,5, x"FF"); ref_line(ref, 0,0, 9,5, x"FF");
     do_blit(OP_LINE, 8,0, 0,4, x"55"); ref_line(ref, 8,0, 0,4, x"55");
+    -- a long shallow line: heavy write-combining incl. burst crossings
+    do_blit(OP_LINE, 0,1, 200,3, x"77"); ref_line(ref, 0,1, 200,3, x"77");
+
+    -- the last combine buffer flushes lazily after the engine goes idle
+    for i in 1 to 300 loop wait until rising_edge(clk_x1); end loop;
 
     for i in 0 to NBYTES-1 loop
       if ddr3(i) /= ref(i) then

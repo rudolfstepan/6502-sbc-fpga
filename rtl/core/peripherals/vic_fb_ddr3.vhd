@@ -195,9 +195,22 @@ architecture rtl of vic_fb_ddr3 is
   signal bl_y1_x1    : unsigned(9 downto 0) := (others => '0');
   signal bl_color_x1 : std_logic_vector(7 downto 0) := (others => '0');
   signal blit_go     : std_logic := '0';
-  -- pixel write latched at dispatch so the app_addr path starts at a local reg
+  -- pixel latched while the combine buffer is being flushed for it
   signal blit_lat_addr : std_logic_vector(17 downto 0) := (others => '0');
   signal blit_lat_data : std_logic_vector(7 downto 0) := (others => '0');
+  -- Write-combine buffer: pixels that fall into the same 16-byte burst are
+  -- collected here and written to DDR3 as ONE masked write. Back-to-back
+  -- masked single-byte writes to the SAME burst were dropped by the DDR3
+  -- backend under load (visible as broken shallow lines / dashed fills, while
+  -- steep lines -- one burst per pixel -- stayed clean). Combining removes
+  -- that access pattern entirely and cuts blit DDR3 writes up to 16x.
+  -- The buffer flushes when a pixel targets a different burst, and lazily
+  -- (next arbiter visit) once the engine goes idle.
+  signal wc_valid : std_logic := '0';
+  signal wc_pend  : std_logic := '0';                        -- flush, then load lat pixel
+  signal wc_addr  : std_logic_vector(13 downto 0) := (others => '0');  -- addr(17:4)
+  signal wc_data  : std_logic_vector(127 downto 0) := (others => '0');
+  signal wc_mask  : std_logic_vector(15 downto 0) := (others => '1');
   -- Pacing between blit writes: sustained back-to-back masked writes are a load
   -- profile the DDR3 write FIFOs never see from the (sparse) CPU path, and on
   -- hardware they showed periodically dropped bytes. The gap gives the IP the
@@ -336,6 +349,8 @@ begin
       bl_x1_x1 <= (others => '0'); bl_y1_x1 <= (others => '0');
       blit_lat_addr <= (others => '0'); blit_lat_data <= (others => '0');
       blit_gap <= (others => '0'); bl_gap_x1 <= x"0C";
+      wc_valid <= '0'; wc_pend <= '0'; wc_addr <= (others => '0');
+      wc_data <= (others => '0'); wc_mask <= (others => '1');
     elsif rising_edge(clk_x1) then
       app_cmd_en <= '0'; app_wren <= '0'; app_wdata_end <= '0';  -- 1-cycle pulses
       blit_ready <= '0'; blit_go <= '0';
@@ -422,18 +437,52 @@ begin
           st <= S_SELECT;
 
         when S_SELECT =>
+          -- Default: bounce back to S_IDLE so the registered fetch-need flags
+          -- are refreshed every other cycle. Without this the FSM idled here
+          -- with STALE flags until the 16384-cycle watchdog (~5 scanlines) and
+          -- the display repeated stale lines -- visible as broken shallow
+          -- wireframe edges. Dispatch branches below override the bounce.
+          st <= S_IDLE;
           if fetch_cur_need = '1' then
             cur_line <= fetch_cur_line; cur_half <= fetch_cur_half; col <= 0;
+            blit_gap <= bl_gap_x1;   -- read->write turnaround guard: space the
+                                     -- first blit write after a fetch burst
             st <= S_FILL_REQ;
           elsif fetch_next_need = '1' then
             cur_line <= fetch_next_line; cur_half <= fetch_next_half; col <= 0;
+            blit_gap <= bl_gap_x1;
             st <= S_FILL_REQ;
-          elsif blit_we = '1' and blit_gap = 0 then
-            -- latch the pixel locally so the app_addr arithmetic below starts
-            -- at a register instead of reaching into the engine's datapath
-            blit_lat_addr <= blit_addr;
-            blit_lat_data <= blit_data;
-            st <= S_BLIT_WRREQ;          -- blitter has priority over CPU byte ops
+          elsif blit_we = '1' then
+            if wc_valid = '1' and blit_addr(17 downto 4) = wc_addr then
+              -- same burst: merge into the combine buffer, no DDR3 traffic
+              ln := lane_of(to_integer(unsigned(blit_addr)));
+              wc_data(ln*8 + 7 downto ln*8) <= blit_data;
+              wc_mask(ln) <= '0';
+              blit_ready <= '1';
+              st <= S_BLIT_WAIT;
+            elsif blit_gap = 0 then
+              if wc_valid = '0' then
+                -- start a fresh combine buffer with this pixel, no DDR3 traffic
+                ln := lane_of(to_integer(unsigned(blit_addr)));
+                wc_addr <= blit_addr(17 downto 4);
+                wc_mask <= (others => '1');
+                wc_mask(ln) <= '0';
+                wc_data(ln*8 + 7 downto ln*8) <= blit_data;
+                wc_valid <= '1';
+                blit_ready <= '1';
+                st <= S_BLIT_WAIT;
+              else
+                -- different burst: flush the buffer first, keep the pixel
+                blit_lat_addr <= blit_addr;
+                blit_lat_data <= blit_data;
+                wc_pend <= '1';
+                st <= S_BLIT_WRREQ;
+              end if;
+            end if;
+          elsif wc_valid = '1' and blit_busy_x1 = '0' and blit_gap = 0 then
+            -- engine finished its op: flush the last combine buffer lazily
+            wc_pend <= '0';
+            st <= S_BLIT_WRREQ;
           elsif cpu_pending = '1' then
             cpu_op_we   <= cpu_we;
             cpu_op_addr <= cpu_addr;
@@ -538,32 +587,41 @@ begin
             st <= S_IDLE;
           end if;
 
-        -- blitter pixel write (masked single byte into the 16-byte burst).
-        -- blit_addr is held stable by the engine while blit_we is asserted.
+        -- flush the write-combine buffer: ONE masked BL8 write carrying every
+        -- pixel collected for this 16-byte burst.
         when S_BLIT_WRREQ =>
           if app_cmd_rdy = '1' then
             app_addr   <= burst_addr(HIRES_BASE_WORD,
-                                     to_integer(unsigned(blit_lat_addr)));
+                                     to_integer(unsigned(wc_addr)) * 16);
             app_cmd    <= CMD_WRITE;
             app_cmd_en <= '1';
             st <= S_BLIT_WRDATA;
           end if;
         when S_BLIT_WRDATA =>
           if app_wdata_rdy = '1' then
-            ln := lane_of(to_integer(unsigned(blit_lat_addr)));
-            app_wdata(ln*8 + 7 downto ln*8) <= blit_lat_data;
-            app_wdata_mask <= (others => '1');
-            app_wdata_mask(ln) <= '0';
+            app_wdata      <= wc_data;
+            app_wdata_mask <= wc_mask;        -- '0' = byte written
             app_wren       <= '1';
             app_wdata_end  <= '1';
             -- Unlike the CPU byte port, a blit does NOT invalidate the line
-            -- buffer per pixel: the display refetches every scanline each frame
+            -- buffer per write: the display refetches every scanline each frame
             -- anyway (half_valid clears at fb_frame_start), so blit writes appear
-            -- next frame. Invalidating per pixel would force a full line refetch
-            -- for every pixel and slow the blit by ~40x.
-            blit_ready  <= '1';               -- release the engine for next pixel
-            blit_gap    <= bl_gap_x1;
-            st <= S_BLIT_WAIT;
+            -- next frame.
+            blit_gap <= bl_gap_x1;
+            if wc_pend = '1' then
+              -- restart the buffer with the pixel that forced this flush
+              ln := lane_of(to_integer(unsigned(blit_lat_addr)));
+              wc_addr <= blit_lat_addr(17 downto 4);
+              wc_mask <= (others => '1');
+              wc_mask(ln) <= '0';
+              wc_data(ln*8 + 7 downto ln*8) <= blit_lat_data;
+              wc_pend <= '0';
+              blit_ready <= '1';              -- pixel absorbed, release the engine
+              st <= S_BLIT_WAIT;
+            else
+              wc_valid <= '0';                -- final flush after the op ended
+              st <= S_IDLE;
+            end if;
           end if;
         when S_BLIT_WAIT =>
           if blit_we = '0' then               -- engine consumed ready, advanced
