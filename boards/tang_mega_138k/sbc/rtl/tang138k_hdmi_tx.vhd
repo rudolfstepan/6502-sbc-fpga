@@ -117,71 +117,94 @@ begin
     end if;
   end process;
 
-  pixel_input_regs : process(clk_pix_i)
-  begin
-    if rising_edge(clk_pix_i) then
-      if reset_pix_n = '0' then
-        de_pix <= '0';
-        hs_pix <= '1';
-        vs_pix <= '1';
-        pixel_data <= (others => '0');
-        xcnt     <= (others => '0');
-        ycnt     <= (others => '0');
-        de_d     <= '0';
-        cell_px  <= (others => '0');
-        cell_idx <= (others => '0');
-      else
-        de_pix <= vga_de;
-        hs_pix <= vga_hs;
-        vs_pix <= vga_vs;
-
-        dbg_meta <= debug;
-        dbg_sync <= dbg_meta;
-
-        -- pixel coordinates: x counts inside de, y advances at each de falling
-        -- edge and resets during (active-low) vsync
-        de_d <= vga_de;
-        if vga_de = '1' then
-          xcnt <= xcnt + 1;
+  plain_video_g : if not DEBUG_OVERLAY generate
+    pixel_input_regs : process(clk_pix_i)
+    begin
+      if rising_edge(clk_pix_i) then
+        if reset_pix_n = '0' then
+          de_pix <= '0';
+          hs_pix <= '1';
+          vs_pix <= '1';
+          pixel_data <= (others => '0');
         else
-          xcnt <= (others => '0');
+          de_pix <= vga_de;
+          hs_pix <= vga_hs;
+          vs_pix <= vga_vs;
+          pixel_data <= (vga_r & vga_r(4 downto 2)) &
+                        (vga_g & vga_g(5 downto 4)) &
+                        (vga_b & vga_b(4 downto 2));
         end if;
-        if vga_vs = '0' then
-          ycnt <= (others => '0');
-        elsif vga_de = '0' and de_d = '1' then
-          ycnt <= ycnt + 1;
-        end if;
+      end if;
+    end process;
+  end generate;
 
-        -- overlay cell walk: aligned so cell 0/pixel 0 lands on xcnt = OV_X0
-        if vga_de = '1' then
-          if xcnt = OV_X0 - 1 then
-            cell_px  <= (others => '0');
-            cell_idx <= (others => '0');
-          elsif cell_px = 11 then
-            cell_px  <= (others => '0');
-            cell_idx <= cell_idx + 1;
+  debug_overlay_g : if DEBUG_OVERLAY generate
+    pixel_input_regs : process(clk_pix_i)
+    begin
+      if rising_edge(clk_pix_i) then
+        if reset_pix_n = '0' then
+          de_pix <= '0';
+          hs_pix <= '1';
+          vs_pix <= '1';
+          pixel_data <= (others => '0');
+          xcnt     <= (others => '0');
+          ycnt     <= (others => '0');
+          de_d     <= '0';
+          cell_px  <= (others => '0');
+          cell_idx <= (others => '0');
+        else
+          de_pix <= vga_de;
+          hs_pix <= vga_hs;
+          vs_pix <= vga_vs;
+
+          dbg_meta <= debug;
+          dbg_sync <= dbg_meta;
+
+          -- pixel coordinates: x counts inside de, y advances at each de falling
+          -- edge and resets during (active-low) vsync
+          de_d <= vga_de;
+          if vga_de = '1' then
+            xcnt <= xcnt + 1;
           else
-            cell_px <= cell_px + 1;
+            xcnt <= (others => '0');
           end if;
-        end if;
+          if vga_vs = '0' then
+            ycnt <= (others => '0');
+          elsif vga_de = '0' and de_d = '1' then
+            ycnt <= ycnt + 1;
+          end if;
 
-        pixel_data <= (vga_r & vga_r(4 downto 2)) &
-                      (vga_g & vga_g(5 downto 4)) &
-                      (vga_b & vga_b(4 downto 2));
+          -- overlay cell walk: aligned so cell 0/pixel 0 lands on xcnt = OV_X0
+          if vga_de = '1' then
+            if xcnt = OV_X0 - 1 then
+              cell_px  <= (others => '0');
+              cell_idx <= (others => '0');
+            elsif cell_px = 11 then
+              cell_px  <= (others => '0');
+              cell_idx <= cell_idx + 1;
+            else
+              cell_px <= cell_px + 1;
+            end if;
+          end if;
 
-        if DEBUG_OVERLAY and vga_de = '1' and
-           ycnt >= OV_Y0 and ycnt < OV_Y0 + 8 and
-           xcnt >= OV_X0 and xcnt < OV_X0 + 16 * 12 and
-           cell_px < 8 then
-          if dbg_sync(to_integer(cell_idx)) = '1' then
-            pixel_data <= x"20FF20";   -- lit: green
-          else
-            pixel_data <= x"501010";   -- off: dim red
+          pixel_data <= (vga_r & vga_r(4 downto 2)) &
+                        (vga_g & vga_g(5 downto 4)) &
+                        (vga_b & vga_b(4 downto 2));
+
+          if vga_de = '1' and
+             ycnt >= OV_Y0 and ycnt < OV_Y0 + 8 and
+             xcnt >= OV_X0 and xcnt < OV_X0 + 16 * 12 and
+             cell_px < 8 then
+            if dbg_sync(to_integer(cell_idx)) = '1' then
+              pixel_data <= x"20FF20";   -- lit: green
+            else
+              pixel_data <= x"501010";   -- off: dim red
+            end if;
           end if;
         end if;
       end if;
-    end if;
-  end process;
+    end process;
+  end generate;
 
   dvi_i : dvi_tx_top
     port map (

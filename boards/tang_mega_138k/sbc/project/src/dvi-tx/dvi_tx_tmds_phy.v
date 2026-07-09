@@ -7,15 +7,15 @@ module dvi_tx_tmds_phy(
 	output	[1 : 0]		tmds_lane
 );
 	
-	reg reset_reg;
+	reg [2:0] reset_5x_sr;
 	
 	wire dq_tmds;
 	
-	always@(posedge pixel_clock)begin
+	always@(posedge ddr_bit_clock or posedge reset)begin
 		if(reset)begin
-			reset_reg <= 1'b1;
+			reset_5x_sr <= 3'b111;
 		end else begin
-			reset_reg <= 1'b0;
+			reset_5x_sr <= {reset_5x_sr[1:0], 1'b0};
 		end
 	end
 	
@@ -33,7 +33,7 @@ module dvi_tx_tmds_phy(
 		.D9(data[9]),
 		.PCLK(pixel_clock),
 		.FCLK(ddr_bit_clock),
-		.RESET(reset_reg)
+		.RESET(reset_5x_sr[2])
 	);
 	
 	ELVDS_OBUF tmds_bufds_isnt0 (

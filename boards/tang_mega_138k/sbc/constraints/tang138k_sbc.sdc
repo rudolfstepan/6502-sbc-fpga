@@ -35,8 +35,13 @@ set_false_path -from [get_pins {long_reset_s0/Q}] -to [get_pins {long_reset_27_s
 # stable when consumed. The vendor flow treats these cross-domain control
 # paths as false paths (GW5AST equivalents of the proven 20K/c64_ddr set);
 # they were the only violated endpoints left after the clock cleanup.
-set_false_path -to [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/ides_calib_d*/D}]
-set_false_path -to [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_init/read_rclksel_conf*/D}]
+set_false_path -from [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_init/read_rclksel_conf*/Q}] -to [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/u_dqs/HOLD}]
+set_false_path -from [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_init/hold_gen[*].hold_i*/Q}] -to [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/u_dqs/HOLD}]
+set_false_path -from [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/ides_calib_d*/Q}] -to [get_pins {ddr_backend_g.ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/iserdes_gen[*].u_ides8_mem/CALIB}]
+
+# OSER10 reset is a reset/control path into the HDMI serializer. It is held
+# until the HDMI PLL is locked and synchronously released by the PHY wrapper.
+set_false_path -from [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/reset_5x_sr*/Q}] -to [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/tmds_serdes_inst0/RESET}]
 
 # The T65 state registers are clock-enabled on alternating system cycles.
 set_multicycle_path 2 -setup -from [get_pins {sbc_i/cpu_i/core_i/*/Q}] -to [get_pins {sbc_i/cpu_i/core_i/*/D}]

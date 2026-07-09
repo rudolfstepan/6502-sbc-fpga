@@ -46,7 +46,9 @@ entity tang138k_sbc_top is
     USE_USB_DIAG  : boolean := false;
     -- false: use a 50 MHz fabric divider (~12.5 MHz) for diagnosis, avoiding a
     -- second Gowin PLL while checking whether USB I/O alone disturbs HDMI.
-    USE_USB_PLL   : boolean := false
+    USE_USB_PLL   : boolean := false;
+    -- false: drop the HDMI debug-status overlay counters/muxes from synthesis.
+    HDMI_DEBUG_OVERLAY : boolean := false
   );
   port (
     clk_50mhz  : in  std_logic;
@@ -1055,6 +1057,9 @@ begin
   uart_mux_valid <= monitor_tx_valid when monitor_active = '1' else '0';
 
   hdmi_i : entity work.tang138k_hdmi_tx
+    generic map (
+      DEBUG_OVERLAY => HDMI_DEBUG_OVERLAY
+    )
     port map (
       clk_in     => clk_50mhz,
       -- HDMI PLL is decoupled from the reset button so clk_sys keeps running
