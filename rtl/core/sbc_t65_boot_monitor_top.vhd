@@ -395,7 +395,9 @@ begin
                 and not sram_stall;
 
   sram_dout  <= sram_ext_dout;
-  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq or disk_irq or sdraw_irq or cia1_irq);
+  -- Test build: SD2 and audio IRQ sources are disabled to free placement
+  -- resources while debugging the framebuffer/blitter path.
+  cpu_irq_n  <= not (via_irq or uart_irq or usb_irq);
   usb_cs     <= '1' when monitor_hold = '0' and dev_sel = DEV_USB else '0';
 
   -- Low 16 KB ($0000-$3FFF) is on-chip BRAM. $4000-$5FFF is served through
@@ -985,135 +987,35 @@ begin
       dout    => math_dout
     );
 
-  -- ── SD2 owners: D64 GoDrive read path + raw-sector read/write path ─────
-  -- The CPU drives only one command path at a time. D64 owns reads while its
-  -- MOUNT/READ_SECTOR engine is active; the raw controller owns its own reads
-  -- and all writes. Both controllers observe the returned byte stream, but only
-  -- the one that requested it is busy and consumes it.
-  sd2_sec_read      <= disk_sd2_sec_read or sdraw_sd2_sec_read;
-  sd2_sec_read_addr <= disk_sd2_sec_read_addr when disk_sd2_sec_read = '1'
-                       else sdraw_sd2_sec_read_addr;
-  sd2_sec_write      <= sdraw_sd2_sec_write;
-  sd2_sec_write_addr <= sdraw_sd2_sec_write_addr;
-  sd2_sec_write_data <= sdraw_sd2_sec_write_data;
+  -- ── Test build: SD2/D64/raw-sector path removed ───────────────────────
+  -- This deliberately disables LOAD/SAVE from the second SD card while checking
+  -- whether the design places with the framebuffer/blitter changes.
+  sd2_sec_read <= '0';
+  sd2_sec_read_addr <= (others => '0');
+  sd2_sec_write <= '0';
+  sd2_sec_write_addr <= (others => '0');
+  sd2_sec_write_data <= (others => '0');
+  disk_dout <= x"FF";
+  disk_irq <= '0';
+  disk_sd2_sec_read <= '0';
+  disk_sd2_sec_read_addr <= (others => '0');
+  sdraw_dout <= x"FF";
+  sdraw_irq <= '0';
+  sdraw_sd2_sec_read <= '0';
+  sdraw_sd2_sec_read_addr <= (others => '0');
+  sdraw_sd2_sec_write <= '0';
+  sdraw_sd2_sec_write_addr <= (others => '0');
+  sdraw_sd2_sec_write_data <= (others => '0');
 
-  -- ── D64 GoDrive: 2nd SD card, 6502 FAT16 scan + D64 mount engine ───────
-  -- DEV_DISK ($8824) is the read-only D64 GoDrive path used by LOAD "!",
-  -- LOAD "$", and PRG LOAD from a mounted image.
-  disk_irq <= '0';   -- the D64 engine is polled, no interrupt source
-
-  disk_i : entity work.d64_subsystem
-    port map (
-      clk                    => clk,
-      reset_n                => cpu_reset_n,
-      cs                     => disk_cs,
-      we                     => disk_we,
-      offset                 => std_logic_vector(resize(unsigned(cpu_addr) - ADDR_DISK_BASE, 4)),
-      din                    => cpu_dout,
-      dout                   => disk_dout,
-      sd_sec_read            => disk_sd2_sec_read,
-      sd_sec_read_addr       => disk_sd2_sec_read_addr,
-      sd_sec_read_data       => sd2_sec_read_data,
-      sd_sec_read_data_valid => sd2_sec_read_data_valid,
-      sd_sec_read_end        => sd2_sec_read_end
-    );
-
-  -- ── Raw SD2 sector controller ($88C0-$88CF) ───────────────────────────
-  -- 512-byte buffered block device used by EhBASIC SAVE/LOAD and MultiCalc.
-  sdraw_i : entity work.sd_disk_ctrl
-    generic map (
-      BASE_ADDR => ADDR_SDRAW_BASE
-    )
-    port map (
-      clk                    => clk,
-      reset_n                => cpu_reset_base_n,
-      cs                     => sdraw_cs,
-      we                     => sdraw_we,
-      addr                   => cpu_addr,
-      din                    => cpu_dout,
-      dout                   => sdraw_dout,
-      irq                    => sdraw_irq,
-      sd_init_done           => sd2_init_done,
-      sd_sec_read            => sdraw_sd2_sec_read,
-      sd_sec_read_addr       => sdraw_sd2_sec_read_addr,
-      sd_sec_read_data       => sd2_sec_read_data,
-      sd_sec_read_data_valid => sd2_sec_read_data_valid,
-      sd_sec_read_end        => sd2_sec_read_end,
-      sd_sec_write           => sdraw_sd2_sec_write,
-      sd_sec_write_addr      => sdraw_sd2_sec_write_addr,
-      sd_sec_write_data      => sdraw_sd2_sec_write_data,
-      sd_sec_write_data_req  => sd2_sec_write_data_req,
-      sd_sec_write_end       => sd2_sec_write_end
-    );
-
-  -- ── Sound: 4-voice synth (ADSR + 5 waveforms) + PT8211 DAC ────────────
-  -- The Tang build uses the native SID core as its sole synthesizer. Keeping
-  -- sound_chip4 in parallel caused Gowin to promote several envelope-control
-  -- nets to scarce PRIMARY/LW clock resources, starving the DDR3 PHY clock
-  -- network and making calibration placement-dependent.
-  --
-  -- sound_chip4 also provided the free-running millisecond counter at $883A that
-  -- the SID player polls for tempo. Without it $883A read $FF, the player's
-  -- "20 ms elapsed?" test never passed, and the play routine was never called
-  -- (init only -> silence). Provide that one counter directly here; all other
-  -- sound-region reads return $FF.
-  ms_timebase : process(clk)
-  begin
-    if rising_edge(clk) then
-      if cpu_reset_n = '0' then
-        ms_div   <= 0;
-        ms_count <= (others => '0');
-      elsif ms_div = CLK_HZ/1000 - 1 then
-        ms_div   <= 0;
-        ms_count <= ms_count + 1;
-      else
-        ms_div <= ms_div + 1;
-      end if;
-    end if;
-  end process;
-
-  sound_dout <= std_logic_vector(ms_count)
-                  when dev_sel = DEV_SOUND0 and cpu_addr(3 downto 0) = "1010"
-                  else x"FF";
-
-  sid_i : entity work.sid6581
-    generic map (CLK_HZ => CLK_HZ)
-    port map (
-      clk        => clk,
-      reset_n    => cpu_reset_n,
-      cs         => sid_cs,
-      we         => sid_we,
-      addr       => sid_addr,
-      din        => cpu_dout,
-      dout       => sid_dout,
-      sample_out => sid_sample
-    );
-
-  -- CIA-1 Timer A: ~1 MHz PHI2 tick from the system clock so C64 tune period
-  -- values give compatible interrupt rates; its IRQ feeds cpu_irq_n.
-  cia1_i : entity work.cia6526
-    generic map (TICK_DIV => CLK_HZ / 1_000_000)
-    port map (
-      clk     => clk,
-      reset_n => cpu_reset_n,
-      cs      => cia1_cs,
-      we      => cia1_we,
-      addr    => cpu_addr(3 downto 0),
-      din     => cpu_dout,
-      dout    => cia1_dout,
-      irq_n   => cia1_irq_n
-    );
-
-  dac_i : entity work.pt8211_dac
-    generic map (BCK_HALF => CLK_HZ / 3_000_000)
-    port map (
-      clk     => clk,
-      reset_n => cpu_reset_n,
-      sample  => sid_sample,
-      dac_bck => dac_bck,
-      dac_ws  => dac_ws,
-      dac_din => dac_din
-    );
+  -- ── Test build: sound chip/DAC/CIA audio timer removed ────────────────
+  sound_dout <= x"FF";
+  sid_dout <= x"FF";
+  sid_sample <= (others => '0');
+  cia1_dout <= x"FF";
+  cia1_irq_n <= '1';
+  dac_bck <= '0';
+  dac_ws <= '0';
+  dac_din <= '0';
 
   uart_i : entity work.uart6551
     port map (

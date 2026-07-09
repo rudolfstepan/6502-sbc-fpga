@@ -61,6 +61,20 @@ BMPLO:  .res 1              ; framebuffer window pointer low
 BMPHI:  .res 1              ; framebuffer window pointer high
 BANK:   .res 1             ; current 8 KiB bank 0..31
 
+.ifdef ZOOM_ANIM
+BUFFER      = $0200
+BUFFER2     = $0300
+SRC_BANK    = CR+0
+DST_BANK    = CR+1
+SRCLO       = BMPLO
+SRCHI       = BMPHI
+DSTLO       = PX+0
+DSTHI       = PX+1
+ROWCNT      = PY+0
+PIXCOL      = ITER
+SRCBUF      = $1000
+.endif
+
 ; ============================================================
 ; Macros
 ; ============================================================
@@ -322,6 +336,11 @@ next_row:
     jmp row_loop
 
 done:
+.ifdef ZOOM_ANIM
+    jsr save_center_to_ram
+    jsr zoom_animation
+.endif
+
     ; wait for a UART key, then back to text mode
 wait_key:
     lda UART_SR
@@ -332,6 +351,374 @@ wait_key:
     sta VIC_MODE
 halt:
     jmp halt
+
+.ifdef ZOOM_ANIM
+; ============================================================
+; Zoom animation support
+;
+; The Mandelbrot image is calculated once.  A 160x100 centre tile is copied into
+; normal RAM below $6000 and treated as the immutable source.  Every zoom frame
+; re-reads that clean RAM tile and writes a fresh 640x400 hi-res image.  The VIC
+; stays in hi-res mode for the whole animation, so line-buffer fetches cannot see
+; mode/bank flicker from a temporary legacy-framebuffer source.
+; ============================================================
+
+save_center_to_ram:
+    lda #11
+    sta SRC_BANK
+    lda #$F0
+    sta SRCLO
+    lda #$77
+    sta SRCHI
+    lda #<SRCBUF
+    sta DSTLO
+    lda #>SRCBUF
+    sta DSTHI
+    lda #100
+    sta ROWCNT
+@row:
+    lda #$20
+    sta VIC_MODE
+    lda SRC_BANK
+    sta VIC_FB_BANK
+    jsr read_hires_160
+    jsr add_src_480
+    jsr write_ram_row160
+    dec ROWCNT
+    bne @row
+    lda #$20
+    sta VIC_MODE
+    lda #0
+    sta VIC_FB_BANK
+    rts
+
+zoom_animation:
+@loop:
+    jsr zoom4_ram
+    lda #8
+    jsr delay_units
+    jsr zoom8_ram
+    lda #12
+    jsr delay_units
+    jsr zoom16_ram
+    lda #14
+    jsr delay_units
+    jmp @loop
+
+delay_units:
+    sta PIXCOL
+@outer:
+    ldx #$00
+@mid:
+    ldy #$00
+@inner:
+    dey
+    bne @inner
+    dex
+    bne @mid
+    dec PIXCOL
+    bne @outer
+    rts
+
+zoom4_ram:
+    lda #<SRCBUF
+    sta SRCLO
+    lda #>SRCBUF
+    sta SRCHI
+    jsr reset_hires_dest
+    lda #100
+    sta ROWCNT
+@row:
+    jsr read_ram_160
+    jsr write_row4
+    jsr write_row4
+    jsr write_row4
+    jsr write_row4
+    dec ROWCNT
+    bne @row
+    lda #0
+    sta VIC_FB_BANK
+    rts
+
+zoom8_ram:
+    lda #<$1FC8
+    sta SRCLO
+    lda #>$1FC8
+    sta SRCHI
+    jsr reset_hires_dest
+    lda #50
+    sta ROWCNT
+@row:
+    jsr read_ram_80
+    jsr add_ram_src_80
+    jsr write_row8
+    jsr write_row8
+    jsr write_row8
+    jsr write_row8
+    jsr write_row8
+    jsr write_row8
+    jsr write_row8
+    jsr write_row8
+    dec ROWCNT
+    bne @row
+    lda #0
+    sta VIC_FB_BANK
+    rts
+
+zoom16_ram:
+    lda #<$275C
+    sta SRCLO
+    lda #>$275C
+    sta SRCHI
+    jsr reset_hires_dest
+    lda #25
+    sta ROWCNT
+@row:
+    jsr read_ram_40
+    jsr add_ram_src_120
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    jsr write_row16
+    dec ROWCNT
+    bne @row
+    lda #0
+    sta VIC_FB_BANK
+    rts
+
+reset_hires_dest:
+    lda #$20
+    sta VIC_MODE
+    lda #0
+    sta DST_BANK
+    sta DSTLO
+    lda #>FB_WIN
+    sta DSTHI
+    sta VIC_FB_BANK
+    rts
+
+read_hires_160:
+    lda SRC_BANK
+    sta VIC_FB_BANK
+    ldy #0
+@a:
+    lda (SRCLO),y
+    sta BUFFER,y
+    jsr inc_src_ptr
+    iny
+    cpy #160
+    bne @a
+    rts
+
+read_ram_160:
+    ldy #0
+@a:
+    lda (SRCLO),y
+    sta BUFFER,y
+    jsr inc_ram_src_ptr
+    iny
+    cpy #160
+    bne @a
+    rts
+
+read_ram_80:
+    ldy #0
+@a:
+    lda (SRCLO),y
+    sta BUFFER,y
+    jsr inc_ram_src_ptr
+    iny
+    cpy #80
+    bne @a
+    rts
+
+read_ram_40:
+    ldy #0
+@a:
+    lda (SRCLO),y
+    sta BUFFER,y
+    jsr inc_ram_src_ptr
+    iny
+    cpy #40
+    bne @a
+    rts
+
+write_row2:
+    ldx #0
+@a:
+    lda BUFFER,x
+    sta PIXCOL
+    jsr write_pix2
+    inx
+    bne @a
+    ldx #0
+@b:
+    lda BUFFER2,x
+    sta PIXCOL
+    jsr write_pix2
+    inx
+    cpx #64
+    bne @b
+    rts
+
+write_pix2:
+    lda PIXCOL
+    jsr write_dest_byte
+    lda PIXCOL
+    jmp write_dest_byte
+
+write_row4:
+    ldx #0
+@a:
+    lda BUFFER,x
+    sta PIXCOL
+    jsr write_pix4
+    inx
+    cpx #160
+    bne @a
+    rts
+
+write_row8:
+    ldx #0
+@a:
+    lda BUFFER,x
+    sta PIXCOL
+    jsr write_pix8
+    inx
+    cpx #80
+    bne @a
+    rts
+
+write_row16:
+    ldx #0
+@a:
+    lda BUFFER,x
+    sta PIXCOL
+    jsr write_pix16
+    inx
+    cpx #40
+    bne @a
+    rts
+
+write_pix4:
+    jsr write_pix2
+    jmp write_pix2
+
+write_pix8:
+    jsr write_pix4
+    jmp write_pix4
+
+write_pix16:
+    jsr write_pix8
+    jmp write_pix8
+
+write_dest_byte:
+    ldy #0
+    sta (DSTLO),y
+    inc DSTLO
+    bne @done
+    inc DSTHI
+    lda DSTHI
+    cmp #$80
+    bne @done
+    lda #>FB_WIN
+    sta DSTHI
+    inc DST_BANK
+    lda DST_BANK
+    sta VIC_FB_BANK
+@done:
+    rts
+
+write_ram_row160:
+    ldx #0
+@a:
+    lda BUFFER,x
+    jsr write_ram_byte
+    inx
+    cpx #160
+    bne @a
+    rts
+
+write_ram_byte:
+    ldy #0
+    sta (DSTLO),y
+    inc DSTLO
+    bne :+
+    inc DSTHI
+:
+    rts
+
+inc_src_ptr:
+    inc SRCLO
+    bne @done
+    inc SRCHI
+    lda SRCHI
+    cmp #$80
+    bne @done
+    lda #>FB_WIN
+    sta SRCHI
+    inc SRC_BANK
+    lda SRC_BANK
+    sta VIC_FB_BANK
+@done:
+    rts
+
+inc_ram_src_ptr:
+    inc SRCLO
+    bne :+
+    inc SRCHI
+:
+    rts
+
+add_src_480:
+    clc
+    lda SRCLO
+    adc #<$01E0
+    sta SRCLO
+    lda SRCHI
+    adc #>$01E0
+    sta SRCHI
+    cmp #$80
+    bcc @done
+    sec
+    sbc #$20
+    sta SRCHI
+    inc SRC_BANK
+@done:
+    rts
+
+add_ram_src_80:
+    clc
+    lda SRCLO
+    adc #<$0050
+    sta SRCLO
+    lda SRCHI
+    adc #>$0050
+    sta SRCHI
+    rts
+
+add_ram_src_120:
+    clc
+    lda SRCLO
+    adc #<$0078
+    sta SRCLO
+    lda SRCHI
+    adc #>$0078
+    sta SRCHI
+    rts
+.endif
 
 ; ============================================================
 .segment "RODATA"

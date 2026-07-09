@@ -468,13 +468,20 @@ begin
   monitor_button <= not key(1);
   -- Monitor enters on the UART magic sequence or the physical key.
   mon_enter <= mon_magic_enter or monitor_button;
-  pa_en <= '1';  -- keep dock audio power amplifier enabled (PT8211 PA_EN, active high)
+  pa_en <= '0';  -- test build: audio disabled, keep dock PA muted
   sd_ncs <= sd_ncs_i;
   sd_dclk <= sd_dclk_i;
   sd_mosi <= sd_mosi_i;
-  sd2_ncs <= sd2_ncs_i;
-  sd2_dclk <= sd2_dclk_i;
-  sd2_mosi <= sd2_mosi_i;
+  -- Test build: remove the second SD-card reader to free LUTs/placement.
+  sd2_ncs <= '1';
+  sd2_dclk <= '0';
+  sd2_mosi <= '1';
+  sd2_init_done <= '0';
+  sd2_sec_read_data <= (others => '0');
+  sd2_sec_read_valid <= '0';
+  sd2_sec_read_end <= '0';
+  sd2_sec_write_req <= '0';
+  sd2_sec_write_end <= '0';
   -- Synchronise DDR3 calibration into clk_sys before it gates the SBC reset.
   -- The raw IP signal is still used in the DDR app-clock framebuffer controller.
   ddr_calib_sys <= ddr_calib_sys_sync(2);
@@ -568,34 +575,7 @@ begin
       debug_cmd_error        => sd_cmd_error
     );
 
-  -- Second SD card (data disk) — same Alinx SPI core, separate GPIO pins.
-  sd2_i : sd_card_top
-    generic map (
-      SPI_LOW_SPEED_DIV  => 268,
-      SPI_HIGH_SPEED_DIV => 2
-    )
-    port map (
-      clk                    => clk_sys,
-      rst                    => rst,
-      SD_nCS                 => sd2_ncs_i,
-      SD_DCLK                => sd2_dclk_i,
-      SD_MOSI                => sd2_mosi_i,
-      SD_MISO                => sd2_miso,
-      sd_init_done           => sd2_init_done,
-      sd_sec_read            => sd2_sec_read,
-      sd_sec_read_addr       => sd2_sec_read_addr,
-      sd_sec_read_data       => sd2_sec_read_data,
-      sd_sec_read_data_valid => sd2_sec_read_valid,
-      sd_sec_read_end        => sd2_sec_read_end,
-      sd_sec_write           => sd2_sec_write,
-      sd_sec_write_addr      => sd2_sec_write_addr,
-      sd_sec_write_data      => sd2_sec_write_data,
-      sd_sec_write_data_req  => sd2_sec_write_req,
-      sd_sec_write_end       => sd2_sec_write_end,
-      debug_sec_state        => open,
-      debug_cmd_state        => open,
-      debug_cmd_error        => open
-    );
+  -- sd2_i intentionally removed for the placement test.
 
   loader_i : sd_rom_loader
     port map (

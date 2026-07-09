@@ -2,7 +2,9 @@
 
 The 6502 single-board computer core on the Sipeed Tang Primer 20K: a T65 CPU with
 EhBASIC (SD-loaded), a VIC-style text/bitmap video path over HDMI, PS/2 keyboard,
-UART, SID + PT8211 audio, a math coprocessor, and a DDR3-backed bitmap framebuffer.
+UART, a math coprocessor, a hardware blitter, and a DDR3-backed bitmap
+framebuffer. The current placement-safe graphics test build intentionally leaves
+the SID/PT8211 audio path and the second SD-card controller disabled.
 
 Build the bitstream with `./make_tang20k.ps1` from the repo root (it preserves
 `impl/pnr/device.cfg`, which carries the DDR3 voltage settings).
@@ -13,8 +15,11 @@ The bitmap framebuffer lives in **DDR3**, not BSRAM — moving it there freed th
 BSRAM the DDR3 IP's own FIFOs need. The three modes share the single
 `rtl/core/peripherals/vic_fb_ddr3.vhd` controller (there is only one DDR3 app
 port). It prefetches each scanline into a double line buffer and streams it to the
-VIC, and takes CPU pixel writes as **masked single-byte writes** (no
-read-modify-write, so a marginal DDR3 read can't smear neighbouring pixels).
+VIC. CPU pixel writes are collected by a small 16-byte write-combine buffer:
+sequential writes to the same DDR3 burst are absorbed in `clk_x1` and flushed as
+one complete unmasked burst before a conflicting read/fetch/blit. This avoids the
+sustained masked-byte-write pattern that produced vertical drop-outs and
+scattered stale pixels on the live board.
 Pixels are reached through the banked `$6000-$7FFF` (8 KiB) window; the frames
 live in different DDR3 regions so switching modes does not clobber the others.
 
@@ -51,6 +56,8 @@ Demos (build with `make -C sw/6502`, upload with the `.bat` files under
   the multiply — much faster.
 - `mandelbrot_hires` — the coprocessor Mandelbrot at **640x400**, same view sampled
   twice as densely (four times the pixels of `mandelbrot_copro`).
+- `mandelbrot_hires_zoom` — renders the 640x400 Mandelbrot once, copies a clean
+  centre tile to RAM, and animates zoom frames from that immutable source.
 - `mandelbrot_true` — the coprocessor Mandelbrot in **RGB565 true colour** at
   320x200, `MAX_ITER=64` with a smooth 64-entry palette — no visible colour banding.
 - `test_ddr3_fb` — 8 vertical RGB332 colour bars, the 320x200 bring-up pattern.
@@ -63,10 +70,22 @@ Demos (build with `make -C sw/6502`, upload with the `.bat` files under
 
 ## Gowin timing closure
 
-The Tang SBC build is timing-clean with GowinEDA V1.9.12.03 as of the July 2026
-DDR3/SBC timing pass. The checked report
-`project/impl/pnr/tang_sbc_tr_content.html` from `Mon Jul 6 21:10:16 2026`
-shows:
+The Tang SBC graphics test build is timing-clean with GowinEDA V1.9.12.03 as of
+the July 9, 2026 DDR3/blitter pass. This build disables SD2 and audio to keep the
+GW2A-18 placer comfortably below the device limit while validating the DDR3
+framebuffer path:
+
+| Resource | Usage |
+| --- | ---: |
+| Logic | 10064 / 20736 (49%) |
+| LUT/ALU/ROM16 | 8600 (7789 LUT, 811 ALU, 0 ROM16) |
+| SSRAM | 244 |
+| Register | 4311 / 16173 (27%) |
+
+The latest PnR setup table reports a worst setup slack of **0.015 ns**; placement,
+routing, timing analysis, and bitstream generation complete.
+
+The earlier July 2026 timing pass for the fuller build showed:
 
 | Clock | Constraint | Reported Fmax |
 | --- | ---: | ---: |
@@ -89,10 +108,9 @@ DDR3 PHY calibration false paths that the generated Gowin IP needs.
 
 There was also one real DDR app-clock critical path in `vic_fb_ddr3.vhd`: CPU
 framebuffer writes used a stride/range compare to invalidate only one buffered
-half-line. That logic sat on the 100 MHz DDR app clock. The controller now
-conservatively invalidates the complete line-buffer validity vector on a CPU
-write, which removes the long compare path at the cost of a harmless extra line
-refetch after writes.
+half-line. That logic sat on the 100 MHz DDR app clock. The controller later
+moved to a CPU write-combine buffer, which also fixed the hardware pixel
+drop-outs seen in cube and Mandelbrot stress tests.
 
 Gowin still emits `TA1132` for
 `hdmi_i/clkdiv_tmds_i/CLKOUT.default_gen_clk`; it is a generated TMDS clock with
@@ -110,16 +128,9 @@ send the wake automatically.
 
 ## Known state / TODO
 
-- **SD2 D64 GoDrive is currently disabled** (commented out in
-  `rtl/core/sbc_t65_boot_monitor_top.vhd` and `.../sbc/rtl/tang20k_sbc_top.vhd`).
-  Its `fat32_reader` had a ~-215 ns combinational setup path (oversized 40x32 /
-  32x32 multiplies + a 32-bit divide) that, on top of the earlier DDR3 timing
-  debt, pushed the marginal DDR3 calibration over the edge. Uncomment `disk_i` +
-  `sd2_i` (and drop the tie-offs) to restore it; the right fix is to right-size
-  that arithmetic and re-run the Gowin timing report. SD1 (the EhBASIC boot
-  loader) is untouched.
-- **DDR3 may still leave scattered pixel errors** in the framebuffer read path on
-  some boards. The timing report is now clean, so remaining artefacts are more
-  likely board/VREF/Gowin-version sensitivity than STA violations. Keep
-  `impl/pnr/device.cfg` and the DDR3-related SDC constraints under review when
-  changing Gowin versions or DDR3 IP settings.
+- **SD2 D64 GoDrive and raw SD2 LOAD/SAVE are disabled** in this graphics test
+  build. `sd2_i`, `disk_i`, and `sdraw_i` are replaced by idle tie-offs.
+- **SID/PT8211 audio is disabled** in this graphics test build. The SID, CIA
+  audio timer, and DAC are replaced by constant read values and muted pins.
+- The CPU write-combine fix has been hardware-verified with the cube animation:
+  no faulty/stale pixels were observed after the change.

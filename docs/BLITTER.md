@@ -3,13 +3,15 @@
 ## Why
 
 The hi-res framebuffer lives in DDR3 (`vic_fb_ddr3.vhd`, at the board top next
-to the Gowin DDR3 IP). The CPU reaches it through the `$6000-$7FFF` window as
-**masked single-byte writes across a `clk_sys`↔`clk_x1` req/ack handshake** — so
-the 6502 stalls for a full DDR3 round-trip *per pixel*. A wireframe cube plots
+to the Gowin DDR3 IP). The CPU reaches it through the `$6000-$7FFF` window via a
+`clk_sys` to `clk_x1` req/ack handshake. Earlier builds emitted one masked DDR3
+byte write per CPU pixel; the current controller absorbs sequential CPU pixels
+into a 16-byte write-combine buffer and flushes complete unmasked bursts. A
+wireframe cube plots
 ~3600 pixels/frame (12 erase + 12 draw edges) plus a one-time 512 KB clear;
-every one of those is a stalled DDR3 write, which is why it renders at seconds
-per frame. The 3D math is only ~4 % of the work — the bottleneck is framebuffer
-write bandwidth, not computation.
+even with CPU write-combining, issuing every pixel from the 6502 is still much
+slower than a local app-clock drawing engine. The 3D math is only ~4 % of the
+work — the bottleneck is framebuffer write bandwidth, not computation.
 
 The fix is **not** a 3D accelerator. It is a small 2D drawing engine that runs
 the rasterizer in the DDR3 app-clock domain (`clk_x1`, ~100 MHz) and streams
@@ -94,23 +96,21 @@ LINE draws every edge.
   ghdl --elab-run --std=08 tb_vic_blit --ieee-asserts=disable-at-0
   -> tb_vic_blit: PASS (fill + lines match reference)
   ```
+- **Integrated on Tang Primer 20K:** `vic_blit_regs.vhd` captures `$8840-$884F`
+  in `clk_sys`, `vic_fb_ddr3.vhd` arbitrates the blitter in `clk_x1`, and the
+  board top wires the command and busy signals through to the DDR3 framebuffer.
+- **Hardware-verified:** the cube animation renders without stale or dropped
+  pixels after the CPU write-combine fix and the blitter write-combine/pacing
+  path.
+- **Regression coverage:** `tb_vic_fb_ddr3_blit`, `tb_vic_fb_ddr3_fetch`, and
+  `tb_vic_fb_ddr3_cpu_write` cover integrated blitter writes, line-fetch service
+  latency, and CPU byte writes that preserve neighbouring bytes in a DDR3 burst.
 
-## Remaining integration steps
+## Open optimizations
 
-1. **Register file + CDC** in `sbc_t65_boot_monitor_top.vhd`: capture
-   `$8840-$884F` (already decoded to `DEV_VIC_BLIT`), form a clean trigger pulse
-   into `clk_x1`, and expose BUSY (bit 7 of `$884F` read).
-2. **Arbiter in `vic_fb_ddr3.vhd`**: add blitter states to the `clk_x1` FSM
-   (priority below line-fetch, around the CPU write path), feeding the blitter's
-   `fbo_*` writes to `app_cmd`/`app_wdata` with the same per-lane masking the CPU
-   path uses. Add `HIRES_BASE_WORD` to the blitter byte address.
-3. **Board top** wiring (`boards/tang_primer_20k/sbc/rtl/tang20k_sbc_top.vhd`):
-   route the new blit register/busy signals through to `vic_fb_ddr3`.
-4. **Burst FILL (optimization):** write full 16-byte bursts (unmasked) for
-   16-aligned horizontal runs so a full-screen clear costs ~16 K bursts instead
-   of 256 K masked writes.
-5. **Emulator + software:** extend the emulator blitter to target the hi-res
-   framebuffer with this register map, then rewrite `examples/cube.s` to issue
-   LINE/FILL commands. Verify end-to-end in the emulator (which models the
-   register contract) before synthesis; final timing validation is on the board.
-```
+- **Burst FILL:** write full 16-byte bursts for aligned horizontal runs so a
+  full-screen clear costs about 16 K bursts instead of one byte-lane update per
+  pixel.
+- **Feature build split:** the July 9, 2026 placement-clean graphics build keeps
+  SD2 and SID/PT8211 audio disabled. Reintroduce them behind build options or
+  after reducing their resource cost.

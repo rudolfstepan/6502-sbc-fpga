@@ -172,6 +172,12 @@ architecture rtl of vic_fb_ddr3 is
 
   signal wd_cnt   : unsigned(13 downto 0) := (others => '0');
 
+  -- CPU framebuffer write-combine buffer. While dirty, CPU writes to the same
+  -- 16-byte burst are absorbed here and acknowledged immediately; before any
+  -- conflicting access the whole burst is written back unmasked.
+  signal cpu_wc_dirty : std_logic := '0';
+  signal cpu_wc_addr  : std_logic_vector(13 downto 0) := (others => '0');
+
   -- ---- hardware blitter (engine runs in clk_x1) ----
   signal blit_we      : std_logic;
   signal blit_addr    : std_logic_vector(17 downto 0);   -- byte index (y*640+x)
@@ -338,6 +344,7 @@ begin
       cpu_pending <= '0'; cpu_op_we <= '0';
       cpu_op_addr <= (others => '0'); cpu_op_din <= (others => '0');
       cpu_lane <= 0; cpu_dout_x1 <= (others => '0'); ack_tgl_x1 <= '0';
+      cpu_wc_dirty <= '0'; cpu_wc_addr <= (others => '0');
       wd_cnt <= (others => '0');
       fs_tgl_x1 <= (others => '0'); adv_tgl_x1 <= (others => '0');
       cpu_tgl_x1 <= (others => '0');
@@ -443,7 +450,11 @@ begin
           -- the display repeated stale lines -- visible as broken shallow
           -- wireframe edges. Dispatch branches below override the bounce.
           st <= S_IDLE;
-          if fetch_cur_need = '1' then
+          if cpu_wc_dirty = '1' and (fetch_cur_need = '1' or fetch_next_need = '1') then
+            -- Display fetch must see the latest CPU pixels, so commit the
+            -- buffered burst before servicing the line-buffer miss.
+            st <= S_CW_WRREQ;
+          elsif fetch_cur_need = '1' then
             cur_line <= fetch_cur_line; cur_half <= fetch_cur_half; col <= 0;
             blit_gap <= bl_gap_x1;   -- read->write turnaround guard: space the
                                      -- first blit write after a fetch burst
@@ -452,6 +463,9 @@ begin
             cur_line <= fetch_next_line; cur_half <= fetch_next_half; col <= 0;
             blit_gap <= bl_gap_x1;
             st <= S_FILL_REQ;
+          elsif cpu_wc_dirty = '1' and blit_we = '1' then
+            -- Keep the blitter and CPU byte window coherent in DDR3.
+            st <= S_CW_WRREQ;
           elsif blit_we = '1' then
             if wc_valid = '1' and blit_addr(17 downto 4) = wc_addr then
               -- same burst: merge into the combine buffer, no DDR3 traffic
@@ -488,10 +502,28 @@ begin
             cpu_op_addr <= cpu_addr;
             cpu_op_din  <= cpu_din;
             cpu_lane    <= lane_of(to_integer(unsigned(cpu_addr)));
-            -- masked single-byte write: no read-modify-write, so a marginal DDR3
-            -- read can't corrupt the 15 neighbour bytes (the scattered-pixel bug).
-            if cpu_we = '1' then st <= S_CW_WRREQ;
-            else                 st <= S_CR_REQ;
+            if cpu_we = '1' then
+              if cpu_wc_dirty = '1' and cpu_addr(17 downto 4) = cpu_wc_addr then
+                ln := lane_of(to_integer(unsigned(cpu_addr)));
+                cw_data(ln*8 + 7 downto ln*8) <= cpu_din;
+                ack_tgl_x1  <= not ack_tgl_x1;
+                cpu_pending <= '0';
+              elsif cpu_wc_dirty = '1' then
+                st <= S_CW_WRREQ;
+              else
+                st <= S_CW_RDREQ;
+              end if;
+            else
+              if cpu_wc_dirty = '1' and cpu_addr(17 downto 4) = cpu_wc_addr then
+                ln := lane_of(to_integer(unsigned(cpu_addr)));
+                cpu_dout_x1 <= cw_data(ln*8 + 7 downto ln*8);
+                ack_tgl_x1  <= not ack_tgl_x1;
+                cpu_pending <= '0';
+              elsif cpu_wc_dirty = '1' then
+                st <= S_CW_WRREQ;
+              else
+                st <= S_CR_REQ;
+              end if;
             end if;
           end if;
 
@@ -543,30 +575,41 @@ begin
             store_idx <= store_idx + 1;
           end if;
 
-        -- CPU pixel write (masked single byte into the 16-byte burst)
-        when S_CW_WRREQ =>
+        -- CPU pixel write-combine: load one 16-byte burst, patch the requested
+        -- byte in cw_data, then acknowledge the CPU. The dirty burst is written
+        -- back later as one complete, unmasked DDR3 write.
+        when S_CW_RDREQ =>
           if app_cmd_rdy = '1' then
             app_addr   <= burst_addr(base, to_integer(unsigned(cpu_op_addr)));
+            app_cmd    <= CMD_READ;
+            app_cmd_en <= '1';
+            st <= S_CW_RDWAIT;
+          end if;
+        when S_CW_RDWAIT =>
+          if app_rdata_valid = '1' then
+            ln := cpu_lane;
+            cw_data <= app_rdata;
+            cw_data(ln*8 + 7 downto ln*8) <= cpu_op_din;
+            cpu_wc_addr <= cpu_op_addr(17 downto 4);
+            cpu_wc_dirty <= '1';
+            ack_tgl_x1  <= not ack_tgl_x1;
+            cpu_pending <= '0';
+            st <= S_IDLE;
+          end if;
+        when S_CW_WRREQ =>
+          if app_cmd_rdy = '1' then
+            app_addr   <= burst_addr(base, to_integer(unsigned(cpu_wc_addr)) * 16);
             app_cmd    <= CMD_WRITE;
             app_cmd_en <= '1';
             st <= S_CW_WRDATA;
           end if;
         when S_CW_WRDATA =>
           if app_wdata_rdy = '1' then
-            ln := cpu_lane;
-            -- write ONLY the target lane byte; mask ('1' = disabled) the other 15
-            -- so the burst's neighbour bytes keep their stored DDR3 value.
-            app_wdata(ln*8 + 7 downto ln*8) <= cpu_op_din;
-            app_wdata_mask <= (others => '1');
-            app_wdata_mask(ln) <= '0';
+            app_wdata      <= cw_data;
+            app_wdata_mask <= (others => '0');
             app_wren       <= '1';
             app_wdata_end  <= '1';
-            -- Any CPU framebuffer write may affect one cached scanline. Drop
-            -- both halves instead of doing stride/range compares in the 100 MHz
-            -- app-clock path; the line fetcher will refill on demand.
-            half_valid <= (others => '0');
-            ack_tgl_x1  <= not ack_tgl_x1;
-            cpu_pending <= '0';
+            cpu_wc_dirty <= '0';
             st <= S_IDLE;
           end if;
 

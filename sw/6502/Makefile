@@ -168,6 +168,10 @@ MANDELBROT_HIRES_S   = mandelbrot_hires.s
 MANDELBROT_HIRES_O   = mandelbrot_hires.o
 MANDELBROT_HIRES_ROM = ../../roms/6502/mandelbrot_hires.bin
 
+MANDELBROT_HIRES_ZOOM_S   = mandelbrot_hires_zoom.s
+MANDELBROT_HIRES_ZOOM_O   = mandelbrot_hires_zoom.o
+MANDELBROT_HIRES_ZOOM_ROM = ../../roms/6502/mandelbrot_hires_zoom.bin
+
 MANDELBROT_TRUE_S    = mandelbrot_true.s
 MANDELBROT_TRUE_O    = mandelbrot_true.o
 MANDELBROT_TRUE_ROM  = ../../roms/6502/mandelbrot_true.bin
@@ -197,9 +201,15 @@ $(MANDELBROT_HIRES_ROM): $(MANDELBROT_HIRES_O) $(MANDELBROT_CFG)
 	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_hires.map
 	@echo "ROM ready: $(MANDELBROT_HIRES_ROM)  (640x400; upload with --split-rom)"
 
+$(MANDELBROT_HIRES_ZOOM_O): $(MANDELBROT_HIRES_ZOOM_S) $(MANDELBROT_HIRES_S)
+	$(CA65) --cpu 65c02 -t none -l mandelbrot_hires_zoom.lst $< -o $@
+
+$(MANDELBROT_HIRES_ZOOM_ROM): $(MANDELBROT_HIRES_ZOOM_O) $(MANDELBROT_CFG)
+	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_hires_zoom.map
+	@echo "ROM ready: $(MANDELBROT_HIRES_ZOOM_ROM)  (640x400 RGB332 prerender + zoom; --split-rom)"
+
 $(MANDELBROT_TRUE_O): $(MANDELBROT_TRUE_S)
 	$(CA65) --cpu 65c02 -t none -l mandelbrot_true.lst $< -o $@
-
 $(MANDELBROT_TRUE_ROM): $(MANDELBROT_TRUE_O) $(MANDELBROT_CFG)
 	$(LD65) -C $(MANDELBROT_CFG) -o $@ $< -m mandelbrot_true.map
 	@echo "ROM ready: $(MANDELBROT_TRUE_ROM)  (320x200 RGB565; upload with --split-rom)"
@@ -217,11 +227,13 @@ mandelbrot-copro: $(MANDELBROT_COPRO_ROM)
 
 mandelbrot-hires: $(MANDELBROT_HIRES_ROM)
 
+mandelbrot-hires-zoom: $(MANDELBROT_HIRES_ZOOM_ROM)
+
 mandelbrot-true: $(MANDELBROT_TRUE_ROM)
 
 mandelbrot-true240: $(MANDELBROT_TRUE240_ROM)
 
-mandelbrot: mandelbrot-bitmap mandelbrot-copro mandelbrot-hires mandelbrot-true mandelbrot-true240
+mandelbrot: mandelbrot-bitmap mandelbrot-copro mandelbrot-hires mandelbrot-hires-zoom mandelbrot-true mandelbrot-true240
 
 upload-mandelbrot-bitmap: $(MANDELBROT_BITMAP_ROM)
 	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_BITMAP_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
@@ -231,6 +243,9 @@ upload-mandelbrot-copro: $(MANDELBROT_COPRO_ROM)
 
 upload-mandelbrot-hires: $(MANDELBROT_HIRES_ROM)
 	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_HIRES_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
+
+upload-mandelbrot-hires-zoom: $(MANDELBROT_HIRES_ZOOM_ROM)
+	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_HIRES_ZOOM_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
 
 upload-mandelbrot-true: $(MANDELBROT_TRUE_ROM)
 	$(PYTHON) ../../tools/upload_monitor_hex.py $(MANDELBROT_TRUE_ROM) --split-rom --port COM15 --baud 115200 --run --verbose
