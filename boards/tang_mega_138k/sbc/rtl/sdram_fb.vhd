@@ -47,6 +47,14 @@ entity sdram_fb is
     blit_gap_cfg : in  std_logic_vector(7 downto 0) := x"0C";
     blit_dstx    : in  unsigned(9 downto 0) := (others => '0');
     blit_dsty    : in  unsigned(9 downto 0) := (others => '0');
+    blit_tex_base  : in  unsigned(17 downto 0) := (others => '0');
+    blit_tex_u0    : in  signed(15 downto 0) := (others => '0');
+    blit_tex_v0    : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dudx  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dvdx  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dudy  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dvdy  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_flags : in  std_logic_vector(7 downto 0) := (others => '0');
     blit_start   : in  std_logic := '0';
     blit_busy    : out std_logic;
 
@@ -187,6 +195,14 @@ begin
       color     => blit_color,
       dst_x     => blit_dstx,
       dst_y     => blit_dsty,
+      tex_base  => blit_tex_base,
+      tex_u0    => blit_tex_u0,
+      tex_v0    => blit_tex_v0,
+      tex_dudx  => blit_tex_dudx,
+      tex_dvdx  => blit_tex_dvdx,
+      tex_dudy  => blit_tex_dudy,
+      tex_dvdy  => blit_tex_dvdy,
+      tex_flags => blit_tex_flags,
       start     => blit_start_i,
       busy      => blit_busy,
       fbo_we    => blit_we,

@@ -105,6 +105,14 @@ entity sbc_t65_boot_monitor_top is
     blit_gap   : out std_logic_vector(7 downto 0);  -- $884B: DDR3 write pacing
     blit_dstx  : out unsigned(9 downto 0);          -- $884D + COLOR(1:0): COPY dst
     blit_dsty  : out unsigned(9 downto 0);          -- $884E + COLOR(2)
+    blit_tex_base  : out unsigned(17 downto 0);
+    blit_tex_u0    : out signed(15 downto 0);
+    blit_tex_v0    : out signed(15 downto 0);
+    blit_tex_dudx  : out signed(15 downto 0);
+    blit_tex_dvdx  : out signed(15 downto 0);
+    blit_tex_dudy  : out signed(15 downto 0);
+    blit_tex_dvdy  : out signed(15 downto 0);
+    blit_tex_flags : out std_logic_vector(7 downto 0);
     blit_start : out std_logic;
     blit_busy  : in  std_logic := '0';
 
@@ -444,6 +452,11 @@ begin
       blit_x1 => blit_x1, blit_y1 => blit_y1, blit_color => blit_color,
       blit_page => blit_page, blit_gap => blit_gap,
       blit_dstx => blit_dstx, blit_dsty => blit_dsty,
+      blit_tex_base => blit_tex_base,
+      blit_tex_u0 => blit_tex_u0, blit_tex_v0 => blit_tex_v0,
+      blit_tex_dudx => blit_tex_dudx, blit_tex_dvdx => blit_tex_dvdx,
+      blit_tex_dudy => blit_tex_dudy, blit_tex_dvdy => blit_tex_dvdy,
+      blit_tex_flags => blit_tex_flags,
       blit_start => blit_start);
   via_cs  <= '1'        when monitor_hold = '0' and dev_sel = DEV_VIA      else '0';
   uart_cs <= '1'        when monitor_hold = '0' and dev_sel = DEV_UART     else '0';

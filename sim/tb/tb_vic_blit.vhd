@@ -24,12 +24,20 @@ architecture sim of tb_vic_blit is
   signal fbo_addr : std_logic_vector(17 downto 0);
   signal fbo_data : std_logic_vector(7 downto 0);
   signal fbo_ready: std_logic := '0';
+  signal fbi_re   : std_logic;
+  signal fbi_addr : std_logic_vector(17 downto 0);
+  signal fbi_data : std_logic_vector(7 downto 0) := (others => '0');
+  signal fbi_ready: std_logic := '0';
+  signal tex_base : unsigned(17 downto 0) := (others => '0');
+  signal tex_u0, tex_v0, tex_dudx, tex_dvdx, tex_dudy, tex_dvdy : signed(15 downto 0) := (others => '0');
+  signal tex_flags : std_logic_vector(7 downto 0) := (others => '0');
 
   type mem_t is array (0 to NBYTES-1) of std_logic_vector(7 downto 0);
   signal fb : mem_t := (others => (others => '0'));
 
   constant OP_FILL : std_logic_vector(2 downto 0) := "000";
   constant OP_LINE : std_logic_vector(2 downto 0) := "011";
+  constant OP_TEX  : std_logic_vector(2 downto 0) := "100";
 begin
 
   dut : entity work.vic_blit
@@ -38,8 +46,13 @@ begin
       clk => clk, rst_n => rst_n,
       op => op, x0 => x0, y0 => y0, x1 => x1, y1 => y1,
       color => color, start => start, busy => busy,
+      tex_base => tex_base, tex_u0 => tex_u0, tex_v0 => tex_v0,
+      tex_dudx => tex_dudx, tex_dvdx => tex_dvdx,
+      tex_dudy => tex_dudy, tex_dvdy => tex_dvdy, tex_flags => tex_flags,
       fbo_we => fbo_we, fbo_addr => fbo_addr, fbo_data => fbo_data,
-      fbo_ready => fbo_ready);
+      fbo_ready => fbo_ready,
+      fbi_re => fbi_re, fbi_addr => fbi_addr, fbi_data => fbi_data,
+      fbi_ready => fbi_ready);
 
   clk <= not clk after 5 ns;
 
@@ -47,9 +60,11 @@ begin
   -- engine's S_EMIT handshake) and store it.
   mem : process(clk)
     variable wc : integer := 0;
+    variable rc : integer := 0;
   begin
     if rising_edge(clk) then
       fbo_ready <= '0';
+      fbi_ready <= '0';
       if fbo_we = '1' then
         if wc >= 2 then
           fb(to_integer(unsigned(fbo_addr))) <= fbo_data;
@@ -60,6 +75,17 @@ begin
         end if;
       else
         wc := 0;
+      end if;
+      if fbi_re = '1' then
+        if rc >= 1 then
+          fbi_data <= fbi_addr(7 downto 0);
+          fbi_ready <= '1';
+          rc := 0;
+        else
+          rc := rc + 1;
+        end if;
+      else
+        rc := 0;
       end if;
     end if;
   end process;
@@ -102,6 +128,21 @@ begin
       end loop;
     end procedure;
 
+    procedure ref_tex_identity(variable m : inout mem_t;
+                               ax0, ay0, ax1, ay1 : integer) is
+      variable x, y : integer;
+    begin
+      y := ay0;
+      while y <= ay1 loop
+        x := ax0;
+        while x <= ax1 loop
+          m(y * LINE_PIX + x) := std_logic_vector(to_unsigned(((y - ay0) * 64 + (x - ax0)) mod 256, 8));
+          x := x + 1;
+        end loop;
+        y := y + 1;
+      end loop;
+    end procedure;
+
     procedure do_cmd(o : std_logic_vector(2 downto 0);
                      ax0, ay0, ax1, ay1 : integer; c : std_logic_vector) is
     begin
@@ -132,6 +173,12 @@ begin
     do_cmd(OP_LINE, 12, 12, 12, 30, x"22"); ref_line(ref, 12, 12, 12, 30, x"22"); -- vertical
     do_cmd(OP_LINE, 8, 50, 40, 50, x"33"); ref_line(ref, 8, 50, 40, 50, x"33");   -- horizontal
     do_cmd(OP_LINE, 33, 33, 33, 33, x"44"); ref_line(ref, 33, 33, 33, 33, x"44"); -- single pixel
+    tex_base <= to_unsigned(0, 18);
+    tex_u0 <= to_signed(0, 16); tex_v0 <= to_signed(0, 16);
+    tex_dudx <= to_signed(256, 16); tex_dvdx <= to_signed(0, 16);
+    tex_dudy <= to_signed(0, 16); tex_dvdy <= to_signed(256, 16);
+    tex_flags <= x"00";
+    do_cmd(OP_TEX, 50, 8, 55, 11, x"00"); ref_tex_identity(ref, 50, 8, 55, 11);
 
     -- compare every byte
     for i in 0 to NBYTES-1 loop
@@ -148,7 +195,7 @@ begin
     end loop;
 
     if mism = 0 then
-      report "tb_vic_blit: PASS (fill + lines match reference)" severity note;
+      report "tb_vic_blit: PASS (fill + lines + texture fill match reference)" severity note;
     else
       report "tb_vic_blit: FAIL, " & integer'image(mism) & " mismatched bytes"
         severity failure;

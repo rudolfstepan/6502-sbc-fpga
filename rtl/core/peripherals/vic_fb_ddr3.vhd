@@ -87,6 +87,14 @@ entity vic_fb_ddr3 is
     blit_gap_cfg : in std_logic_vector(7 downto 0) := x"0C";  -- write pacing ($884B)
     blit_dstx  : in  unsigned(9 downto 0) := (others => '0'); -- COPY destination
     blit_dsty  : in  unsigned(9 downto 0) := (others => '0');
+    blit_tex_base  : in  unsigned(17 downto 0) := (others => '0');
+    blit_tex_u0    : in  signed(15 downto 0) := (others => '0');
+    blit_tex_v0    : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dudx  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dvdx  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dudy  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_dvdy  : in  signed(15 downto 0) := (others => '0');
+    blit_tex_flags : in  std_logic_vector(7 downto 0) := (others => '0');
     blit_start : in  std_logic := '0';
     blit_busy  : out std_logic;
 
@@ -216,6 +224,14 @@ architecture rtl of vic_fb_ddr3 is
   signal bl_color_x1 : std_logic_vector(7 downto 0) := (others => '0');
   signal bl_dstx_x1  : unsigned(9 downto 0) := (others => '0');
   signal bl_dsty_x1  : unsigned(9 downto 0) := (others => '0');
+  signal bl_tex_base_x1  : unsigned(17 downto 0) := (others => '0');
+  signal bl_tex_u0_x1    : signed(15 downto 0) := (others => '0');
+  signal bl_tex_v0_x1    : signed(15 downto 0) := (others => '0');
+  signal bl_tex_dudx_x1  : signed(15 downto 0) := (others => '0');
+  signal bl_tex_dvdx_x1  : signed(15 downto 0) := (others => '0');
+  signal bl_tex_dudy_x1  : signed(15 downto 0) := (others => '0');
+  signal bl_tex_dvdy_x1  : signed(15 downto 0) := (others => '0');
+  signal bl_tex_flags_x1 : std_logic_vector(7 downto 0) := (others => '0');
   signal blit_go     : std_logic := '0';
   -- pixel latched while the combine buffer is being flushed for it
   signal blit_lat_addr : std_logic_vector(17 downto 0) := (others => '0');
@@ -278,6 +294,14 @@ begin
       color     => bl_color_x1,
       dst_x     => bl_dstx_x1,
       dst_y     => bl_dsty_x1,
+      tex_base  => bl_tex_base_x1,
+      tex_u0    => bl_tex_u0_x1,
+      tex_v0    => bl_tex_v0_x1,
+      tex_dudx  => bl_tex_dudx_x1,
+      tex_dvdx  => bl_tex_dvdx_x1,
+      tex_dudy  => bl_tex_dudy_x1,
+      tex_dvdy  => bl_tex_dvdy_x1,
+      tex_flags => bl_tex_flags_x1,
       start     => blit_go,
       busy      => blit_busy_x1,
       fbo_we    => blit_we,
@@ -381,6 +405,10 @@ begin
       wc_valid <= '0'; wc_pend <= '0'; wc_addr <= (others => '0');
       wc_data <= (others => '0'); wc_mask <= (others => '1');
       bl_dstx_x1 <= (others => '0'); bl_dsty_x1 <= (others => '0');
+      bl_tex_base_x1 <= (others => '0'); bl_tex_flags_x1 <= (others => '0');
+      bl_tex_u0_x1 <= (others => '0'); bl_tex_v0_x1 <= (others => '0');
+      bl_tex_dudx_x1 <= (others => '0'); bl_tex_dvdx_x1 <= (others => '0');
+      bl_tex_dudy_x1 <= (others => '0'); bl_tex_dvdy_x1 <= (others => '0');
       blit_rdata_r <= (others => '0'); blit_rd_ready_r <= '0';
       rc_valid <= '0'; rc_addr <= (others => '0'); rc_data <= (others => '0');
     elsif rising_edge(clk_x1) then
@@ -405,6 +433,14 @@ begin
         bl_color_x1 <= blit_color;
         bl_dstx_x1  <= blit_dstx;
         bl_dsty_x1  <= blit_dsty;
+        bl_tex_base_x1 <= blit_tex_base;
+        bl_tex_u0_x1 <= blit_tex_u0;
+        bl_tex_v0_x1 <= blit_tex_v0;
+        bl_tex_dudx_x1 <= blit_tex_dudx;
+        bl_tex_dvdx_x1 <= blit_tex_dvdx;
+        bl_tex_dudy_x1 <= blit_tex_dudy;
+        bl_tex_dvdy_x1 <= blit_tex_dvdy;
+        bl_tex_flags_x1 <= blit_tex_flags;
         bl_gap_x1   <= unsigned(blit_gap_cfg);
         blit_go     <= '1';
       end if;

@@ -419,6 +419,14 @@ architecture rtl of tang20k_sbc_top is
   signal blit_gap   : std_logic_vector(7 downto 0);
   signal blit_dstx  : unsigned(9 downto 0);
   signal blit_dsty  : unsigned(9 downto 0);
+  signal blit_tex_base  : unsigned(17 downto 0);
+  signal blit_tex_u0    : signed(15 downto 0);
+  signal blit_tex_v0    : signed(15 downto 0);
+  signal blit_tex_dudx  : signed(15 downto 0);
+  signal blit_tex_dvdx  : signed(15 downto 0);
+  signal blit_tex_dudy  : signed(15 downto 0);
+  signal blit_tex_dvdy  : signed(15 downto 0);
+  signal blit_tex_flags : std_logic_vector(7 downto 0);
   signal blit_start : std_logic;
   signal blit_busy  : std_logic;
 begin
@@ -731,6 +739,14 @@ begin
       blit_gap   => blit_gap,
       blit_dstx  => blit_dstx,
       blit_dsty  => blit_dsty,
+      blit_tex_base => blit_tex_base,
+      blit_tex_u0 => blit_tex_u0,
+      blit_tex_v0 => blit_tex_v0,
+      blit_tex_dudx => blit_tex_dudx,
+      blit_tex_dvdx => blit_tex_dvdx,
+      blit_tex_dudy => blit_tex_dudy,
+      blit_tex_dvdy => blit_tex_dvdy,
+      blit_tex_flags => blit_tex_flags,
       blit_start => blit_start,
       blit_busy  => blit_busy,
       dac_bck       => dac_bck,
@@ -964,6 +980,14 @@ begin
       blit_gap_cfg => blit_gap,
       blit_dstx  => blit_dstx,
       blit_dsty  => blit_dsty,
+      blit_tex_base => blit_tex_base,
+      blit_tex_u0 => blit_tex_u0,
+      blit_tex_v0 => blit_tex_v0,
+      blit_tex_dudx => blit_tex_dudx,
+      blit_tex_dvdx => blit_tex_dvdx,
+      blit_tex_dudy => blit_tex_dudy,
+      blit_tex_dvdy => blit_tex_dvdy,
+      blit_tex_flags => blit_tex_flags,
       blit_start => blit_start,
       blit_busy  => blit_busy,
 

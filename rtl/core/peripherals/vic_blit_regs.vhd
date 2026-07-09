@@ -8,10 +8,8 @@
 -- Register map (offset within $8840):
 --   0 X0_LO  1 X0_HI(9:8)  2 Y0_LO  3 Y0_HI(8)
 --   4 X1_LO  5 X1_HI       6 Y1_LO  7 Y1_HI
---   8 COLOR  9 OP(FILL=0,COPY=1,COPYT=2,LINE=3)  10 PAGE(0)
---   11 GAP (idle clk_x1 cycles inserted between blit pixel writes; DDR3 write
---      pacing -- tunable from software so drop-out experiments need no
---      re-synthesis; resets to 12)
+--   8 COLOR  9 OP(FILL=0,COPY=1,COPYT=2,LINE=3,TEX=4)
+--   10 TEX_PARAM_INDEX  11 TEX_PARAM_DATA (auto-increments index on write)
 --   12 (read/write handled by the core: framebuffer backend select/status)
 --   13 DST_X_LO  14 DST_Y_LO (COPY destination top-left; the high bits ride
 --      in the otherwise unused COLOR register: COLOR(1:0) = DST_X(9:8),
@@ -20,6 +18,16 @@
 --
 -- COPY/COPYT copy the inclusive source rect (x0,y0)-(x1,y1) to the DST
 -- top-left, overlap-safe (usable as MOVE); COPYT skips $00 source bytes.
+--
+-- OP_TEX=4 extended parameter bank, written through $884A/$884B:
+--   00..02 TEX_BASE byte address in the active framebuffer
+--   03..04 U0 signed 8.8, 05..06 V0 signed 8.8
+--   07..08 DUDX signed 8.8, 09..10 DVDX signed 8.8
+--   11..12 DUDY signed 8.8, 13..14 DVDY signed 8.8
+--   15 FLAGS bit0 = transparent skip colour $00
+--            bit1 = UV clip: skip pixels with U or V outside [0,64.0) instead
+--                   of wrapping -- fill a face's bounding box in clip mode to
+--                   rasterize a rotated parallelogram (textured cube faces)
 -- ---------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
@@ -47,15 +55,26 @@ entity vic_blit_regs is
     blit_gap   : out std_logic_vector(7 downto 0);
     blit_dstx  : out unsigned(9 downto 0);
     blit_dsty  : out unsigned(9 downto 0);
+    blit_tex_base  : out unsigned(17 downto 0);
+    blit_tex_u0    : out signed(15 downto 0);
+    blit_tex_v0    : out signed(15 downto 0);
+    blit_tex_dudx  : out signed(15 downto 0);
+    blit_tex_dvdx  : out signed(15 downto 0);
+    blit_tex_dudy  : out signed(15 downto 0);
+    blit_tex_dvdy  : out signed(15 downto 0);
+    blit_tex_flags : out std_logic_vector(7 downto 0);
     blit_start : out std_logic
   );
 end entity;
 
 architecture rtl of vic_blit_regs is
   type regbank_t is array (0 to 15) of std_logic_vector(7 downto 0);
+  type texbank_t is array (0 to 31) of std_logic_vector(7 downto 0);
   -- reg 11 (GAP) resets to 12 so software that never writes it keeps the
   -- proven pacing default
   signal regs        : regbank_t := (11 => x"0C", others => (others => '0'));
+  signal texregs     : texbank_t := (others => (others => '0'));
+  signal tex_idx     : unsigned(4 downto 0) := (others => '0');
   signal wr_d        : std_logic := '0';
   signal start_i     : std_logic := '0';
   -- "Sticky" busy: asserted in clk_sys the instant $884F is written, so the CPU
@@ -72,13 +91,23 @@ begin
       start_i <= '0';
       if rst_n = '0' then
         regs <= (11 => x"0C", others => (others => '0'));
+        texregs <= (others => (others => '0'));
+        tex_idx <= (others => '0');
         wr_d <= '0';
         busy_sticky <= '0';
         seen <= '0';
       else
         wr_d <= wr;
         if wr = '1' then
-          regs(to_integer(unsigned(addr))) <= wdata;
+          if addr = x"A" then
+            regs(to_integer(unsigned(addr))) <= wdata;
+            tex_idx <= unsigned(wdata(4 downto 0));
+          elsif addr = x"B" then
+            texregs(to_integer(tex_idx)) <= wdata;
+            tex_idx <= tex_idx + 1;
+          else
+            regs(to_integer(unsigned(addr))) <= wdata;
+          end if;
         end if;
         -- track the engine busy so sticky drops after the op has actually run
         if busy = '1' then
@@ -109,9 +138,18 @@ begin
   -- COPY destination: low bytes in 13/14, high bits in COLOR (unused by COPY)
   blit_dstx  <= unsigned(std_logic_vector'(regs(8)(1 downto 0) & regs(13)));
   blit_dsty  <= unsigned(std_logic_vector'("0" & regs(8)(2) & regs(14)));
+  blit_tex_base <= unsigned(std_logic_vector'(texregs(2)(1 downto 0) & texregs(1) & texregs(0)));
+  blit_tex_u0   <= signed(std_logic_vector'(texregs(4) & texregs(3)));
+  blit_tex_v0   <= signed(std_logic_vector'(texregs(6) & texregs(5)));
+  blit_tex_dudx <= signed(std_logic_vector'(texregs(8) & texregs(7)));
+  blit_tex_dvdx <= signed(std_logic_vector'(texregs(10) & texregs(9)));
+  blit_tex_dudy <= signed(std_logic_vector'(texregs(12) & texregs(11)));
+  blit_tex_dvdy <= signed(std_logic_vector'(texregs(14) & texregs(13)));
+  blit_tex_flags <= texregs(15);
   blit_start <= start_i;
 
   rdata <= (7 => busy_sticky, others => '0') when addr = x"F"
+           else texregs(to_integer(tex_idx)) when addr = x"B"
            else regs(to_integer(unsigned(addr)));
 
 end architecture;

@@ -69,8 +69,8 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k tang_mega_138k tang_mega_138k-sbc tang_mega_138k-flash tang_mega_138k-hdmi-test tang_mega_138k-hdmi-test-flash tang_primer_console_138k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-c1541-d64-source test-c1541-d64-sdram \
-        test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem test-sdram-fb tunes-d64 \
-        sid-disks reist adventure-rom blit-demo-roms blitcopy-rom blitdemo-rom multipart-d64 test-c64-vic test-c64-input \
+        test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem test-sdram-fb test-fb-ddr3 tunes-d64 \
+        sid-disks reist adventure-rom blit-demo-roms blitcopy-rom blitdemo-rom mandelcube-rom multipart-d64 test-c64-vic test-c64-input \
         c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
         c64-graphics-test-prg c64-sprite-test-prg c64-d016-scroll-test-prg \
         c64-math-copro-test-prg c64-mandelbrot-prg c64-mandelbrot-copro-prg \
@@ -383,6 +383,14 @@ blitdemo-rom:
 	@rm -f sw/6502/blitdemo.o
 	@echo "Built roms/6502/blitdemo.bin. Upload with roms/6502/upload/blitdemo.bat"
 
+## Mandelbrot texture cube demo: computes a 64x64 Apfelmaennchen texture, then
+## maps it onto the animated cube faces in the DDR3 hi-res framebuffer.
+mandelcube-rom:
+	$(CA65) --cpu 65c02 -o sw/6502/mandelcube_rom.o sw/6502/mandelcube_rom.s
+	$(LD65) -C sw/6502/mandelcube.cfg -o roms/6502/mandelcube_rom.bin sw/6502/mandelcube_rom.o
+	@rm -f sw/6502/mandelcube_rom.o
+	@echo "Built roms/6502/mandelcube_rom.bin. Upload with roms/6502/upload/mandelcube_rom.bat"
+
 ## Blitter demos as uploadable 16 KB split-ROM images, like the mandelbrot ROMs.
 ## Each wraps the unmodified PRG from the emulator repo (prg_rom_wrapper.inc
 ## copies it to its load address at reset). Upload: roms/6502/upload/<name>_rom.bat
@@ -479,6 +487,15 @@ test-fat32: fat32-card-image
 	$(GHDL) -r $(GHDL_FLAGS) tb_fat32_reader $(GHDL_RUN_FLAGS) --stop-time=300ms
 	$(GHDL) -r $(GHDL_FLAGS) tb_fat32_reader -gIMG_PATH=$(FAT32_CARD_PAD_IMG) $(GHDL_RUN_FLAGS) --stop-time=300ms
 	$(GHDL) -r $(GHDL_FLAGS) tb_fat32_reader -gIMG_PATH=$(FAT32_CARD_SF_IMG) -gCARD_SECTORS=386 -gEXP_START_LBA=42 $(GHDL_RUN_FLAGS) --stop-time=300ms
+
+## DDR3 framebuffer backend: CPU port, FILL + TEX incl. rotated clip case,
+## with an app-port model of the Gowin DDR3 IP and real 50/100 MHz CDC (GHDL).
+test-fb-ddr3:
+	$(GHDL) -a $(GHDL_FLAGS) rtl/core/sbc_pkg.vhd \
+	  rtl/core/peripherals/vic_blit.vhd rtl/core/peripherals/vic_fb_ddr3.vhd \
+	  sim/tb/tb_vic_fb_ddr3.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_vic_fb_ddr3
+	$(GHDL) -r $(GHDL_FLAGS) tb_vic_fb_ddr3 $(GHDL_RUN_FLAGS) --stop-time=400ms
 
 ## Tang Mega 138K: SDRAM0 framebuffer line prefetch + CPU byte port (GHDL).
 test-sdram-fb:

@@ -29,7 +29,13 @@ begin
               rdata => rdata, busy => busy,
               blit_op => blit_op, blit_x0 => blit_x0, blit_y0 => blit_y0,
               blit_x1 => blit_x1, blit_y1 => blit_y1, blit_color => blit_color,
-              blit_page => blit_page, blit_gap => open, blit_start => blit_start);
+              blit_page => blit_page, blit_gap => open,
+              blit_dstx => open, blit_dsty => open,
+              blit_tex_base => open, blit_tex_u0 => open, blit_tex_v0 => open,
+              blit_tex_dudx => open, blit_tex_dvdx => open,
+              blit_tex_dudy => open, blit_tex_dvdy => open,
+              blit_tex_flags => open,
+              blit_start => blit_start);
 
   clk <= not clk after 5 ns;
 

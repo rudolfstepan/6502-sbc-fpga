@@ -33,6 +33,16 @@
 --   OP_COPYT = 2 : same, but source bytes of $00 are skipped (transparent
 --                  copy for sprites; the skipped write also saves the cycle)
 --   OP_LINE  = 3 : draw a Bresenham line (x0,y0)-(x1,y1) in COLOR
+--   OP_TEX   = 4 : affine 64x64 texture fill into the inclusive destination
+--                  rectangle.  The source texture is read through the same
+--                  framebuffer read port as COPY. U/V are signed 8.8 and wrap
+--                  through 64 texels via bits 13:8.
+--                  tex_flags(1) = UV CLIP mode: instead of wrapping, pixels
+--                  whose U or V lies outside [0, 64.0) are skipped entirely
+--                  (no read, no write). Filling a face's screen bounding box
+--                  in clip mode therefore rasterizes an arbitrary rotated
+--                  parallelogram -- this is what makes textured cube faces
+--                  possible with a rectangle-walking engine.
 --
 -- COPY reads through the abstract byte read port (fbi_re / fbi_addr /
 -- fbi_data / fbi_ready), mirroring the write port protocol: fbi_re is held
@@ -72,6 +82,14 @@ entity vic_blit is
     dst_y      : in  unsigned(9 downto 0) := (others => '0');
     src_stride : in  unsigned(9 downto 0) := to_unsigned(LINE_PIX, 10);
     dst_stride : in  unsigned(9 downto 0) := to_unsigned(LINE_PIX, 10);
+    tex_base   : in  unsigned(17 downto 0) := (others => '0');
+    tex_u0     : in  signed(15 downto 0) := (others => '0');
+    tex_v0     : in  signed(15 downto 0) := (others => '0');
+    tex_dudx   : in  signed(15 downto 0) := (others => '0');
+    tex_dvdx   : in  signed(15 downto 0) := (others => '0');
+    tex_dudy   : in  signed(15 downto 0) := (others => '0');
+    tex_dvdy   : in  signed(15 downto 0) := (others => '0');
+    tex_flags  : in  std_logic_vector(7 downto 0) := (others => '0');
     start    : in  std_logic;       -- 1-cycle pulse: latch command and run
     busy     : out std_logic;       -- high while an op is in progress
 
@@ -95,9 +113,11 @@ architecture rtl of vic_blit is
   constant OP_COPY  : std_logic_vector(2 downto 0) := "001";
   constant OP_COPYT : std_logic_vector(2 downto 0) := "010";
   constant OP_LINE  : std_logic_vector(2 downto 0) := "011";
+  constant OP_TEX   : std_logic_vector(2 downto 0) := "100";
 
   type st_t is (S_IDLE, S_SETUP, S_ADDR, S_EMIT, S_STEP, S_ADV,
                 S_CSET1, S_CSET2, S_CSET3, S_CSET4, S_CRD, S_CWR, S_CSTEP,
+                S_TSET1, S_TSET2, S_TRD, S_TWR, S_TSTEP,
                 S_DONE);
   signal st : st_t := S_IDLE;
 
@@ -143,6 +163,28 @@ architecture rtl of vic_blit is
   signal step_xy  : signed(ADDR_BITS-1 downto 0) := (others => '0');  -- step_x+step_y
   signal fillwrap : signed(ADDR_BITS-1 downto 0) := (others => '0');  -- LINE_PIX-width
 
+  -- OP_TEX affine texture state. U/V are 8.8, texture is 64x64 and addressed by
+  -- {v[13:8], u[13:8]} so values wrap naturally.
+  signal tu, tv       : signed(15 downto 0) := (others => '0');
+  signal row_tu, row_tv : signed(15 downto 0) := (others => '0');
+  signal tflag_tex    : std_logic := '0';
+  -- UV clip mode: tex_skip is REGISTERED alongside tu/tv so S_TRD never
+  -- glitches a one-cycle fbi_re for a pixel that is then skipped (the backend
+  -- would dispatch the read and its late ready pulse could be consumed by the
+  -- following pixel with a stale address).
+  signal tclip        : std_logic := '0';
+  signal tex_skip     : std_logic := '0';
+
+  function uv_outside(u, v : signed(15 downto 0)) return std_logic is
+  begin
+    -- inside = both U and V in [0, 16384): top two bits clear
+    if u(15) = '1' or u(14) = '1' or v(15) = '1' or v(14) = '1' then
+      return '1';
+    else
+      return '0';
+    end if;
+  end function;
+
   function abs_diff(a, b : unsigned) return signed is
   begin
     if a >= b then return signed(resize(a - b, 12));
@@ -150,19 +192,29 @@ architecture rtl of vic_blit is
     end if;
   end function;
 
+  subtype tex_off_t is unsigned(11 downto 0);
+  function tex_offset(u, v : signed(15 downto 0)) return tex_off_t is
+    variable uv : std_logic_vector(11 downto 0);
+  begin
+    uv := std_logic_vector(v(13 downto 8)) & std_logic_vector(u(13 downto 8));
+    return unsigned(uv);
+  end function;
+
 begin
 
   busy     <= '0' when st = S_IDLE else '1';
-  fbo_we   <= '1' when st = S_EMIT or st = S_CWR else '0';
+  fbo_we   <= '1' when st = S_EMIT or st = S_CWR or st = S_TWR else '0';
   fbo_addr <= std_logic_vector(addr);
   fbo_data <= col_reg;
-  fbi_re   <= '1' when st = S_CRD else '0';
+  fbi_re   <= '1' when st = S_CRD or (st = S_TRD and tex_skip = '0') else '0';
   fbi_addr <= std_logic_vector(saddr);
 
   process(clk, rst_n)
     variable e2    : signed(13 downto 0);
     variable delta : signed(ADDR_BITS-1 downto 0);
     variable edel  : signed(12 downto 0);
+    variable next_tu : signed(15 downto 0);
+    variable next_tv : signed(15 downto 0);
   begin
     if rst_n = '0' then
       st <= S_IDLE;
@@ -184,6 +236,9 @@ begin
       dcx <= (others => '0'); dcy <= (others => '0');
       cstep <= (others => '0'); swrap <= (others => '0'); dwrap <= (others => '0');
       wcnt <= (others => '0'); hcnt <= (others => '0');
+      tu <= (others => '0'); tv <= (others => '0');
+      row_tu <= (others => '0'); row_tv <= (others => '0');
+      tflag_tex <= '0'; tclip <= '0'; tex_skip <= '0';
     elsif rising_edge(clk) then
       case st is
 
@@ -240,6 +295,10 @@ begin
                 tflag <= '1';
               end if;
               st <= S_CSET1;
+            elsif op = OP_TEX then
+              tflag_tex <= tex_flags(0);
+              tclip     <= tex_flags(1);
+              st <= S_TSET1;
             else
               st <= S_SETUP;
             end if;
@@ -420,6 +479,76 @@ begin
             saddr <= unsigned(signed(saddr) + cstep);
             addr  <= unsigned(signed(addr) + cstep);
             st    <= S_CRD;
+          end if;
+
+        -- ── Affine 64x64 texture fill: destination walks like FILL, source
+        -- address is recomputed from U/V for each pixel and read like COPY.
+        when S_TSET1 =>
+          addr <= resize(unsigned(cy(9 downto 0)) * to_unsigned(LINE_PIX, 10),
+                         ADDR_BITS);
+          fillwrap <= to_signed(LINE_PIX, ADDR_BITS) - resize(fwidth, ADDR_BITS);
+          row_tu <= tex_u0;
+          row_tv <= tex_v0;
+          tu <= tex_u0;
+          tv <= tex_v0;
+          wcnt <= fwidth;
+          hcnt <= fheight;
+          st <= S_TSET2;
+
+        when S_TSET2 =>
+          addr <= addr + resize(unsigned(cx(9 downto 0)), ADDR_BITS);
+          saddr <= tex_base + resize(tex_offset(tu, tv), ADDR_BITS);
+          tex_skip <= tclip and uv_outside(tu, tv);
+          st <= S_TRD;
+
+        when S_TRD =>
+          if tex_skip = '1' then
+            st <= S_TSTEP;               -- clip: outside the texture, no pixel
+          elsif fbi_ready = '1' then
+            col_reg <= fbi_data;
+            if tflag_tex = '1' and fbi_data = x"00" then
+              st <= S_TSTEP;
+            else
+              st <= S_TWR;
+            end if;
+          end if;
+
+        when S_TWR =>
+          if fbo_ready = '1' then
+            st <= S_TSTEP;
+          end if;
+
+        when S_TSTEP =>
+          if wcnt = 0 then
+            if hcnt = 0 then
+              st <= S_DONE;
+            else
+              hcnt <= hcnt - 1;
+              wcnt <= fwidth;
+              cx <= fx0;
+              cy <= cy + 1;
+              addr <= unsigned(signed(addr) + fillwrap);
+              next_tu := row_tu + tex_dudy;
+              next_tv := row_tv + tex_dvdy;
+              row_tu <= next_tu;
+              row_tv <= next_tv;
+              tu <= next_tu;
+              tv <= next_tv;
+              saddr <= tex_base + resize(tex_offset(next_tu, next_tv), ADDR_BITS);
+              tex_skip <= tclip and uv_outside(next_tu, next_tv);
+              st <= S_TRD;
+            end if;
+          else
+            wcnt <= wcnt - 1;
+            cx <= cx + 1;
+            addr <= addr + 1;
+            next_tu := tu + tex_dudx;
+            next_tv := tv + tex_dvdx;
+            tu <= next_tu;
+            tv <= next_tv;
+            saddr <= tex_base + resize(tex_offset(next_tu, next_tv), ADDR_BITS);
+            tex_skip <= tclip and uv_outside(next_tu, next_tv);
+            st <= S_TRD;
           end if;
 
         when S_DONE =>
