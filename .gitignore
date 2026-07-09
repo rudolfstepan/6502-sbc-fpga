@@ -11,6 +11,10 @@ sim/generated/
 # Local generated images and scratch outputs
 build/
 
+# Stray Gowin synthesis output when the tool runs from the repo root (the real
+# project impl/ lives under boards/*/project/impl/)
+/impl/
+
 # ── PIX16 / Xilinx ISE ────────────────────────────────────────────────────────
 # Keep: .xise project file, bitstreams/
 # Ignore: everything ISE generates during synthesis & implementation
