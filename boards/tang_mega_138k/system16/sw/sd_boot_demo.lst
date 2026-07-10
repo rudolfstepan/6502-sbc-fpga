@@ -1,0 +1,67 @@
+Sections:
+00: "org0001:0" (0-4C)
+
+
+Source: "sw\sd_boot_demo.s"
+                            	     1: UART_DATA      equ     $00f00010
+                            	     2: UART_STAT      equ     $00f00012
+                            	     3: VIDEO_CTRL     equ     $00f00002
+                            	     4: LED_STATUS     equ     $00f00000
+                            	     5: 
+                            	     6:         org     $00000000
+                            	     7: 
+                            	     8: start:
+00:00000000 46FC2700        	     9:         move.w  #$2700,sr
+00:00000004 33FC07E000F00002	    10:         move.w  #$07e0,VIDEO_CTRL.l
+00:0000000C 33FC000A00F00000	    11:         move.w  #$000a,LED_STATUS.l
+00:00000014 41FA001E        	    12:         lea     message(pc),a0
+                            	    13: 
+                            	    14: send_next:
+00:00000018 7000            	    15:         moveq   #0,d0
+00:0000001A 1018            	    16:         move.b  (a0)+,d0
+00:0000001C 6714            	    17:         beq.s   running
+                            	    18: 
+                            	    19: wait_tx:
+00:0000001E 323900F00012    	    20:         move.w  UART_STAT.l,d1
+00:00000024 02410001        	    21:         andi.w  #1,d1
+00:00000028 67F4            	    22:         beq.s   wait_tx
+00:0000002A 33C000F00010    	    23:         move.w  d0,UART_DATA.l
+00:00000030 60E6            	    24:         bra.s   send_next
+                            	    25: 
+                            	    26: running:
+00:00000032 60FE            	    27:         bra.s   running
+                            	    28: 
+                            	    29: message:
+00:00000034 0D              	    30:         dc.b    13,10,"SYSTEM16 SD BOOT OK",13,10,0
+00:00000035 0A
+00:00000036 53595354454D3136
+00:0000003E 20534420424F4F54
+00:00000046 204F4B
+00:00000049 0D
+00:0000004A 0A
+00:0000004B 00
+                            	    31:         even
+                            	    32: 
+
+
+Symbols by name:
+LED_STATUS                       E:00F00000
+UART_DATA                        E:00F00010
+UART_STAT                        E:00F00012
+VIDEO_CTRL                       E:00F00002
+message                          A:00000034
+running                          A:00000032
+send_next                        A:00000018
+start                            A:00000000
+wait_tx                          A:0000001E
+
+Symbols by value:
+00000000 start
+00000018 send_next
+0000001E wait_tx
+00000032 running
+00000034 message
+00F00000 LED_STATUS
+00F00002 VIDEO_CTRL
+00F00010 UART_DATA
+00F00012 UART_STAT

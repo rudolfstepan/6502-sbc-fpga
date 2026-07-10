@@ -67,7 +67,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
       sim/tb/tb_hdmi_encoder.vhd
 
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
-        clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k tang_mega_138k tang_mega_138k-sbc tang_mega_138k-flash tang_mega_138k-hdmi-test tang_mega_138k-hdmi-test-flash tang_primer_console_138k d64-test-image test-d64 test-d64-map \
+        clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k tang_mega_138k tang_mega_138k-sbc tang_mega_138k-system16 tang_mega_138k-system16-flash tang_mega_138k-flash tang_mega_138k-hdmi-test tang_mega_138k-hdmi-test-flash tang_primer_console_138k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-c1541-d64-source test-c1541-d64-sdram \
         test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem test-sdram-fb test-fb-ddr3 tunes-d64 \
         sid-disks reist adventure-rom blit-demo-roms blitcopy-rom blitdemo-rom mandelcube-rom multipart-d64 test-c64-vic test-c64-input \
@@ -627,6 +627,12 @@ tang_mega_138k-sbc:
 	$(MAKE) -C boards/tang_mega_138k/sbc
 
 tang_mega_138k: tang_mega_138k-sbc
+
+tang_mega_138k-system16:
+	$(MAKE) -C boards/tang_mega_138k/system16
+
+tang_mega_138k-system16-flash:
+	$(MAKE) -C boards/tang_mega_138k/system16 flash
 
 tang_mega_138k-flash:
 	$(MAKE) -C boards/tang_mega_138k/sbc flash

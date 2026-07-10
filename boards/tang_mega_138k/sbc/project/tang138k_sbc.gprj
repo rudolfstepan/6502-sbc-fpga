@@ -32,6 +32,7 @@
         <File path="../rtl/sync_ram.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/mem/fb_ram.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/mem/char_rom.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/boot/boot_vga_debug.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/mem/boot_rom_init_pkg.vhd" type="file.vhdl" enable="0"/>
         <File path="../../../../rtl/core/mem/boot_shadow_rom.vhd" type="file.vhdl" enable="1"/>
         <File path="../../../../rtl/core/mem/sdram_if.vhd" type="file.vhdl" enable="1"/>

@@ -27,6 +27,7 @@ add_file -type vhdl {../../../../rtl/core/peripherals/sd_disk_ctrl.vhd}
 add_file -type vhdl {../rtl/sync_ram.vhd}
 add_file -type vhdl {../../../../rtl/core/mem/fb_ram.vhd}
 add_file -type vhdl {../../../../rtl/core/mem/char_rom.vhd}
+add_file -type vhdl {../../../../rtl/core/boot/boot_vga_debug.vhd}
 # Kernel/BASIC are loaded from SD for this board; keep the generated ROM package
 # out of the synthesis image.
 # add_file -type vhdl {../../../../rtl/core/mem/boot_rom_init_pkg.vhd}

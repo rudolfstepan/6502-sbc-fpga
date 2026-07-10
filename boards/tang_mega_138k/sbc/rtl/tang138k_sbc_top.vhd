@@ -656,14 +656,15 @@ begin
   fb_rddata <= ddr_fb_rddata when fb_sel_eff = '1' else sdfb_rddata;
   blit_busy <= ddr_blit_busy when fb_sel_eff = '1' else sdfb_blit_busy;
 
-  -- The SD/RAM boot-debug screen is gone; the display always shows the SBC's own
-  -- video. Boot status is still on the LEDs, and boot_done still gates the CPU.
-  vga_mux_r  <= sbc_vga_r;
-  vga_mux_g  <= sbc_vga_g;
-  vga_mux_b  <= sbc_vga_b;
-  vga_mux_hs <= sbc_vga_hs;
-  vga_mux_vs <= sbc_vga_vs;
-  vga_mux_de <= sbc_vga_de;
+  -- Keep boot failures visible instead of presenting a valid but black HDMI
+  -- image while the CPU is parked. Both renderers use the same 640x480 timing.
+  boot_vga_active <= not sbc_boot_done;
+  vga_mux_r  <= boot_vga_r  when boot_vga_active = '1' else sbc_vga_r;
+  vga_mux_g  <= boot_vga_g  when boot_vga_active = '1' else sbc_vga_g;
+  vga_mux_b  <= boot_vga_b  when boot_vga_active = '1' else sbc_vga_b;
+  vga_mux_hs <= boot_vga_hs when boot_vga_active = '1' else sbc_vga_hs;
+  vga_mux_vs <= boot_vga_vs when boot_vga_active = '1' else sbc_vga_vs;
+  vga_mux_de <= boot_vga_de when boot_vga_active = '1' else sbc_vga_de;
 
   vga_rgb_nonzero <= '1' when sbc_vga_r /= "00000" or
                              sbc_vga_g /= "000000" or
@@ -1044,15 +1045,50 @@ begin
       dbg_cpu_sync  => dbg_cpu_sync
     );
 
-  -- boot_vga_debug removed (the "PIX16 6502 SBC / SD BOOT DEBUG" screen). The
-  -- display shows the SBC's own video from power-on; boot status stays on the LEDs
-  -- and boot_done still parks the CPU until the selected ROM source is ready.
-  boot_vga_r  <= (others => '0');
-  boot_vga_g  <= (others => '0');
-  boot_vga_b  <= (others => '0');
-  boot_vga_hs <= '1';
-  boot_vga_vs <= '1';
-  boot_vga_de <= '0';
+  boot_vga_i : entity work.boot_vga_debug
+    generic map (
+      CLK_DIV  => 2,
+      CEA_480P => false,
+      VGA_640  => true
+    )
+    port map (
+      clk             => clk_sys,
+      reset_n         => reset_n,
+      sd_init_done    => sd_init_done,
+      sd_sec_read     => sd_sec_read,
+      sd_sec_read_end => sd_sec_read_end,
+      boot_done       => boot_done,
+      boot_error      => boot_error,
+      sd_ncs          => sd_ncs_i,
+      sd_dclk         => sd_dclk_i,
+      sd_mosi_o       => sd_mosi_i,
+      sd_miso_i       => sd_miso,
+      loader_state    => loader_state,
+      sd_sec_state    => sd_sec_state,
+      sd_cmd_state    => sd_cmd_state,
+      sd_cmd_error    => sd_cmd_error,
+      usb_connected   => usb_connected,
+      usb_keycode     => usb_keycode,
+      usb_modif       => usb_modif,
+      usb_ascii       => usb_ascii,
+      usb_phase       => usb_phase,
+      usb_key_event   => usb_key_event,
+      usb_polling     => usb_polling,
+      ram_test_active => ram_test_active,
+      ram_test_done   => ram_test_done,
+      ram_test_error  => ram_test_error,
+      ram_test_phase  => ram_test_phase,
+      ram_test_addr   => ram_test_addr,
+      ram_test_fail_addr => ram_test_fail_addr,
+      ram_test_expected  => ram_test_expected,
+      ram_test_actual    => ram_test_actual,
+      vga_r           => boot_vga_r,
+      vga_g           => boot_vga_g,
+      vga_b           => boot_vga_b,
+      vga_hs          => boot_vga_hs,
+      vga_vs          => boot_vga_vs,
+      vga_de          => boot_vga_de
+    );
 
   uart_ser_i : entity work.uart_tx_ser
     generic map (CLK_HZ => 50_000_000, BAUD => BAUD)

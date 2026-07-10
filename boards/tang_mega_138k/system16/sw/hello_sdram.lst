@@ -1,0 +1,69 @@
+Sections:
+00: "org0001:0" (0-56)
+
+
+Source: "sw\hello_sdram.s"
+                            	     1: UART_DATA      equ     $00f00010
+                            	     2: UART_STAT      equ     $00f00012
+                            	     3: VIDEO_CTRL     equ     $00f00002
+                            	     4: LED_STATUS     equ     $00f00000
+                            	     5: 
+                            	     6:         org     $00000000
+                            	     7: 
+                            	     8: start:
+00:00000000 48E7C080        	     9:         movem.l d0-d1/a0,-(sp)
+00:00000004 33FC001F00F00002	    10:         move.w  #$001f,VIDEO_CTRL.l
+00:0000000C 33FC000500F00000	    11:         move.w  #$0005,LED_STATUS.l
+00:00000014 41FA0022        	    12:         lea     message(pc),a0
+                            	    13: 
+                            	    14: send_next:
+00:00000018 7000            	    15:         moveq   #0,d0
+00:0000001A 1018            	    16:         move.b  (a0)+,d0
+00:0000001C 6714            	    17:         beq.s   done
+                            	    18: 
+                            	    19: wait_tx:
+00:0000001E 323900F00012    	    20:         move.w  UART_STAT.l,d1
+00:00000024 02410001        	    21:         andi.w  #1,d1
+00:00000028 67F4            	    22:         beq.s   wait_tx
+00:0000002A 33C000F00010    	    23:         move.w  d0,UART_DATA.l
+00:00000030 60E6            	    24:         bra.s   send_next
+                            	    25: 
+                            	    26: done:
+00:00000032 4CDF0103        	    27:         movem.l (sp)+,d0-d1/a0
+00:00000036 4E75            	    28:         rts
+                            	    29: 
+                            	    30: message:
+00:00000038 0D              	    31:         dc.b    13,10,"HELLO FROM EXTERNAL SDRAM",13,10,0
+00:00000039 0A
+00:0000003A 48454C4C4F204652
+00:00000042 4F4D204558544552
+00:0000004A 4E414C2053445241
+00:00000052 4D
+00:00000053 0D
+00:00000054 0A
+00:00000055 00
+                            	    32:         even
+                            	    33: 
+
+
+Symbols by name:
+LED_STATUS                       E:00F00000
+UART_DATA                        E:00F00010
+UART_STAT                        E:00F00012
+VIDEO_CTRL                       E:00F00002
+done                             A:00000032
+message                          A:00000038
+send_next                        A:00000018
+start                            A:00000000
+wait_tx                          A:0000001E
+
+Symbols by value:
+00000000 start
+00000018 send_next
+0000001E wait_tx
+00000032 done
+00000038 message
+00F00000 LED_STATUS
+00F00002 VIDEO_CTRL
+00F00010 UART_DATA
+00F00012 UART_STAT

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE gowin-fpga-project>
+<Project>
+    <Template>FPGA</Template>
+    <Version>5</Version>
+    <Device name="GW5AST-138C" pn="GW5AST-LV138PG484AC1/I0">gw5ast138c-007</Device>
+    <FileList>
+        <File path="../../../../third_party/fx68k/fx68kAlu.sv" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/fx68k/uaddrPla.sv" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/fx68k/fx68k.sv" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/spi_master.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_cmd.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_sec_read_write.v" type="file.verilog" enable="1"/>
+        <File path="../../../../third_party/alinx_sd/sd_card_top.v" type="file.verilog" enable="1"/>
+        <File path="microrom.mem" type="file.other" enable="1"/>
+        <File path="nanorom.mem" type="file.other" enable="1"/>
+        <File path="../rtl/sys16_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sys16_bram.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sys16_boot_rom_image_pkg.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sys16_boot_rom.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/peripherals/uart_rx_ser.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sys16_uart.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../../../rtl/core/mem/sdram_ctrl.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sys16_sdram_bridge.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sys16_sd_bootloader.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/sys16_soc.vhd" type="file.vhdl" enable="1"/>
+        <File path="../../hdmi_test/project/src/gowin_pll/gowin_hdmi_720p_pll.v" type="file.verilog" enable="1"/>
+        <File path="../../sbc/project/src/dvi-tx/dvi_tx_clk_drv.v" type="file.verilog" enable="1"/>
+        <File path="../../sbc/project/src/dvi-tx/dvi_tx_tmds_enc.v" type="file.verilog" enable="1"/>
+        <File path="../../sbc/project/src/dvi-tx/dvi_tx_tmds_phy.v" type="file.verilog" enable="1"/>
+        <File path="../../sbc/project/src/dvi-tx/dvi_tx_top.v" type="file.verilog" enable="1"/>
+        <File path="../rtl/sys16_hdmi_720p.vhd" type="file.vhdl" enable="1"/>
+        <File path="../rtl/tang138k_system16_top.vhd" type="file.vhdl" enable="1"/>
+        <File path="../constraints/tang138k_system16.cst" type="file.cst" enable="1"/>
+        <File path="../constraints/tang138k_system16.sdc" type="file.sdc" enable="1"/>
+    </FileList>
+    <Configuration>
+        <Option name="top_module" value="tang138k_system16_top"/>
+        <Option name="use_cpu_as_gpio" value="1"/>
+        <Option name="use_sspi_as_gpio" value="1"/>
+        <Option name="output_base_name" value="tang138k_system16"/>
+        <Option name="vhdl_std" value="vhd1993"/>
+        <Option name="verilog_std" value="sysv2017"/>
+        <Option name="timing_driven" value="1"/>
+        <Option name="route_maxfan" value="23"/>
+    </Configuration>
+</Project>
