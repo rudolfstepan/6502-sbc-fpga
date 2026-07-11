@@ -8,7 +8,7 @@
  * Image sources, in order:
  *   1. SD card, raw GRV1 image starting at LBA 0 (vendor SD host at
  *      0xF0600000, registers per MUG1532 chapter 16; card brought up in
- *      4-bit mode at 25 MHz, single-block CMD17 reads).
+ *      4-bit mode at 1 MHz (1-bit fallback), single-block CMD17 reads).
  *   2. QSPI XIP window at 0x80010000 (flash 0x510000) as fallback.
  *
  * UART1 register file per MUG1532 chapter 9: 16550-compatible registers
@@ -47,6 +47,10 @@
 #define SD_FIFO_STAT  0x54u /* bit1: read FIFO empty */
 #define EV_DONE 0x1u
 #define EV_ERR  0x2u
+#define DAT_TIMEOUT_ERR (1u << 2)
+#define DAT_CRC_ERR     (1u << 3)
+#define DAT_WR_EMPTY    (1u << 4)
+#define DAT_RD_FULL     (1u << 5)
 
 /* Command register flags */
 #define RESP_SHORT (1u << 0)
@@ -69,6 +73,9 @@ static uint32_t sd_is_sdhc;  /* block vs byte addressing */
 static uint32_t sd_div;      /* current clock divider */
 static uint32_t sd_wide;     /* current bus width */
 static uint32_t sd_hdr_buf[128];
+static uint32_t sd_last_words;
+static uint32_t sd_last_fifo_full;
+static uint32_t sd_last_fifo_status;
 
 static void uart_putc(char c)
 {
@@ -154,26 +161,57 @@ static uint32_t sd_read_block(uint32_t lba, uint32_t *dst)
 {
 	uint32_t arg = sd_is_sdhc ? lba : lba << 9;
 	sd_engine_reset();
+	sd_last_words = 0;
+	sd_last_fifo_full = 0;
+	sd_last_fifo_status = 0;
 	SD(SD_DAT_EVENT) = 0;
 	SD(SD_BLK_SIZE) = 511;
 	SD(SD_BLK_COUNT) = 0;
 	delay(5000);
-	uint32_t err = sd_cmd_raw(17, arg, RESP_SHORT | CHK_CRC | CHK_IDX | DATA_READ);
-	if (err)
-		return err;
+
+	/* CMD17 starts its data phase immediately after the response. Waiting in
+	 * sd_cmd_raw() before touching RX lets the small controller FIFO fill,
+	 * which reports data_event_status $22 (FIFORdFulErr | AllErr). Start the
+	 * command here and service command events and RX data concurrently. */
+	SD(SD_CMD_EVENT) = 0;
+	SD(SD_CMD) = (17u << 8) | RESP_SHORT | CHK_CRC | CHK_IDX | DATA_READ;
+	delay(5000);
+	SD(SD_ARG) = arg;
+
 	uint32_t got = 0;
-	for (uint32_t spin = 0; spin < 50000000u && got < 128; spin++) {
+	uint32_t cmd_done = 0;
+	for (uint32_t spin = 0; spin < 50000000u; spin++) {
 		while (got < 128 && !(SD(SD_FIFO_STAT) & 0x2u)) {
 			uint32_t w = SD(SD_RX);
 			dst[got++] = sd_swap ? bswap(w) : w;
 		}
-		uint32_t ev = SD(SD_DAT_EVENT);
-		if (ev & EV_ERR)
-			return ev | 0x100u;
+		sd_last_words = got;
+		sd_last_fifo_status = SD(SD_FIFO_STAT);
+
+		uint32_t cmd_ev = SD(SD_CMD_EVENT);
+		if (cmd_ev & EV_ERR)
+			return cmd_ev;
+		if (cmd_ev & EV_DONE)
+			cmd_done = 1;
+
+		uint32_t data_ev = SD(SD_DAT_EVENT);
+		/* CRC and timeout mean the block is unusable. DAT_WR_EMPTY only
+		 * applies to writes, but is fatal if it ever appears on this path. */
+		if (data_ev & (DAT_TIMEOUT_ERR | DAT_CRC_ERR | DAT_WR_EMPTY))
+			return data_ev | 0x100u;
+		if (data_ev & EV_DONE) {
+			if (got != 128)
+				return 0xFFFFFFFEu;
+			return 0;
+		}
+		if (data_ev & DAT_RD_FULL) {
+			/* The FIFO has already been drained above. Clear the latched
+			 * full event and keep consuming instead of abandoning the card. */
+			sd_last_fifo_full++;
+			SD(SD_DAT_EVENT) = 0;
+		}
 	}
-	if (got != 128)
-		return 0xFFFFFFFEu;
-	return 0;
+	return cmd_done ? 0xFFFFFFFDu : 0xFFFFu;
 }
 
 /* Bring up the card: 0 on success, else (step << 16) | event bits. */
@@ -244,7 +282,9 @@ static uint32_t sd_init(void)
 	sd_wide = wide ? 1 : 0;
 	if (!wide)
 		uart_puts("SD: staying in 1-bit mode\n");
-	sd_div = 4; /* conservative 5 MHz data clock for bring-up */
+	/* Keep ample FIFO service margin while the ZSBL executes from QSPI XIP.
+	 * 50 MHz / (2*(24+1)) = 1 MHz. Raise this only after sustained SD boots. */
+	sd_div = 24;
 	return 0;
 }
 
@@ -300,10 +340,17 @@ static uint32_t try_sd(void)
 	err = sd_read_block(0, sd_hdr_buf);
 	if (err) {
 		/* <$100: command-phase event bits of CMD17 (bit2 timeout =
-		 * command ignored). $1xx: data-phase events (bit2 data
-		 * timeout, bit3 data CRC). $FFFFFFFE: FIFO stayed short. */
+		 * command ignored). $1xx: data-phase events (bit2 timeout,
+		 * bit3 CRC, bit5 RX FIFO full). $FFFFFFFE: data completed
+		 * before 128 words; $FFFFFFFD: no data-complete event. */
 		uart_puts("SD header read failed $");
 		uart_puthex(err);
+		uart_puts(" words $");
+		uart_puthex(sd_last_words);
+		uart_puts(" full $");
+		uart_puthex(sd_last_fifo_full);
+		uart_puts(" fifo $");
+		uart_puthex(sd_last_fifo_status);
 		uart_puts("\n");
 		return 1;
 	}
@@ -388,7 +435,7 @@ void main(void)
 	 * right after reset; wait until it is done or the banner gets
 	 * chopped up (~1.2 ms at 115200 for 14 characters). */
 	delay(2000000);
-	uart_puts("\nSystem16 GoRV32 ZSBL v9\n");
+	uart_puts("\nSystem16 GoRV32 ZSBL v10\n");
 	try_sd();
 	try_flash();
 	hang();

@@ -61,7 +61,7 @@ GRV1 size limit; the packer reports when an image is SD-only.
 
 The UART uses 115200 baud, 8 data bits, no parity and one stop bit. Its APB
 registers use 32-bit accesses and a four-byte stride. During SD identification
-the ZSBL uses 200 kHz; data transfer currently uses a conservative 5 MHz and
+the ZSBL uses 200 kHz; data transfer currently uses a conservative 1 MHz and
 four-bit mode when the card accepts ACMD6, otherwise one-bit mode.
 
 ## Source and generated files
@@ -135,7 +135,7 @@ The successful sequence starts with:
 
 ```text
 FPGA BOOT OK
-System16 GoRV32 ZSBL v9
+System16 GoRV32 ZSBL v10
 boot from SD
 copy $00000000 len $...
 copy $003F0000 len $...

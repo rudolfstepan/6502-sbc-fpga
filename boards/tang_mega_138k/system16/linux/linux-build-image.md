@@ -293,7 +293,7 @@ Bei erfolgreichem SD-Boot:
 
 ```text
 FPGA BOOT OK
-System16 GoRV32 ZSBL v9
+System16 GoRV32 ZSBL v10
 SD v2 card
 boot from SD
 copy $00000000 len $...

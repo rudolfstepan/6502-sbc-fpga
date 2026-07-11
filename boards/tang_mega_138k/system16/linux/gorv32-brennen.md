@@ -21,7 +21,7 @@ unter 0x800000 bleiben; der unkomprimierte GW5AST-138-Bitstream belegt
 beide muessen immer uebereinstimmen, sonst zeigt das XIP-Fenster der CPU
 auf die falsche Stelle. Der ZSBL versucht zuerst die SD-Karte (eigener
 Treiber fuer den Vendor-SD-Host). Die Identifikation laeuft mit 200 kHz; fuer
-die Datenphase werden konservative 5 MHz verwendet. Wenn ACMD6 erfolgreich
+die Datenphase werden konservative 1 MHz verwendet. Wenn ACMD6 erfolgreich
 ist, nutzt der Treiber vier Datenleitungen, sonst arbeitet er mit einer
 Leitung weiter. Bei fehlender Karte oder ungueltigem GRV1-Image faellt er auf
 das Flash-Fenster zurueck.
@@ -74,7 +74,7 @@ aus dem Flash). Terminal auf **115200 8N1**. Erwartete Sequenz:
 
 ```text
 FPGA BOOT OK                  <- Board-Shell (Probe)
-System16 GoRV32 ZSBL          <- ZSBL laeuft XIP aus dem Flash
+System16 GoRV32 ZSBL v10      <- ZSBL laeuft XIP aus dem Flash
 boot from SD                  <- Karte erkannt (sonst: boot from flash)
 copy $00000000 len $...       <- OpenSBI -> SDRAM
 copy $003F0000 len $...       <- DTB -> SDRAM

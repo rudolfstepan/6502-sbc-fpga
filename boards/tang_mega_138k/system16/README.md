@@ -207,7 +207,7 @@ pre-MDT privilege-1.10 VexRiscv, so the existing fw_base.S patch applies.
 
 The payload boots from SD: the ZSBL drives the vendor SD host
 (registers per MUG1532 chapter 16) itself - card identification at 200 kHz,
-conservative 5 MHz data transfers, 4-bit mode with a 1-bit fallback and
+conservative 1 MHz data transfers, 4-bit mode with a 1-bit fallback and
 single-block CMD17 reads - and expects the GRV1
 image raw at LBA 0. Records are 512-byte aligned so sectors stream
 straight to their SDRAM destinations; the RX FIFO word order is
