@@ -1,0 +1,12 @@
+config BR2_PACKAGE_NATIVE_GCC
+	bool "native GCC C compiler"
+	depends on BR2_TOOLCHAIN_BUILDROOT
+	depends on BR2_USE_WCHAR
+	select BR2_PACKAGE_BINUTILS
+	select BR2_PACKAGE_BINUTILS_TARGET
+	select BR2_PACKAGE_GMP
+	select BR2_PACKAGE_MPFR
+	select BR2_PACKAGE_MPC
+	select BR2_PACKAGE_ZLIB
+	help
+	  Install a native C compiler built for the target itself.

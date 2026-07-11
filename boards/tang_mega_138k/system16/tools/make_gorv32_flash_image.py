@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Pack OpenSBI, DTB and kernel into a GRV1 image for the GoRV32 ZSBL.
 
-One artifact serves both boot sources: written raw to an SD card starting
-at LBA 0 (primary), or burned at flash offset 0x510000 as fallback, where
-the ZSBL reads it through the QSPI XIP window at 0x80010000 (window base =
+One artifact serves both boot sources: burned at flash offset 0x510000 as
+the normal source, or written raw to an SD card starting at LBA 0 as the
+fallback. The ZSBL reads flash through the QSPI XIP window at 0x80010000 (base =
 Flash_Burn_Address 0x500000; the Tang Console 138K flash is an 8 MB
 XT25F64B). Format (little-endian u32):
   +0x00 magic "GRV1"
@@ -31,6 +31,8 @@ def main() -> int:
     p.add_argument("dtb", type=Path)
     p.add_argument("kernel", type=Path)
     p.add_argument("output", type=Path)
+    p.add_argument("--require-flash-fit", action="store_true",
+                   help="fail if GRV1 does not fit the primary flash slot")
     a = p.parse_args()
     blobs = [f.read_bytes() for f in (a.opensbi, a.dtb, a.kernel)]
     if len(blobs[0]) > LOADS[1][0]:
@@ -55,15 +57,18 @@ def main() -> int:
         image += struct.pack("<III", *rec)
     image += payload
     image += bytes((-len(image)) % 512)
+    if a.require_flash_fit and len(image) > XIP_PAYLOAD_MAX:
+        raise SystemExit(f"image is {len(image)} bytes; primary flash slot is "
+                         f"only {XIP_PAYLOAD_MAX} bytes")
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(image)
     print(f"created {a.output} ({len(image)} bytes)")
-    print("  SD:    write raw to the card starting at sector 0")
+    print("  SD:    optional fallback; write raw starting at sector 0")
     if len(image) > XIP_PAYLOAD_MAX:
-        print("  Flash: too large for the fallback slot at 0x510000 (2.9 MB),"
+        print("  Flash: too large for the primary slot at 0x510000 (2.9 MB),"
               " SD boot only")
     else:
-        print("  Flash: burn at 0x510000 (fallback)")
+        print("  Flash: burn at 0x510000 (primary)")
     for (dst, name), data in zip(LOADS, blobs):
         print(f"  {name:7} DDR ${dst:06X}-${dst+len(data)-1:06X} ({len(data)} bytes)")
     return 0

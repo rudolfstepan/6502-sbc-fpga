@@ -1,0 +1,6 @@
+config GORV32_SD
+	bool "Gowin GoRV32 Plus APB SD block device"
+	depends on BLOCK && OF && RISCV
+	help
+	  Polling block driver for the SD host integrated in Gowin's GoRV32
+	  Plus IP. The device-tree root window hides the raw boot sectors.

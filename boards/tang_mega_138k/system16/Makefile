@@ -19,7 +19,7 @@ GOWIN       ?= gw_sh
 VASM        ?= vasmm68k_mot
 endif
 
-.PHONY: firmware sdram-demo sd-boot-image software sim-rv32 rv32-core rv32-build rv32-program gorv32plus-build gorv32plus-program opensbi-wsl rootfs-wsl linux-import linux-image-wsl qemu-test gorv32-zsbl-wsl gorv32-opensbi-wsl gorv32-import gorv32-flash-image build program flash clean
+.PHONY: firmware sdram-demo sd-boot-image software sim-rv32 rv32-core rv32-build rv32-program gorv32plus-build gorv32plus-program opensbi-wsl rootfs-wsl rootfs-flash-wsl rootfs-sd-wsl kernel-flash-wsl kernel-sd-wsl kernel-rescue-wsl kernel-qemu-sd-wsl linux-import linux-image-wsl qemu-test qemu-sd-test gorv32-zsbl-wsl gorv32-opensbi-wsl gorv32-import gorv32-import-flash gorv32-import-sd gorv32-import-rescue gorv32-rootfs-sd-import gorv32-flash-image gorv32-rescue-image gorv32-sd-boot-image gorv32-sd-image build program flash clean
 
 GHDL ?= ghdl
 SBT  ?= $(CURDIR)/../../../.tmp/sbt-local/sbt/bin/sbt.bat
@@ -86,34 +86,94 @@ opensbi-wsl:
 
 ## Busybox initramfs via Buildroot (~/buildroot-2025.02 in WSL); the
 ## kernel embeds output/images/rootfs.cpio via CONFIG_INITRAMFS_SOURCE.
-rootfs-wsl:
+rootfs-wsl: rootfs-flash-wsl
+
+rootfs-flash-wsl:
 	"$(PYTHON)" tools/build_rootfs_wsl.py
+
+rootfs-sd-wsl:
+	"$(PYTHON)" tools/build_rootfs_sd_wsl.py
+
+kernel-flash-wsl:
+	"$(PYTHON)" tools/build_kernel_wsl.py flash
+
+kernel-sd-wsl:
+	"$(PYTHON)" tools/build_kernel_wsl.py sd
+
+kernel-rescue-wsl:
+	"$(PYTHON)" tools/build_kernel_wsl.py rescue
+
+kernel-qemu-sd-wsl:
+	"$(PYTHON)" tools/build_kernel_wsl.py qemu-sd
 
 linux-image-wsl: linux-import linux-sd-image
 
 qemu-test:
 	"$(PYTHON)" tools/qemu_linux_test.py
 
+qemu-sd-test: kernel-qemu-sd-wsl
+	"$(PYTHON)" tools/qemu_sd_rootfs_test.py
+
 ## GoRV32 Plus vendor-CPU Linux, built entirely from the WSL environment.
-## Burn zsbl.bin at flash 0x500000; put gorv32-flash.bin raw on SD LBA 0.
-## The optional no-card flash fallback starts at 0x510000.
+## Burn zsbl.bin at flash 0x500000 and the primary GRV1 payload at 0x510000.
+## A raw GRV1 image at SD LBA 0 remains the ZSBL fallback path.
 gorv32-zsbl-wsl:
 	"$(PYTHON)" tools/build_gorv32_zsbl_wsl.py
 
 gorv32-opensbi-wsl:
 	"$(PYTHON)" tools/build_opensbi_gorv32_wsl.py
 
-gorv32-import:
-	"$(PYTHON)" tools/import_gorv32_from_wsl.py ../../../build/gorv32-linux
+gorv32-import: gorv32-import-flash
+
+gorv32-import-flash:
+	"$(PYTHON)" tools/import_gorv32_from_wsl.py \
+		../../../build/gorv32-linux-flash --linux ~/system16-out
+
+gorv32-import-sd:
+	"$(PYTHON)" tools/import_gorv32_from_wsl.py \
+		../../../build/gorv32-linux-sd --linux ~/system16-out-sd \
+		--dts gorv32plus-sd.dts --dtb-name gorv32plus-sd.dtb
+
+gorv32-import-rescue:
+	"$(PYTHON)" tools/import_gorv32_from_wsl.py \
+		../../../build/gorv32-linux-rescue --linux ~/system16-out-rescue \
+		--dts gorv32plus-rescue.dts --dtb-name gorv32plus-rescue.dtb
+
+gorv32-rootfs-sd-import:
+	"$(PYTHON)" tools/import_rootfs_sd_from_wsl.py \
+		../../../build/gorv32-linux-sd/rootfs.ext2
 
 ## .bin extension: the Gowin Programmer's FW/MCU input silently rejects
 ## other extensions (parses them as HEX) and programs zero bytes.
 gorv32-flash-image: gorv32-import
 	"$(PYTHON)" tools/make_gorv32_flash_image.py \
-		../../../build/gorv32-linux/fw_jump.bin \
-		../../../build/gorv32-linux/gorv32plus.dtb \
-		../../../build/gorv32-linux/Image \
-		../../../build/gorv32-linux/gorv32-flash.bin
+		../../../build/gorv32-linux-flash/fw_jump.bin \
+		../../../build/gorv32-linux-flash/gorv32plus.dtb \
+		../../../build/gorv32-linux-flash/Image \
+		../../../build/gorv32-linux-flash/gorv32-linux-flash.bin \
+		--require-flash-fit
+
+gorv32-rescue-image: gorv32-import-rescue
+	"$(PYTHON)" tools/make_gorv32_flash_image.py \
+		../../../build/gorv32-linux-rescue/fw_jump.bin \
+		../../../build/gorv32-linux-rescue/gorv32plus-rescue.dtb \
+		../../../build/gorv32-linux-rescue/Image \
+		../../../build/gorv32-linux-rescue/gorv32-linux-rescue.bin \
+		--require-flash-fit
+
+gorv32-sd-boot-image: gorv32-import-sd
+	"$(PYTHON)" tools/make_gorv32_flash_image.py \
+		../../../build/gorv32-linux-sd/fw_jump.bin \
+		../../../build/gorv32-linux-sd/gorv32plus-sd.dtb \
+		../../../build/gorv32-linux-sd/Image \
+		../../../build/gorv32-linux-sd/gorv32-linux-sd-boot.bin \
+		--require-flash-fit
+
+gorv32-sd-image: gorv32-sd-boot-image gorv32-rootfs-sd-import
+	"$(PYTHON)" tools/make_gorv32_sd_card_image.py \
+		../../../build/gorv32-linux-sd/gorv32-linux-sd-boot.bin \
+		../../../build/gorv32-linux-sd/rootfs.ext2 \
+		../../../build/gorv32-linux-sd/gorv32-linux-sd.img
 
 program: build
 	$(OPENLOAD) -b tangmega138k $(BITSTREAM)

@@ -205,14 +205,14 @@ sifive,clint0, timebase 50 MHz). OpenSBI needs a second build with
 `FW_TEXT_START=0x0` out of the same patched tree; the GoRV32 Plus is also a
 pre-MDT privilege-1.10 VexRiscv, so the existing fw_base.S patch applies.
 
-The payload boots from SD: the ZSBL drives the vendor SD host
-(registers per MUG1532 chapter 16) itself - card identification at 200 kHz,
-conservative 1 MHz data transfers, 4-bit mode with a 1-bit fallback and
-single-block CMD17 reads - and expects the GRV1
-image raw at LBA 0. Records are 512-byte aligned so sectors stream
-straight to their SDRAM destinations; the RX FIFO word order is
-autodetected from the magic. Without a card (or without a valid
-image) it falls back to the same image in flash at `0x510000`.
+ZSBL v11 boots the GRV1 payload from flash at `0x510000` first. This keeps
+the large ext2 root filesystem permanently on SD while kernel, DTB and
+OpenSBI updates require programming only a small 2-3 MB flash payload. If
+that payload is absent or invalid, the ZSBL falls back to GRV1 at SD LBA 0.
+Its SD fallback uses the vendor host (MUG1532 chapter 16): identification
+at 200 kHz, conservative 1 MHz data transfers, 4-bit mode with a 1-bit
+fallback and single-block CMD17 reads. Records are 512-byte aligned and
+the RX FIFO word order is autodetected from the magic.
 
 Build and program:
 
@@ -220,13 +220,26 @@ Build and program:
    toolchain, output `linux/zsbl/zsbl.bin`.
 2. `make gorv32-opensbi-wsl` - fw_jump linked at `$0`
    (`~/opensbi-system16/build-gorv32`).
-3. Kernel as usual via `linux/build-kernel.sh` in WSL.
-4. `make gorv32-flash-image` - imports fw_jump/Image, compiles the DTB and
-   packs `build/gorv32-linux/gorv32-flash.bin`.
-5. Flash (Gowin Programmer): bitstream at `0x000000`, `zsbl.bin` at
-   `0x500000`. The image goes raw onto the SD card at sector 0;
-   optionally also to flash `0x510000` as the no-card fallback.
+3. `make rootfs-flash-wsl` - creates the BusyBox cpio embedded by the kernel.
+4. `make kernel-flash-wsl` - builds the verified initramfs kernel profile.
+5. `make gorv32-flash-image` - imports fw_jump/Image, compiles the DTB and
+   packs `build/gorv32-linux-flash/gorv32-linux-flash.bin`.
+6. Flash (Gowin Programmer): bitstream at `0x000000`, `zsbl.bin` at
+   `0x500000`, and the GRV1 payload at `0x510000`.
    Details in `linux/gorv32-brennen.md`.
+
+For the SD-root profile, create and write the full card only once with
+`make gorv32-sd-image`. During driver and kernel development use
+`make kernel-sd-wsl` followed by `make gorv32-sd-boot-image`, then program
+only `build/gorv32-linux-sd/gorv32-linux-sd-boot.bin` at flash `0x510000`.
+The 512 MB ext2 area on the SD card is not rewritten.
+
+The preferred hardware debug loop is `kernel-rescue-wsl` followed by
+`gorv32-rescue-image`: its embedded BusyBox shell starts independently of the
+card while the built-in driver calibrates read-only access. On the verified
+2026-07-12 run it selected 1-bit mode at 2.5 MHz and measured 190 KiB/s with
+zero retries and zero FIFO-full events. All 50 combinations from 25 to 1 MHz
+are tested at each boot; later errors automatically reduce the clock.
 
 The whole console chain - probe, ZSBL, OpenSBI, kernel - runs 115200 8N1.
 The "System16 GoRV32 ZSBL" banner is the first milestone and only needs the
@@ -241,6 +254,14 @@ T19/L12/P22/R22/P21/R21 and the TF slot is wired in native 4-bit SD mode on
 V15/Y16/AA15/AB15/W14/W15. Regenerate the IP after ipc changes with
 `gw_sh create_gorv32plus_ip.tcl` or the IDE IP Core Generator.
 
-`linux/system16.config` embeds the BusyBox cpio created by `make rootfs-wsl`.
-Kernel plus rootfs must stay inside the 12 MB between `$400000` and
-`$FFFFFF`; the optional flash fallback has the stricter 2.9 MB GRV1 limit.
+`linux/system16-flash.config` embeds the BusyBox cpio created by
+`make rootfs-flash-wsl`. A second profile uses the built-in Gowin SD block
+driver and a 512 MiB ext2 filesystem with native development tools; see
+`linux/linux-build-image.md` and the targets `rootfs-sd-wsl`,
+`kernel-sd-wsl`, and `gorv32-sd-image`.
+For the initramfs profiles, kernel plus embedded rootfs must stay inside the
+12 MB between `$400000` and `$FFFFFF`; the primary flash payload has the
+stricter 2.9 MB GRV1 limit.
+The current board DTS exposes the SD device read-only: CMD17 and ext2 reads
+are verified, while CMD24, writable ext2, swap and native compilation on the
+FPGA remain future work. QEMU can already validate the rootfs and toolchain.

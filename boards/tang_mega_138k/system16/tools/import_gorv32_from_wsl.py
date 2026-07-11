@@ -16,6 +16,9 @@ def main() -> int:
     p.add_argument("--opensbi",
                    default="~/opensbi-system16/build-gorv32/platform/generic/firmware")
     p.add_argument("--linux", default="~/system16-out")
+    p.add_argument("--dts", default="gorv32plus.dts",
+                   help="DTS filename below linux/, or an absolute path")
+    p.add_argument("--dtb-name", default="gorv32plus.dtb")
     a = p.parse_args()
     info = wsl("sh", "-lc",
                f"riscv64-linux-gnu-readelf -h {a.opensbi}/fw_jump.elf; "
@@ -27,11 +30,15 @@ def main() -> int:
         raise SystemExit(f"OpenSBI entry is {got}, expected 0x0 for GoRV32; "
                          "run build_opensbi_gorv32_wsl.py first")
     a.destination.mkdir(parents=True, exist_ok=True)
-    dts = (Path(__file__).resolve().parent.parent / "linux" / "gorv32plus.dts").as_posix()
+    dts_arg = Path(a.dts)
+    dts_path = dts_arg if dts_arg.is_absolute() else (
+        Path(__file__).resolve().parent.parent / "linux" / dts_arg)
+    dts = dts_path.as_posix()
     dtb = wsl("sh", "-lc",
-              f"dtc -I dts -O dtb \"$(wslpath '{dts}')\"", text=False).stdout
-    (a.destination / "gorv32plus.dtb").write_bytes(dtb)
-    print(f"compiled gorv32plus.dtb ({len(dtb)} bytes)")
+              f"dtc -i \"$(wslpath '{dts_path.parent.as_posix()}')\" "
+              f"-I dts -O dtb \"$(wslpath '{dts}')\"", text=False).stdout
+    (a.destination / a.dtb_name).write_bytes(dtb)
+    print(f"compiled {a.dtb_name} ({len(dtb)} bytes)")
     for name, source in (("fw_jump.bin", f"{a.opensbi}/fw_jump.bin"),
                          ("Image", f"{a.linux}/arch/riscv/boot/Image")):
         data = wsl("sh", "-lc", f"cat {source}", text=False).stdout

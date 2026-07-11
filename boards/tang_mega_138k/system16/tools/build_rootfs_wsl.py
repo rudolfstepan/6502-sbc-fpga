@@ -10,7 +10,7 @@ profiles (VexRiscv and GoRV32 Plus) share it.
 Statically linked (BR2_STATIC_LIBS) against uClibc-ng, not the default
 glibc: Buildroot's default glibc toolchain installs the full dynamic
 runtime (libc.so, ld.so) into the rootfs, which alone was ~4.3 MB - too
-big for the GoRV32 Plus flash fallback slot (2.9 MB total for
+big for the GoRV32 Plus primary flash slot (2.9 MB total for
 OpenSBI+DTB+kernel+initramfs). BR2_STATIC_LIBS is silently dropped from
 the config when glibc is selected (Buildroot disallows fully static
 glibc due to NSS/dlopen); uClibc-ng supports it and produces a much
