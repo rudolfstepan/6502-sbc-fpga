@@ -7,6 +7,16 @@ BusyBox shell from an embedded initramfs. Hart 1 remains parked in the ZSBL.
 
 The VexRiscv profile in the parent README remains useful for QEMU and bus
 bring-up, but the GoRV32 Plus project is the profile confirmed on the board.
+Eine vollstaendige Build-Anleitung vom WSL-Setup bis zum fertigen GRV1-Image
+steht in [linux-build-image.md](linux-build-image.md).
+
+## Hardware boot capture
+
+![GoRV32 Plus ZSBL loading the GRV1 image from flash and starting OpenSBI](images/gorv32plus-opensbi-boot.png)
+
+The UART capture shows the ZSBL recognizing an SD v2 card, falling back to
+flash after the SD header read error `$00000122`, copying OpenSBI, the DTB and
+Linux into SDRAM, validating the checksum and entering OpenSBI 1.8.
 
 ## Boot chain
 
@@ -59,7 +69,9 @@ four-bit mode when the card accepts ACMD6, otherwise one-bit mode.
 - `gorv32plus.dts` describes the vendor CLINT, PLIC, UART and SDRAM layout.
 - `system16.config` is the small RV32 kernel configuration fragment.
 - `build-kernel.sh` creates the kernel image and the VexRiscv DTB.
-- `zsbl/` contains the freestanding XIP bootloader sources and linker script.
+- `zsbl/crt.S`, `zsbl/main.c`, `zsbl/zsbl.lds` and `zsbl/build.sh` are the
+  versioned freestanding XIP bootloader sources; `zsbl.bin` and `zsbl.elf` are
+  generated from them and deliberately remain untracked.
 - `../tools/build_rootfs_wsl.py` creates a static uClibc/BusyBox cpio with
   Buildroot 2025.02.
 - `../tools/build_opensbi_gorv32_wsl.py` builds OpenSBI at address zero.
