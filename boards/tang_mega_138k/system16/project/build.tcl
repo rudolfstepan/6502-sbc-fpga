@@ -14,10 +14,21 @@ add_file -type vhdl {../rtl/sys16_boot_rom.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_tx_ser.vhd}
 add_file -type vhdl {../../../../rtl/core/peripherals/uart_rx_ser.vhd}
 add_file -type vhdl {../rtl/sys16_uart.vhd}
+add_file -type vhdl {../rtl/sys16_uart16550.vhd}
+add_file -type vhdl {../rtl/sys16_uart_probe.vhd}
 add_file -type vhdl {../../../../rtl/core/mem/sdram_ctrl.vhd}
 add_file -type vhdl {../rtl/sys16_sdram_bridge.vhd}
+add_file -type vhdl {../rtl/sys16_sdram_probe.vhd}
 add_file -type vhdl {../rtl/sys16_sd_bootloader.vhd}
 add_file -type vhdl {../rtl/sys16_soc.vhd}
+# RV32/Sv32 profile sources. The m68k top remains selected until the RV32 board
+# top is enabled, but keeping these in synthesis catches interface regressions.
+add_file -type verilog {../rtl/VexRiscvSystem16.v}
+add_file -type verilog {../rtl/sys16_vex_bridge.v}
+add_file -type vhdl {../rtl/sys16_bus32_pkg.vhd}
+add_file -type vhdl {../rtl/sys16_bus32_to_sdram16.vhd}
+add_file -type vhdl {../rtl/sys16_timer32.vhd}
+add_file -type vhdl {../rtl/sys16_rv32_soc.vhd}
 add_file -type verilog {../../hdmi_test/project/src/gowin_pll/gowin_hdmi_720p_pll.v}
 add_file -type verilog {../../sbc/project/src/dvi-tx/dvi_tx_clk_drv.v}
 add_file -type verilog {../../sbc/project/src/dvi-tx/dvi_tx_tmds_enc.v}

@@ -1,0 +1,28 @@
+/dts-v1/;
+/ {
+	#address-cells = <1>; #size-cells = <1>;
+	compatible = "rudolfstepan,system16-rv32";
+	model = "System16 RV32 Linux FPGA";
+	chosen { bootargs = "console=ttySYS0,115200 earlycon=sbi loglevel=8 keep_bootcon panic=-1"; stdout-path = &uart0; };
+	cpus {
+		#address-cells = <1>; #size-cells = <0>; timebase-frequency = <1000000>;
+		cpu0: cpu@0 {
+			compatible = "riscv"; device_type = "cpu"; reg = <0>; status = "okay";
+			riscv,isa = "rv32ima_zicsr_zifencei"; mmu-type = "riscv,sv32";
+			i-cache-size = <4096>; i-cache-block-size = <32>;
+			d-cache-size = <4096>; d-cache-block-size = <32>;
+			cpu0_intc: interrupt-controller { #interrupt-cells = <1>; interrupt-controller; compatible = "riscv,cpu-intc"; };
+		};
+	};
+	/* Kernel must be 4 MiB aligned on RV32; low memory belongs to SBI. */
+	memory@400000 { device_type = "memory"; reg = <0x00400000 0x00b00000>; };
+	soc {
+		#address-cells = <1>; #size-cells = <1>; compatible = "simple-bus"; ranges;
+		clint@f0001000 { compatible = "riscv,clint0"; reg = <0xf0001000 0x18>; interrupts-extended = <&cpu0_intc 3 &cpu0_intc 7>; };
+		uart0: serial@f0000000 {
+			compatible = "ns16550a"; reg = <0xf0000000 0x08>;
+			clock-frequency = <1843200>; current-speed = <115200>;
+			reg-shift = <0>; reg-io-width = <1>; status = "okay";
+		};
+	};
+};

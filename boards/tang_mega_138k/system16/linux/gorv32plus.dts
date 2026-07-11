@@ -1,0 +1,46 @@
+/dts-v1/;
+/ {
+	#address-cells = <1>; #size-cells = <1>;
+	compatible = "gowin,gorv32-plus";
+	model = "System16 GoRV32 Plus Linux FPGA";
+	chosen { bootargs = "console=ttyS0,115200n8 earlycon=sbi loglevel=8 keep_bootcon panic=-1"; stdout-path = &uart0; };
+	cpus {
+		#address-cells = <1>; #size-cells = <0>; timebase-frequency = <50000000>;
+		cpu0: cpu@0 {
+			compatible = "riscv"; device_type = "cpu"; reg = <0>; status = "okay";
+			/* Hardware is rv32imafdc; the soft-float ilp32 kernel and user
+			   space only use the IMA subset, so FDC stays undeclared. */
+			riscv,isa = "rv32ima_zicsr_zifencei"; mmu-type = "riscv,sv32";
+			i-cache-size = <8192>; i-cache-block-size = <16>;
+			d-cache-size = <8192>; d-cache-block-size = <16>;
+			cpu0_intc: interrupt-controller { #interrupt-cells = <1>; interrupt-controller; compatible = "riscv,cpu-intc"; };
+		};
+		/* Hart 1 exists in the IP but is parked in the ZSBL (wfi loop). */
+	};
+	/* 16 MB SDRAM behind the AXI DDR window; OpenSBI owns the bottom,
+	   the DTB sits at $3F0000, the kernel at the RV32 4 MiB boundary. */
+	memory@400000 { device_type = "memory"; reg = <0x00400000 0x00c00000>; };
+	soc {
+		#address-cells = <1>; #size-cells = <1>; compatible = "simple-bus"; ranges;
+		clint@e6000000 {
+			compatible = "sifive,clint0", "riscv,clint0";
+			reg = <0xe6000000 0x10000>;
+			interrupts-extended = <&cpu0_intc 3 &cpu0_intc 7>;
+		};
+		plic0: interrupt-controller@e4000000 {
+			compatible = "sifive,plic-1.0.0", "riscv,plic0";
+			reg = <0xe4000000 0x2000000>;
+			#address-cells = <0>; #interrupt-cells = <1>; interrupt-controller;
+			riscv,ndev = <31>;
+			interrupts-extended = <&cpu0_intc 11 &cpu0_intc 9>;
+		};
+		uart0: serial@f0200020 {
+			/* Vendor APB UART: 16550-compatible register file at +0x20,
+			   32-bit APB access, 4-byte register stride (MUG1532 ch. 9). */
+			compatible = "ns16550a"; reg = <0xf0200020 0xe0>;
+			reg-shift = <2>; reg-io-width = <4>;
+			clock-frequency = <50000000>; current-speed = <115200>;
+			interrupt-parent = <&plic0>; interrupts = <8>; status = "okay";
+		};
+	};
+};

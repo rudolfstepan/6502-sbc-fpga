@@ -125,3 +125,122 @@ The current ROM proves reset-vector fetch, instruction fetch, 16-bit MMIO,
 UART output and internal/external memory tests. The next boot stages are the
 DDR3 graphics backend, SD block access and a CP/M-68K BIOS, each kept as a
 separate bus device.
+
+## RV32 Linux path
+
+The m68k build remains the default.  The parallel RV32 path uses a
+little-endian 32-bit request/ready bus and is intended for an RV32IMA core with
+Sv32 MMU support.  `sys16_bus32_to_sdram16.vhd` lets that bus use SDRAM0 now;
+it preserves four byte enables while issuing two 16-bit memory cycles.
+`sys16_timer32.vhd` supplies a 1 MHz, CLINT-style `mtime`/`mtimecmp` machine
+timer plus `msip` at `$F0001000`.
+
+The remaining CPU integration must expose separate timer/software/external
+interrupt inputs and boot at `$00001000`.  A core without Sv32 is deliberately
+not accepted for this profile: it would only move the project back to a
+no-MMU Linux port.  Run the bus regression with `make sim-rv32`.
+
+The generated `VexRiscvSystem16.v` now implements RV32IMA, supervisor mode and
+Sv32 with 4 KiB instruction/data caches. `sys16_rv32_soc.vhd` arbitrates its
+cache-fill ports, maps the CLINT timer and exposes one external interrupt. The
+core resets at `$00001000`, with the initial machine trap vector at `$00001020`.
+
+Linux 6.12.95 LTS is used by this profile. The image is loaded at the required
+RV32 4 MiB boundary (`$00400000`); the board DTS exposes the remaining 11 MiB
+through `$00EFFFFF` to Linux and reserves low memory for OpenSBI/boot data.
+The DTS, size-oriented config fragment and reproducible build script are in
+`linux/`. OpenSBI 1.8.1 is the selected M-mode firmware.
+
+With current GNU binutils, build OpenSBI using
+`PLATFORM_RISCV_ISA=rv32ima_zicsr_zifencei`; CSR and instruction-fence
+extensions are no longer implied by the base `rv32ima` spelling.
+
+The SD image starts with a four-instruction shim at `$001000`. It passes hart
+zero and the DTB address `$3F0000` to generic OpenSBI at `$002000`; OpenSBI then
+jumps to Linux at `$400000`. Accordingly OpenSBI must use
+`FW_TEXT_START=0x00002000`.
+
+On Windows, `make linux-image-wsl` imports OpenSBI, the DTB and the kernel
+directly from the default WSL distribution, validates the OpenSBI ELF entry
+point and creates the SD image. It refuses firmware not linked at `$00002000`.
+Use `make qemu-test` for a 25-second software sanity boot on QEMU's RV32
+`virt` machine. This verifies the kernel and early console independently of
+the System16 SDRAM and bus logic; install `qemu-system-riscv` in WSL once
+(`qemu-system-misc` is the package name on some older distributions).
+
+## GoRV32 Plus vendor Linux path
+
+This is the hardware-verified Linux profile: the complete chain reaches Linux
+6.12.95 and a BusyBox shell from the embedded initramfs. Hart 1 remains parked
+and Linux runs on hart 0. See `linux/README.md` for the consolidated
+architecture, build order, artifact list and known constraints, and
+`linux/gorv32-brennen.md` for the exact programming procedure.
+
+`tang138k_system16_gorv32plus.gprj` is the second Linux route. It uses
+Gowin's encrypted GoRV32 Plus MPU (dual-hart RV32IMAFDC, Sv32 MMU, CLINT at
+`$E6000000`, PLIC at `$E4000000`, 16550-style UART at `$F0200020`) instead
+of the local VexRiscv. The IP reference is MUG1532, direct download from
+`cdn.gowinsemi.com.cn/MUG1532E.pdf`; Gowin's Linux SDK is deliberately not
+used - everything below builds from the same WSL environment as the
+VexRiscv profile.
+
+Boot chain, all self-built: the CPU reset-fetches at `0x80000000`, an XIP
+window into the on-board NOR flash at offset `FLASH_BURN_ADDR`. The Tang
+Console 138K flash is an 8 MB XT25F64B (JEDEC 0x0B4017), the uncompressed
+GW5AST-138 bitstream takes ~4.9 MB, so the burn address is `0x500000` -
+addresses at or above `0x800000` are beyond the chip and wrap onto the
+bitstream. The ZSBL in `linux/zsbl` runs there in place, initializes UART1
+(registers at `+0x20`, 4-byte stride, 32-bit APB access, divisor 27 for
+115200 at the 50 MHz APB clock) and copies the GRV1 flash image that
+follows at flash `0x510000` into SDRAM: OpenSBI to `$0`, `gorv32plus.dtb`
+to `$3F0000`, the kernel to `$400000` - the same DDR layout as the
+VexRiscv SD profile. Hart 1 parks in a wfi loop. The DDR window at CPU
+address `0` is served by SDRAM0 through `sys16_axi32_to_bus32` and
+`sys16_bus32_to_sdram16`; the memory node exposes `$400000`-`$FFFFFF`.
+
+The kernel Image is the identical artifact as the VexRiscv build - it is
+device-tree driven, only `linux/gorv32plus.dts` differs (ns16550a at
+`$F0200020` with `reg-shift 2`/`reg-io-width 4`, sifive,plic-1.0.0,
+sifive,clint0, timebase 50 MHz). OpenSBI needs a second build with
+`FW_TEXT_START=0x0` out of the same patched tree; the GoRV32 Plus is also a
+pre-MDT privilege-1.10 VexRiscv, so the existing fw_base.S patch applies.
+
+The payload boots from SD: the ZSBL drives the vendor SD host
+(registers per MUG1532 chapter 16) itself - card identification at 200 kHz,
+conservative 5 MHz data transfers, 4-bit mode with a 1-bit fallback and
+single-block CMD17 reads - and expects the GRV1
+image raw at LBA 0. Records are 512-byte aligned so sectors stream
+straight to their SDRAM destinations; the RX FIFO word order is
+autodetected from the magic. Without a card (or without a valid
+image) it falls back to the same image in flash at `0x510000`.
+
+Build and program:
+
+1. `make gorv32-zsbl-wsl` - compiles `linux/zsbl` with the kernel
+   toolchain, output `linux/zsbl/zsbl.bin`.
+2. `make gorv32-opensbi-wsl` - fw_jump linked at `$0`
+   (`~/opensbi-system16/build-gorv32`).
+3. Kernel as usual via `linux/build-kernel.sh` in WSL.
+4. `make gorv32-flash-image` - imports fw_jump/Image, compiles the DTB and
+   packs `build/gorv32-linux/gorv32-flash.bin`.
+5. Flash (Gowin Programmer): bitstream at `0x000000`, `zsbl.bin` at
+   `0x500000`. The image goes raw onto the SD card at sector 0;
+   optionally also to flash `0x510000` as the no-card fallback.
+   Details in `linux/gorv32-brennen.md`.
+
+The whole console chain - probe, ZSBL, OpenSBI, kernel - runs 115200 8N1.
+The "System16 GoRV32 ZSBL" banner is the first milestone and only needs the
+bitstream plus `zsbl.bin`; it reports each copied record and verifies a
+checksum before jumping, so a corrupted burn or a broken SDRAM path is
+diagnosed on the UART instead of hanging silently. Note the IP owns the
+IOBUFs of the FLASH_QSPI and SD pads, so fabric logic must not touch those
+nets (synthesis error EX0339).
+
+The FPGA project needs `use_mspi_as_gpio`; the flash sits on the MSPI pins
+T19/L12/P22/R22/P21/R21 and the TF slot is wired in native 4-bit SD mode on
+V15/Y16/AA15/AB15/W14/W15. Regenerate the IP after ipc changes with
+`gw_sh create_gorv32plus_ip.tcl` or the IDE IP Core Generator.
+
+`linux/system16.config` embeds the BusyBox cpio created by `make rootfs-wsl`.
+Kernel plus rootfs must stay inside the 12 MB between `$400000` and
+`$FFFFFF`; the optional flash fallback has the stricter 2.9 MB GRV1 limit.

@@ -1,0 +1,3 @@
+open_project tang138k_system16_gorv32plus.gprj
+read_ipc src/gowin_gorv32_plus/gowin_gorv32_plus.ipc
+report_property [get_ips Gowin_GoRV32_Plus_Top]
