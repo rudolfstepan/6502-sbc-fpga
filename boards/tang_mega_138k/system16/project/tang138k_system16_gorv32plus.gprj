@@ -14,6 +14,11 @@
     <File path="../../../../third_party/alinx_sd/sd_card_sec_read_write.v" type="file.verilog" enable="1"/>
     <File path="../../../../third_party/alinx_sd/sd_card_top.v" type="file.verilog" enable="1"/>
     <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
+    <File path="../../../../third_party/usb_hid_host/usb_hid_host_rom.v" type="file.verilog" enable="1"/>
+    <File path="../../../../third_party/usb_hid_host/usb_hid_host_nm.v" type="file.verilog" enable="1"/>
+    <File path="usb_hid_host_rom.hex" type="file.other" enable="1"/>
+    <File path="../../../../rtl/core/usb/usb_hid_host.vhd" type="file.vhdl" enable="1"/>
+    <File path="../../sbc/project/src/gowin_pll/gowin_usb_pll.v" type="file.verilog" enable="1"/>
     <File path="../../../../rtl/core/mem/sdram_ctrl.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_bus32_pkg.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_axi32_to_bus32.v" type="file.verilog" enable="1"/>
@@ -23,9 +28,16 @@
     <File path="../rtl/sys16_sdram_probe.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_uart_probe.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_fb_ram8.vhd" type="file.vhdl" enable="1"/>
+    <File path="../rtl/sys16_fb_ddr3.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_hdmi_fb.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_hdmi_720p.vhd" type="file.vhdl" enable="1"/>
     <File path="../../hdmi_test/project/src/gowin_pll/gowin_hdmi_720p_pll.v" type="file.verilog" enable="1"/>
+    <!-- DDR3 framebuffer backing store: IP, memory PLL and its init block
+         are shared with the proven tang138k_sbc port. -->
+    <File path="../../sbc/project/src/ddr3_memory_interface/ddr3_memory_interface.v" type="file.verilog" enable="1"/>
+    <File path="../../sbc/project/src/gowin_pll/gowin_ddr_pll.v" type="file.verilog" enable="1"/>
+    <File path="../../sbc/project/src/gowin_pll/gowin_pll_mod.v" type="file.verilog" enable="1"/>
+    <File path="../../sbc/project/src/pll_init.v" type="file.verilog" enable="1"/>
     <File path="../../sbc/project/src/dvi-tx/dvi_tx_clk_drv.v" type="file.verilog" enable="1"/>
     <File path="../../sbc/project/src/dvi-tx/dvi_tx_tmds_enc.v" type="file.verilog" enable="1"/>
     <File path="../../sbc/project/src/dvi-tx/dvi_tx_tmds_phy.v" type="file.verilog" enable="1"/>

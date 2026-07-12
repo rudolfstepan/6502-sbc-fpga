@@ -17,6 +17,15 @@ glibc due to NSS/dlopen); uClibc-ng supports it and produces a much
 smaller static busybox besides.
 """
 import subprocess
+from pathlib import Path
+
+assets = Path(__file__).resolve().parent.parent / "linux" / "buildroot"
+resolved = assets.resolve()
+if not resolved.drive:
+    raise SystemExit(f"cannot convert repository path to WSL: {resolved}")
+drive = resolved.drive[0].lower()
+tail = resolved.as_posix()[2:].lstrip("/")
+assets_wsl = f"/mnt/{drive}/{tail}"
 
 script = r'''
 set -eu
@@ -42,6 +51,8 @@ BR2_STATIC_LIBS=y
 # already exist or init/getty spin on open errors.
 BR2_ROOTFS_DEVICE_CREATION_STATIC=y
 BR2_TARGET_ROOTFS_CPIO=y
+BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="@BUSYBOX_CONSOLE_FRAGMENT@"
+BR2_ROOTFS_POST_BUILD_SCRIPT="@FB_CONSOLE_POST_BUILD@"
 # BR2_TARGET_ROOTFS_TAR is not set
 EOF
 make system16_defconfig
@@ -53,15 +64,28 @@ grep -E "BR2_RISCV_ABI|BR2_RISCV_ISA_RV[MA]|BR2_STATIC_LIBS|BR2_TOOLCHAIN_BUILDR
 # marker changes: Buildroot does not always re-trigger the
 # toolchain-wrapper and busybox link mode from an in-place defconfig
 # change alone.
-marker=output/.system16-uclibc-static
-if [ ! -f "$marker" ]; then
+if [ ! -f output/.system16-uclibc-static ]; then
   make clean
   make system16_defconfig
-  mkdir -p output && touch "$marker"
+  mkdir -p output
+  touch output/.system16-uclibc-static
 fi
 # GCC 15 defaults to C23, which breaks the old gnulib in several host
 # packages (m4, bison, gettext); pin the host builds to gnu17.
 make -j"$(nproc)" HOSTCC="/usr/bin/gcc -std=gnu17" HOSTCXX="/usr/bin/g++"
+grep -q '^CONFIG_CONSPY=y' output/build/busybox-*/.config
+test -e output/target/bin/conspy -o -e output/target/usr/bin/conspy
+grep -q '^CONFIG_CTTYHACK=y' output/build/busybox-*/.config
+test -e output/target/bin/cttyhack -o -e output/target/usr/bin/cttyhack
+grep -qx 'tty1::respawn:/sbin/getty -L tty1 0 linux' output/target/etc/inittab
+grep -qx 'console::respawn:/bin/cttyhack /bin/conspy -c -f 1' output/target/etc/inittab
+echo 'Verified: one tty1 getty, UART attached to tty1 through cttyhack/conspy'
 ls -la output/images/
 '''
+script = script.replace(
+    "@BUSYBOX_CONSOLE_FRAGMENT@",
+    f"{assets_wsl}/board/system16/busybox-console.config")
+script = script.replace(
+    "@FB_CONSOLE_POST_BUILD@",
+    f"{assets_wsl}/board/system16/enable-fb-console.sh")
 raise SystemExit(subprocess.run(["wsl.exe", "--", "sh", "-lc", script]).returncode)

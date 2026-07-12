@@ -38,6 +38,19 @@ case "$profile" in
 esac
 cross=${CROSS_COMPILE:-riscv64-linux-gnu-}
 
+if [ "$profile" != qemu-sd ]; then
+  cp "$root/boards/tang_mega_138k/system16/linux/kernel/gorv32_usb_hid.c" \
+     "$kernel/drivers/input/keyboard/gorv32_usb_hid.c"
+  cp "$root/boards/tang_mega_138k/system16/linux/kernel/Kconfig.usbhid" \
+     "$kernel/drivers/input/keyboard/Kconfig.usbhid"
+  grep -q 'Kconfig.usbhid' "$kernel/drivers/input/keyboard/Kconfig" || \
+    printf '\nsource "drivers/input/keyboard/Kconfig.usbhid"\n' >> \
+      "$kernel/drivers/input/keyboard/Kconfig"
+  grep -q 'CONFIG_GORV32_USB_HID' "$kernel/drivers/input/keyboard/Makefile" || \
+    printf '\nobj-$(CONFIG_GORV32_USB_HID) += gorv32_usb_hid.o\n' >> \
+      "$kernel/drivers/input/keyboard/Makefile"
+fi
+
 if [ "$profile" = sd ] || [ "$profile" = rescue ]; then
   # Keep the board-specific driver in the repository while making it a
   # normal built-in Linux driver. These three operations are idempotent.

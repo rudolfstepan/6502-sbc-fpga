@@ -7,7 +7,13 @@ module dvi_tx_tmds_phy(
 	output	[1 : 0]		tmds_lane
 );
 	
-	reg [2:0] reset_5x_sr;
+	// Keep one reset synchronizer beside each OSER10.  Without preservation
+	// Gowin synthesis merges the three identical lane synchronizers into the
+	// first lane, then routes that single register across all HDMI serializers.
+	// At 5x pixel clock the half-cycle recovery window is only 1.33 ns; the
+	// merged fanout violated it and could leave every OSER10 held/reset
+	// metastably after an unrelated placement change (for example USB logic).
+	(* keep, syn_keep *) reg [2:0] reset_5x_sr /* synthesis syn_preserve = 1 */;
 	
 	wire dq_tmds;
 	

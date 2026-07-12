@@ -1,0 +1,7 @@
+config GORV32_USB_HID
+	bool "System16 FPGA low-speed USB HID keyboard"
+	depends on INPUT && INPUT_KEYBOARD && OF && RISCV
+	help
+	  Polling input driver for the compact USB HID host synthesized into the
+	  System16 FPGA. The controller supports directly connected low-speed HID
+	  keyboards; it is not a generic Linux USB host controller.

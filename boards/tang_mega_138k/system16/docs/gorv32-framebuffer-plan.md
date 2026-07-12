@@ -6,15 +6,24 @@ zweistufig - erst ein BSRAM-Framebuffer mit dem fertigen Kernel-Treiber
 Ausbau auf DDR3 mit Blitter. Stand der Ueberlegung: 2026-07-11, nach dem
 erfolgreichen SD-Boot-Bring-up.
 
-Umsetzungsstand: Die Stufe-1-Hardware liegt als
-`rtl/sys16_fb_ram8.vhd` und `rtl/sys16_hdmi_fb.vhd` vor. Der GoRV32-IP
-wurde mit `Enable_AXI_Slave=true` regeneriert und der zweite AXI-Pfad im
-Top verdrahtet. Der hardwarebestaetigte Isolation-Build verwendet jedoch
-weiterhin `sys16_hdmi_720p` und beantwortet Zugriffe auf das neue Fenster
-nur mit Nullen. Damit sind CPU, SD-Boot und das neue IP-Interface gemeinsam
-getestet, ohne den noch unbestaetigten Framebuffer-Scanout zu aktivieren.
-Die eigentliche Framebuffer-Instanz sowie die Linux-Anbindung stehen noch
-aus.
+Umsetzungsstand: Die Stufe-1-Hardware liegt als `rtl/sys16_fb_ram8.vhd`
+und `rtl/sys16_hdmi_fb.vhd` vor. Der GoRV32-IP wurde mit
+`Enable_AXI_Slave=true`, `Flash_R_W_Access=false` und `SRAM_Size=32KB`
+regeneriert und der zweite AXI-Pfad im Top verdrahtet. Nach einem
+Isolations-Build (ohne Framebuffer, nur `sys16_hdmi_720p`) ist die
+Framebuffer-Instanz jetzt bei reduzierter Aufloesung reaktiviert:
+480x270 RGB565, 2x zentriert in 720p (960x540, Rand schwarz). Das senkt
+die BSRAM-Belegung deutlich (190/340 BSRAM laut P&R statt 94 %) und
+gibt der CPU-Domaene Routing-Reserve.
+
+Hardware-Test 2026-07-12: Testbild + Streifen sind auf dem Monitor,
+und aus dem gebooteten SD-Linux stimmen ID ("S16F"), CTRL (Reset 0x7)
+und der Frame-Zaehler (gemessen exakt 60 Hz). Fuer `devmem` musste
+CONFIG_DEVMEM=y in die Kernel-Fragmente (sd + flash) - der Build
+startet von allnoconfig, fehlende Optionen sind aus. Naechster
+Schritt: Pixel-Schreibtest (CTRL=0x5, Wort-/Byte-Writes, Readback),
+danach der Wechsel auf das DDR3-Backend (Stufe 2) vor dem
+Linux-Ausbau.
 
 ## Andockpunkt: das AXI-Slave-Fenster
 
@@ -49,10 +58,10 @@ instanziert - dahinter haengt statt der SDRAM der Framebuffer-Block.
 
 | CPU-Adresse | Inhalt |
 | --- | --- |
-| `0xE8000000-0xE80707FF` | Pixeldaten, linear, Stride 1280 Bytes |
-| `0xE8800000` | ID/Version (RO) |
-| `0xE8800004` | CTRL: Bit0 Enable, Bit1 Testbild |
-| `0xE8800008` | STATUS: Bit0 VSync-Flag (RO, fuer Tearing-freie Updates) |
+| `0xE8000000-0xE803F47F` | Pixeldaten, linear, Stride 960 Bytes (480x270 RGB565) |
+| `0xE8800000` | ID/Version (RO), liest "S16F" = 0x53313646 |
+| `0xE8800004` | CTRL: Bit0 Enable, Bit1 Testbild, Bit2 Diagnose-Streifen |
+| `0xE8800008` | STATUS: Bit0 VBlank, [31:16] Frame-Zaehler (RO) |
 
 Spaeter (Doppelpufferung): PAN-Register mit Basisadresse fuer den
 Scanout.
@@ -92,32 +101,28 @@ DTS-Node (Variante `gorv32plus-fb.dts`; der Import-Wrapper kann per
 ```dts
 framebuffer@e8000000 {
     compatible = "simple-framebuffer";
-    reg = <0xe8000000 0x70800>;
-    width = <640>; height = <360>; stride = <1280>;
+    reg = <0xe8000000 0x3f480>;
+    width = <480>; height = <270>; stride = <960>;
     format = "r5g6b5";
 };
 ```
 
-Kernel-Optionen zusaetzlich zur bestehenden `system16.config`:
+Kernel-Optionen fuer `/dev/fb0` zusaetzlich zur bestehenden Konfiguration:
 
 ```text
-CONFIG_VT=y
-CONFIG_VT_CONSOLE=y
 CONFIG_FB=y
 CONFIG_FB_SIMPLE=y
-CONFIG_FRAMEBUFFER_CONSOLE=y
-CONFIG_FONT_SUPPORT=y
-CONFIG_FONT_8x16=y
 ```
 
-`CONFIG_VT` steht heute bewusst auf `n` und muss fuer fbcon auf `y`;
-das vergroessert den Kernel etwas (SD-Boot unkritisch, Flash-Fallback
-ggf. pruefen). `console=tty0` zusaetzlich zu `console=ttyS0,115200n8`
-in den bootargs spiegelt die Konsole auf beide.
+Die Hardwareprofile aktivieren `CONFIG_VT`, `CONFIG_VT_CONSOLE`,
+`CONFIG_FRAMEBUFFER_CONSOLE` und den 8x16-Font. Kernelmeldungen erscheinen
+damit parallel auf fbcon und ttyS0. Buildroot startet zusaetzlich zum
+seriellen `console`-Getty einen Getty auf `tty1`, damit die HDMI-Ausgabe
+nach dem Wechsel vom Kernel zu `/init` nicht stehen bleibt.
 
-Ausgabe auf HDMI, Eingabe weiterhin ueber UART (kein USB-Host im SoC) -
-Login bleibt getty auf ttyS0, HDMI zeigt Log + Konsole; `/dev/fb0`
-steht Userspace per mmap offen.
+Ausgabe und Login-Prompt stehen auf HDMI und UART bereit; die Eingabe bleibt
+ohne einen angeschlossenen Eingabetreiber praktisch auf UART. Anwendungen
+koennen weiterhin direkt ueber `/dev/fb0` zeichnen.
 
 ### Performance-Erwartung
 
@@ -151,18 +156,84 @@ fence/Flush-Ueberlegungen (dann fruehzeitig neu bewerten).
 ## Stufe 2: DDR3-Backend + Blitter (Ausbau)
 
 Gleiche CPU-Schnittstelle (AXI-Slave-Fenster, gleiche Registermap),
-aber Framebuffer im On-Board-DDR3 statt BSRAM:
+aber Framebuffer im On-Board-DDR3 statt BSRAM. Motivation neben 720p:
+die vier BSRAM-Baenke (~116 Bloecke bei 480x270) dominieren
+P&R-Laufzeit und Routing-Budget; mit DDR3 schrumpft das auf die
+IP-FIFOs (~10 Bloecke) plus einen Zeilenpuffer.
 
-- Wiederverwendung der SBC-Erfahrung: Gowin-DDR3-IP, der
-  Byte-Bridge-CDC-Fix (3-stufige ram_ready-Synchronisation),
-  Framebuffer-Controller mit Full-Line-Fetch in Zeilen-FIFO.
-- Bringt: echtes 720p RGB565 (1,8 MB), Doppelpufferung ueber
-  PAN-Register, mehrere Framebuffer.
-- Blitter-Port aus dem SBC/C64-Projekt (Rect-Copy/Fill/COPYT) als
-  Beschleuniger; Linux-Anbindung zunaechst als simples mmap+ioctl
-  (uio), kein DRM-Treiber.
-- Bekannte Risiken: DDR3-Kalibrierung/Timing auf diesem Board,
-  Toolchain-Empfindlichkeit - deshalb erst nach stabiler Stufe 1.
+Umsetzungsstand 2026-07-12: implementiert, Build und Hardware-Test
+stehen aus. Neu ist `rtl/sys16_fb_ddr3.vhd` (CPU-CDC, Zeilen-Prefetch,
+App-Engine); `sys16_hdmi_fb` waehlt per Generic `FB_DDR3` (default
+true) zwischen DDR3- und BSRAM-Backend, Registermap und Scanout sind
+identisch. Top, CST (Pins + INS_LOC fuer beide PLLs/DLL/fclkdiv), SDC
+(ddr_mem/ddr_clk_x1 + PHY-False-Paths) und .gprj sind verdrahtet; die
+GHDL-Testbench `sim/tb/tb_sys16_fb_ddr3.vhd` deckt CPU-Handshake
+(inkl. Unkalibriert-Ack und Retrigger-Race), Byte-Enables und beide
+Zeilenpuffer-Haelften ab. led[0] zeigt jetzt die DDR3-Kalibrierung,
+STATUS bit1 meldet sie an Software.
+
+### Wiederverwendung aus boards/tang_mega_138k/sbc
+
+Der 138K-SBC faehrt den kompletten DDR3-Stack bereits (Bring-up nach
+dem Sipeed-Referenzdesign, mit Kalibrier-Retry):
+
+| Baustein | Quelle | Anmerkung |
+| --- | --- | --- |
+| `DDR3_Memory_Interface_Top` | `sbc/project/src/ddr3_memory_interface/` | 32-bit-DDR3; ref 50 MHz, memory 400 MHz, User-Takt `clk_out` = 100 MHz; App-Beats 256 bit, der SBC nutzt davon die unteren 128 bit (obere Haelfte per Mask tot) |
+| `Gowin_DDR_PLL` | `sbc/project/src/gowin_pll/gowin_ddr_pll.v` | 50 -> 400 MHz, freilaufend (reset fest '0'), `pll_stop`-Handshake mit dem IP |
+| Reset-/Kalibrier-Sequencer | `tang138k_sbc_top.vhd`, Prozess `ddr_reset_seq` | Reset-Hold nach PLL-Lock, Timeout -> automatischer Retry; ersetzt manuelle Reset-Druecke bei marginaler Kalibrierung |
+| DDR3-Pinout | `sbc/constraints/tang138k_sbc.cst` | DDR3 sitzt auf dem Core-Modul, Pins fuer Console und Mega-Dock identisch |
+| Schreib-/Lese-Engine | `rtl/core/peripherals/vic_fb_ddr3.vhd` | Vorlage fuer maskierte BL8-Einzelbeats (CPU-Pfad) und Zeilen-Fetch; nicht 1:1 uebernehmen (VIC-Geometrien, Palette, Blitter), sondern schlank neu als `sys16_fb_ddr3` |
+
+### Umbau in sys16_hdmi_fb
+
+Registermap, Bus-FSM-Kontrakt und Scanout-Timing bleiben; nur der
+Speicher dahinter wechselt (Generic `FB_DDR3`, analog `USE_DDR3` im
+SBC-Top; `sys16_fb_ram8` bleibt als BSRAM-Fallback im Baum):
+
+- CPU-Pfad: bus32-Zugriff (50 MHz) -> req/ack-Handshake mit
+  3-stufiger Synchronisation (der bekannte ddr3_byte_bridge-Fix) ->
+  maskierter BL8-Einzelbeat auf dem App-Interface (100 MHz). `be`
+  wird direkt zur Write-Mask, kein Read-Modify-Write noetig.
+- Scanout: Zeilen-Fetch waehrend hblank in einen
+  Dual-Clock-Zeilenpuffer (1-2 BSRAM), die Pixeldomaene liest wie
+  bisher. 480x270: 960 Bytes = 60 Bursts pro Doppelzeile bei
+  100 MHz x 16 Byte - weit unter dem hblank-Budget; auch natives
+  720p (2560 Bytes/Zeile) waere bandbreitenseitig problemlos.
+- Drei Taktdomaenen: 50 (Bus) / 100 (App) / 74,25 (Pixel).
+  CDC-Grenzen sind genau der req/ack-Handshake und der Zeilenpuffer.
+
+### Aufloesung
+
+Ohne BSRAM-Limit ist 640x360 RGB565 (integer 2x nach 720p) wieder
+das Ziel; erster Schritt bleibt 480x270, weil DTS und Test dafuer
+schon stehen (nur Speicherort wechselt, Software merkt nichts).
+Natives 720p ist moeglich, aber fbcon-Scroll (1,8 MB uncached) wird
+zaeh - erst mit Blitter sinnvoll.
+
+- Bringt weiterhin: Doppelpufferung ueber PAN-Register, mehrere
+  Framebuffer, spaeter der Blitter-Port aus dem SBC/C64-Projekt
+  (Rect-Copy/Fill/COPYT); Linux-Anbindung zunaechst mmap+ioctl (uio),
+  kein DRM-Treiber.
+- CPU-Rueckleseweg wird langsamer als BSRAM (voller Umlauf ueber
+  beide Domaenen); fbcon liest nur beim Scrollen (memmove) -
+  akzeptabel.
+
+### Risiken
+
+- PLL-Haushalt: HDMI-PLL + DDR-PLL + GoRV32-interne Takte im selben
+  Design; der SBC loest das mit freilaufender DDR-PLL ohne
+  Fabric-Last aus PLL-abgeleiteten Takten im Sequencer.
+- DDR3-Kalibrierung am Powerup gelegentlich marginal - der
+  Retry-Sequencer deckt das ab.
+- Vendor-IP-Pads (QSPI/SD) bleiben unberuehrt; die DDR3-Pads sind
+  davon getrennt, kein EX0339-Risiko.
+
+Denkbarer Folgeausbau (separates Vorhaben): auch das DDR-AXI-Fenster
+(Linux-Hauptspeicher, heute 16-bit-SDRAM ueber
+`sys16_bus32_to_sdram16`) auf das DDR3 legen - braucht einen Arbiter
+am App-Interface, hebt aber die CPU-Speicherbandbreite um eine
+Groessenordnung.
 
 ## Bewusst verworfen
 

@@ -3,7 +3,8 @@
 	#address-cells = <1>; #size-cells = <1>;
 	compatible = "gowin,gorv32-plus";
 	model = "System16 GoRV32 Plus Linux FPGA";
-	chosen0: chosen { bootargs = "console=ttyS0,115200n8 earlycon=sbi loglevel=8 keep_bootcon panic=-1"; stdout-path = &uart0; };
+	/* Mirror kernel messages to the framebuffer and diagnostic UART. */
+	chosen0: chosen { bootargs = "console=tty0 console=ttyS0,115200n8 earlycon=sbi loglevel=8 panic=-1"; stdout-path = &uart0; };
 	cpus {
 		#address-cells = <1>; #size-cells = <0>; timebase-frequency = <50000000>;
 		cpu0: cpu@0 {
@@ -20,6 +21,15 @@
 	/* 16 MB SDRAM behind the AXI DDR window; OpenSBI owns the bottom,
 	   the DTB sits at $3F0000, the kernel at the RV32 4 MiB boundary. */
 	memory@400000 { device_type = "memory"; reg = <0x00400000 0x00c00000>; };
+	framebuffer0: framebuffer@e8000000 {
+		compatible = "simple-framebuffer";
+		reg = <0xe8000000 0x0003f480>;
+		width = <480>;
+		height = <270>;
+		stride = <960>;
+		format = "r5g6b5";
+		status = "okay";
+	};
 	soc0: soc {
 		#address-cells = <1>; #size-cells = <1>; compatible = "simple-bus"; ranges;
 		clint@e6000000 {
@@ -41,6 +51,12 @@
 			reg-shift = <2>; reg-io-width = <4>;
 			clock-frequency = <50000000>; current-speed = <115200>;
 			interrupt-parent = <&plic0>; interrupts = <8>; status = "okay";
+		};
+		usbkbd0: keyboard@e8800100 {
+			compatible = "gowin,system16-usb-hid";
+			reg = <0xe8800100 0x10>;
+			poll-interval-ms = <10>;
+			status = "okay";
 		};
 	};
 };

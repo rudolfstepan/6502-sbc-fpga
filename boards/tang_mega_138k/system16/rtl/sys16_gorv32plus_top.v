@@ -11,6 +11,8 @@ module sys16_gorv32plus_top(
   output wire [3:0] led,
   input wire uart_rx,
   output wire uart_tx,
+  // Tang Console USB-A HID host (official Sipeed direct-GPIO pinout).
+  inout wire usb_dm, inout wire usb_dp,
   // On-board 128Mbit NOR flash on the MSPI pins; boot code source.
   inout wire flash_cs_n, inout wire flash_clk,
   inout wire flash_mosi, inout wire flash_miso,
@@ -25,7 +27,15 @@ module sys16_gorv32plus_top(
   output wire sdram0_ras_n, output wire sdram0_cas_n,
   output wire sdram0_we_n, output wire [1:0] sdram0_ba,
   output wire [12:0] sdram0_addr, output wire [1:0] sdram0_dqm,
-  inout wire [15:0] sdram0_dq
+  inout wire [15:0] sdram0_dq,
+  // On-board DDR3 (32-bit, on the core module): framebuffer backend.
+  // Pins and bring-up copied from the proven tang138k_sbc port.
+  output wire [14:0] ddr_addr, output wire [2:0] ddr_bank,
+  output wire ddr_cs, output wire ddr_ras, output wire ddr_cas,
+  output wire ddr_we, output wire ddr_ck, output wire ddr_ck_n,
+  output wire ddr_cke, output wire ddr_odt, output wire ddr_reset_n,
+  output wire [3:0] ddr_dm, inout wire [31:0] ddr_dq,
+  inout wire [3:0] ddr_dqs, inout wire [3:0] ddr_dqs_n
 );
   reg [15:0] por = 0;
   always @(posedge clk_50mhz)
@@ -48,8 +58,14 @@ module sys16_gorv32plus_top(
   wire [2:0] s_arprot,s_arsize,s_awprot,s_awsize;
   wire s_arready,s_arvalid,s_awready,s_awvalid,s_bready,s_bvalid,s_rlast,s_rready,s_rvalid,s_wlast,s_wready,s_wvalid;
   wire [31:0] fb_addr,fb_wdata,fb_rdata;wire [3:0] fb_be;wire fb_req,fb_we,fb_ready;
+  wire hdmi_req,hdmi_ready; wire [31:0] hdmi_rdata;
+  wire usb_sel,usb_cs,usb_irq; wire [7:0] usb_dout;
+  wire usb_connected,usb_key_event,usb_polling; wire [7:0] usb_keycode,usb_modif,usb_ascii;
+  wire [3:0] usb_phase; wire usb_clk_12;
   wire cpu_uart_tx,probe_tx,probe_active,probe_done;
+  reg uart_tx_r=1'b1;
   wire hdmi_pll_lock;
+  wire ddr_calib;  // DDR3 init_calib_complete (declared here for the LED)
 
   Gowin_GoRV32_Plus_Top cpu(
     .axi_clk(clk_50mhz),.ahb_clk(clk_50mhz),.apb_clk(clk_50mhz),
@@ -127,11 +143,41 @@ module sys16_gorv32plus_top(
   sys16_uart_probe probe(
     .clk(clk_50mhz),.reset_n(resetn),.start(resetn),.tx(probe_tx),
     .active(probe_active),.done(probe_done));
-  assign uart_tx = probe_active ? probe_tx : cpu_uart_tx;
+  // Keep the final mux off the package pin. With the DDR3 PHY present the
+  // unconstrained combinational output route became placement-sensitive and
+  // corrupted even the pre-CPU "FPGA BOOT OK" probe. A single 50 MHz output
+  // register makes every UART edge synchronous and gives P&R an IOB-packable
+  // endpoint. One clock of latency has no effect on 115200-baud framing.
+  always @(posedge clk_50mhz) begin
+    if (!resetn)
+      uart_tx_r <= 1'b1;
+    else
+      uart_tx_r <= probe_active ? probe_tx : cpu_uart_tx;
+  end
+  assign uart_tx = uart_tx_r;
+
+  // Official Sipeed Tang Mega 138K low-speed USB HID host.  It is a tiny
+  // self-contained host (not a generic USB controller) and talks directly to
+  // the USB-A D+/D- pins at 1.5 Mbit/s.  Linux sees its four registers at
+  // 0xE8800100 through the existing AXI extension window.
+  Gowin_USB_PLL usb_pll_i(.clkout0(usb_clk_12),.clkin(clk_50mhz));
+  assign usb_sel = (fb_addr[23:8] == 16'h8001);
+  assign usb_cs  = fb_req && usb_sel;
+  assign hdmi_req = fb_req && !usb_sel;
+  assign fb_ready = usb_sel ? fb_req : hdmi_ready;
+  assign fb_rdata = usb_sel ? {24'h000000,usb_dout} : hdmi_rdata;
+  usb_hid_host usb_hid_i(
+    .clk(clk_50mhz),.reset_n(resetn),.usb_clk(usb_clk_12),
+    .usb_dm(usb_dm),.usb_dp(usb_dp),.cs(usb_cs),.we(fb_we),
+    .addr(fb_addr[3:2]),.dout(usb_dout),.irq(usb_irq),
+    .diag_connected(usb_connected),.diag_keycode(usb_keycode),
+    .diag_modif(usb_modif),.diag_ascii(usb_ascii),.diag_phase(usb_phase),
+    .diag_key_event(usb_key_event),.diag_polling(usb_polling));
 
   // The vendor IP owns the IOBUFs on the FLASH_QSPI and SD pads; fabric
   // logic must not tap those nets (EX0339). CPU liveness is observable on
-  // fabric nets instead: led[1] latches once UART1 transmitted a start bit
+  // fabric nets instead: led[0] shows the DDR3 calibration (framebuffer
+  // backing store ready), led[1] latches once UART1 transmitted a start bit
   // (ZSBL banner sent), led[2] latches on the first DDR AXI transfer (ZSBL
   // copy loop reached), led[3] blinks as heartbeat/polarity reference.
   reg saw_cpu_tx=1'b0, saw_ar=1'b0, saw_aw=1'b0; reg [24:0] beat=0;
@@ -143,7 +189,7 @@ module sys16_gorv32plus_top(
       if(awvalid) saw_aw<=1'b1;
       beat<=beat+1'b1;
     end
-  assign led = {beat[24],saw_aw|saw_ar,saw_cpu_tx,resetn};
+  assign led = {beat[24],saw_aw|saw_ar,saw_cpu_tx,ddr_calib};
 
   // Diagnosis on the HDMI status stripe (top 48 lines). A trapped CPU that
   // executes garbage only ever READS DDR; the ZSBL copy loop WRITES it.
@@ -164,15 +210,90 @@ module sys16_gorv32plus_top(
       default: diag_status<=16'h07E0; // green
     endcase
 
-  // Isolation build: keep the regenerated CPU/AXI-slave interface, but use
-  // the proven HDMI diagnostic generator without the large BSRAM framebuffer.
-  // Tie off the unused bus32 response so accidental E8 accesses still finish.
-  assign fb_rdata = 32'h00000000;
-  assign fb_ready = fb_req;
-  sys16_hdmi_720p hdmi_i(
-    .clk_in(clk_50mhz),.reset_n(resetn),.status_word(diag_status),
+  // DDR3 backing store for the framebuffer, bring-up copied from the
+  // proven tang138k_sbc port: the memory PLL free-runs (locks at power-on,
+  // independent of everything else), the controller reset is held a margin
+  // after PLL lock and released synchronously on clk_50mhz -- the IP's own
+  // reference clock -- and a calibration that does not finish within
+  // DDR_CAL_WAIT re-asserts the reset and retries automatically (Gowin
+  // DDR3 bring-up is occasionally marginal at power-on).
+  localparam DDR_RST_HOLD = 1023;     // reset assert width (~20 us @ 50 MHz)
+  localparam DDR_CAL_WAIT = 2500000;  // calibration timeout (~50 ms @ 50 MHz)
+  wire ddr_pll_lock, ddr_pll_stop, ddr_memory_clk, ddr_clk_x1;
+  reg [1:0] ddr_lock_sync=2'b00, ddr_cal_sync=2'b00;
+  reg ddr_rst_wait=1'b0, ddr_rst_n=1'b0;
+  reg [21:0] ddr_rst_cnt=22'd0;
+  always @(posedge clk_50mhz) begin
+    ddr_lock_sync <= {ddr_lock_sync[0], ddr_pll_lock};
+    ddr_cal_sync  <= {ddr_cal_sync[0],  ddr_calib};
+    if (!ddr_lock_sync[1]) begin
+      ddr_rst_wait <= 1'b0; ddr_rst_cnt <= 22'd0; ddr_rst_n <= 1'b0;
+    end else if (!ddr_rst_wait) begin
+      ddr_rst_n <= 1'b0;
+      if (ddr_rst_cnt == DDR_RST_HOLD) begin
+        ddr_rst_cnt <= 22'd0; ddr_rst_n <= 1'b1; ddr_rst_wait <= 1'b1;
+      end else
+        ddr_rst_cnt <= ddr_rst_cnt + 1'b1;
+    end else begin
+      ddr_rst_n <= 1'b1;
+      if (ddr_cal_sync[1])
+        ddr_rst_cnt <= 22'd0;               // calibrated: stay released
+      else if (ddr_rst_cnt == DDR_CAL_WAIT) begin
+        ddr_rst_cnt <= 22'd0; ddr_rst_wait <= 1'b0;  // timeout: retry
+      end else
+        ddr_rst_cnt <= ddr_rst_cnt + 1'b1;
+    end
+  end
+
+  Gowin_DDR_PLL ddr_mem_pll_i(
+    .lock(ddr_pll_lock),.clkout0(),.clkout1(),.clkout2(ddr_memory_clk),
+    .clkin(clk_50mhz),.init_clk(clk_50mhz),.reset(1'b0),
+    .enclk0(1'b1),.enclk1(1'b1),.enclk2(ddr_pll_stop));
+
+  // 32-bit DDR3 IP with 256-bit app beats; the framebuffer engine uses the
+  // proven 128-bit view, so the upper half is masked off (same adaptation
+  // as the SBC top).
+  wire [2:0] fb_app_cmd; wire fb_app_cmd_en; wire [26:0] fb_app_addr;
+  wire [127:0] fb_app_wdata; wire [15:0] fb_app_wmask;
+  wire fb_app_wren, fb_app_wend, fb_app_cmd_rdy, fb_app_wdata_rdy;
+  wire [255:0] fb_app_rdata256; wire fb_app_rvalid;
+  DDR3_Memory_Interface_Top ddr3_ip_i(
+    .clk(clk_50mhz),.memory_clk(ddr_memory_clk),.pll_lock(ddr_pll_lock),
+    .rst_n(ddr_rst_n),
+    .cmd_ready(fb_app_cmd_rdy),.cmd(fb_app_cmd),.cmd_en(fb_app_cmd_en),
+    .addr({2'b00, fb_app_addr}),
+    .wr_data_rdy(fb_app_wdata_rdy),.wr_data({128'h0, fb_app_wdata}),
+    .wr_data_en(fb_app_wren),.wr_data_end(fb_app_wend),
+    .wr_data_mask({16'hFFFF, fb_app_wmask}),
+    .rd_data(fb_app_rdata256),.rd_data_valid(fb_app_rvalid),.rd_data_end(),
+    .sr_req(1'b0),.ref_req(1'b0),.sr_ack(),.ref_ack(),
+    .init_calib_complete(ddr_calib),.clk_out(ddr_clk_x1),.ddr_rst(),
+    .pll_stop(ddr_pll_stop),.burst(1'b1),
+    .O_ddr_addr(ddr_addr),.O_ddr_ba(ddr_bank),.O_ddr_cs_n(ddr_cs),
+    .O_ddr_ras_n(ddr_ras),.O_ddr_cas_n(ddr_cas),.O_ddr_we_n(ddr_we),
+    .O_ddr_clk(ddr_ck),.O_ddr_clk_n(ddr_ck_n),.O_ddr_cke(ddr_cke),
+    .O_ddr_odt(ddr_odt),.O_ddr_reset_n(ddr_reset_n),.O_ddr_dqm(ddr_dm),
+    .IO_ddr_dq(ddr_dq),.IO_ddr_dqs(ddr_dqs),.IO_ddr_dqs_n(ddr_dqs_n));
+
+  // Framebuffer graphics card behind the AXI slave window: 480x270 RGB565
+  // in DDR3 (FB_DDR3 backend; only the double line buffer stays on-chip),
+  // shown 2x (960x540) centred in 720p. Pixel data at 0xE8000000,
+  // CTRL/STATUS at 0xE8800000. Resets to enabled framebuffer scanout so the
+  // Linux simple-framebuffer driver needs no board-specific CTRL write;
+  // STATUS bit1 reports the DDR3 calibration.
+  sys16_hdmi_fb hdmi_i(
+    .clk_in(clk_50mhz),.reset_n(resetn),
+    .req(hdmi_req),.we(fb_we),.addr(fb_addr[23:0]),.be(fb_be),
+    .wdata(fb_wdata),.rdata(hdmi_rdata),.ready(hdmi_ready),
+    .status_word(diag_status),
     .pll_lock(hdmi_pll_lock),.tmds_clk_p(tmds_clk_p),.tmds_clk_n(tmds_clk_n),
-    .tmds_d_p(tmds_d_p),.tmds_d_n(tmds_d_n));
+    .tmds_d_p(tmds_d_p),.tmds_d_n(tmds_d_n),
+    .clk_x1(ddr_clk_x1),.calib_done(ddr_calib),
+    .app_cmd_rdy(fb_app_cmd_rdy),.app_cmd(fb_app_cmd),.app_cmd_en(fb_app_cmd_en),
+    .app_addr(fb_app_addr),.app_wdata(fb_app_wdata),.app_wdata_mask(fb_app_wmask),
+    .app_wren(fb_app_wren),.app_wdata_end(fb_app_wend),
+    .app_wdata_rdy(fb_app_wdata_rdy),
+    .app_rdata(fb_app_rdata256[127:0]),.app_rdata_valid(fb_app_rvalid));
   assign dvi_a_psv=1'b0; assign dvi_ddc_clk=1'bz; assign dvi_ddc_dat=1'bz;
   assign sdram0_clk=clk_50mhz;
 endmodule

@@ -69,7 +69,7 @@ SIM = sim/tb/tb_bus_decode.vhd sim/tb/tb_sbc_reset.vhd sim/tb/tb_sbc_bus_write.v
 .PHONY: analyze roms sd-boot-image sd-boot-test-image test test-sd-boot-shadow \
         clean pix16 pipistrello pipistrello-hdmi-test pipistrello-6502-hdmi pipistrello-6502-sd-hdmi pipistrello-c64 tang_primer_20k tang_mega_138k tang_mega_138k-sbc tang_mega_138k-system16 tang_mega_138k-system16-flash tang_mega_138k-flash tang_mega_138k-hdmi-test tang_mega_138k-hdmi-test-flash tang_primer_console_138k d64-test-image test-d64 test-d64-map \
         fat32-card-image test-d64-drive test-c1541-d64-source test-c1541-d64-sdram \
-        test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem test-sdram-fb test-fb-ddr3 tunes-d64 \
+        test-c1541-v1541-uart test-c1541-sd-write test-fat32 test-d64-subsystem test-sdram-fb test-fb-ddr3 test-system16-fb-ddr3 tunes-d64 \
         sid-disks reist adventure-rom blit-demo-roms blitcopy-rom blitdemo-rom mandelcube-rom multipart-d64 test-c64-vic test-c64-input \
         c64-kernal-load-vector-patch c64-roms c64-tang20k-build \
         c64-graphics-test-prg c64-sprite-test-prg c64-d016-scroll-test-prg \
@@ -496,6 +496,15 @@ test-fb-ddr3:
 	  sim/tb/tb_vic_fb_ddr3.vhd
 	$(GHDL) -e $(GHDL_FLAGS) tb_vic_fb_ddr3
 	$(GHDL) -r $(GHDL_FLAGS) tb_vic_fb_ddr3 $(GHDL_RUN_FLAGS) --stop-time=400ms
+
+## Tang Mega 138K system16: DDR3 RGB565 framebuffer CPU port, byte enables,
+## calibration fallback and double-line-buffer prefetch across three clocks.
+test-system16-fb-ddr3:
+	$(GHDL) -a $(GHDL_FLAGS) \
+	  boards/tang_mega_138k/system16/rtl/sys16_fb_ddr3.vhd \
+	  sim/tb/tb_sys16_fb_ddr3.vhd
+	$(GHDL) -e $(GHDL_FLAGS) tb_sys16_fb_ddr3
+	$(GHDL) -r $(GHDL_FLAGS) tb_sys16_fb_ddr3 $(GHDL_RUN_FLAGS) --stop-time=100us
 
 ## Tang Mega 138K: SDRAM0 framebuffer line prefetch + CPU byte port (GHDL).
 test-sdram-fb:
