@@ -1,0 +1,2 @@
+# Patch payloads intentionally preserve whitespace from their upstream files.
+boards/tang_mega_138k/amiga/patches/*.patch whitespace=-trailing-space,-space-before-tab

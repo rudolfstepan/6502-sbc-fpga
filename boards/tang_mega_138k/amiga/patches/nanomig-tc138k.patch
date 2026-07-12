@@ -1,0 +1,933 @@
+diff --git a/src/hdmi/hdmi.sv b/src/hdmi/hdmi.sv
+index f34cd31..850a86b 100644
+--- a/src/hdmi/hdmi.sv
++++ b/src/hdmi/hdmi.sv
+@@ -37,7 +37,11 @@ module hdmi
+     // If you care about this, change it below.
+     parameter bit [8*8-1:0] VENDOR_NAME = {"Unknown", 8'd0}, // Must be 8 bytes null-padded 7-bit ASCII
+     parameter bit [8*16-1:0] PRODUCT_DESCRIPTION = {"FPGA", 96'd0}, // Must be 16 bytes null-padded 7-bit ASCII
+-    parameter bit [7:0] SOURCE_DEVICE_INFORMATION = 8'h00 // See README.md or CTA-861-G for the list of valid codes
++    parameter bit [7:0] SOURCE_DEVICE_INFORMATION = 8'h00, // See README.md or CTA-861-G for the list of valid codes
++
++    // Some Gowin serializers use an asynchronous RESET pin in the 5x domain.
++    // Synchronizing the pixel-domain reset locally avoids recovery violations.
++    parameter bit SYNC_SERIALIZER_RESET = 1'b0
+ )
+ (
+     input logic 		      clk_pixel_x5,
+@@ -296,6 +300,18 @@ generate
+     end
+ endgenerate
+ 
+-serializer #(.NUM_CHANNELS(NUM_CHANNELS)) serializer(.clk_pixel(clk_pixel), .clk_pixel_x5(clk_pixel_x5), .reset(reset), .tmds_internal(tmds_internal), .tmds(tmds), .tmds_clock(tmds_clock));
++logic serializer_reset;
++generate
++    if (SYNC_SERIALIZER_RESET) begin: serializer_reset_cdc
++        (* syn_preserve = 1 *) logic [1:0] sync = 2'b11;
++        always_ff @(posedge clk_pixel_x5)
++            sync <= {sync[0], reset};
++        assign serializer_reset = sync[1];
++    end else begin: serializer_reset_direct
++        assign serializer_reset = reset;
++    end
++endgenerate
++
++serializer #(.NUM_CHANNELS(NUM_CHANNELS)) serializer(.clk_pixel(clk_pixel), .clk_pixel_x5(clk_pixel_x5), .reset(serializer_reset), .tmds_internal(tmds_internal), .tmds(tmds), .tmds_clock(tmds_clock));
+ 
+ endmodule
+diff --git a/src/impl/nanomig_tc138k_process_config.json b/src/impl/nanomig_tc138k_process_config.json
+index f606508..8455783 100644
+--- a/src/impl/nanomig_tc138k_process_config.json
++++ b/src/impl/nanomig_tc138k_process_config.json
+@@ -1,95 +1,102 @@
+ {
+- "BACKGROUND_PROGRAMMING" : "off",
+- "COMPRESS" : false,
+- "CPU" : true,
+- "CRC_CHECK" : true,
+- "Clock_Route_Order" : 0,
+- "Co-Place_IO_Registers" : false,
+- "Convert_SDP32_36_to_SDP16_18" : true,
+- "Correct_Hold_Violation" : true,
+- "DONE" : true,
+- "DOWNLOAD_SPEED" : "210/3",
+- "Disable_Insert_Pad" : false,
+- "ENABLE_CTP" : false,
+- "ENABLE_MERGE_MODE" : false,
+- "ENCRYPTION_KEY" : false,
+- "ENCRYPTION_KEY_TEXT" : "00000000000000000000000000000000",
+- "ERROR_DECTION_AND_CORRECTION" : false,
+- "ERROR_DECTION_ONLY" : false,
+- "ERROR_INJECTION" : false,
+- "EXTERNAL_MASTER_CONFIG_CLOCK" : false,
+- "Enable_DSRM" : false,
+- "FORMAT" : "binary",
+- "FREQUENCY_DIVIDER" : "1",
+- "Generate_Constraint_File_of_Ports" : false,
+- "Generate_IBIS_File" : false,
+- "Generate_Plain_Text_Timing_Report" : false,
+- "Generate_Post_PNR_Simulation_Model_File" : false,
+- "Generate_Post_Place_File" : false,
+- "Generate_SDF_File" : false,
+- "Generate_VHDL_Post_PNR_Simulation_Model_File" : false,
+- "Global_Freq" : "default",
+- "GwSyn_Loop_Limit" : 2000,
+- "HOTBOOT" : false,
+- "I2C" : false,
+- "I2C_SLAVE_ADDR" : "00",
+- "INCREMENTAL_PLACE_AND_ROUTING" : "0",
+- "INCREMENTAL_PLACE_ONLY" : "0",
+- "IncludePath" : [
+-
+- ],
+- "Incremental_Compile" : "",
+- "Initialize_Primitives" : false,
+- "JTAG" : true,
+- "MODE_IO" : false,
+- "MSPI" : true,
+- "MSPI_JUMP" : false,
+- "MULTIBOOT_ADDRESS_WIDTH" : "24",
+- "MULTIBOOT_MODE" : "Single",
+- "MULTIBOOT_SPI_FLASH_ADDRESS" : "000000",
+- "MULTIJUMP_ADDRESS_WIDTH" : "24",
+- "MULTIJUMP_MODE" : "Single",
+- "MULTIJUMP_SPI_FLASH_ADDRESS" : "000000",
+- "Multi_Boot" : false,
+- "OUTPUT_BASE_NAME" : "nanomig_tc138k",
+- "POWER_ON_RESET_MONITOR" : true,
+- "PRINT_BSRAM_MODE" : "Default Mode",
+- "PRINT_BSRAM_VALUE" : true,
+- "PROGRAM_DONE_BYPASS" : false,
+- "PlaceInRegToIob" : true,
+- "PlaceIoRegToIob" : true,
+- "PlaceOutRegToIob" : true,
+- "Place_Option" : "3",
+- "Process_Configuration_Verion" : "1.0",
+- "Promote_Physical_Constraint_Warning_to_Error" : true,
+- "READY" : true,
+- "RECONFIG_N" : false,
+- "Ram_RW_Check" : false,
+- "Replicate_Resources" : false,
+- "Report_Auto-Placed_Io_Information" : false,
+- "Route_Maxfan" : 23,
+- "Route_Option" : "2",
+- "Run_Timing_Driven" : true,
+- "SECURE_MODE" : false,
+- "SECURITY_BIT" : true,
+- "SEU_HANDLER" : false,
+- "SEU_HANDLER_CHECKSUM" : false,
+- "SEU_HANDLER_MODE" : "auto",
+- "SSPI" : true,
+- "STOP_SEU_HANDLER" : false,
+- "SerDes_retiming" : false,
+- "Show_All_Warnings" : false,
+- "Synthesize_tool" : "GowinSyn",
+- "TclPre" : "scripts/update_xml_tang_console138k.tcl",
+- "TopModule" : "top",
+- "USERCODE" : "00000002",
+- "Unused_Pin" : "As_input_tri_stated_with_pull_up",
+- "VCC" : "0.9",
+- "VCCAUX" : "3.3",
+- "VCCX" : "1.8",
+- "VHDL_Standard" : "VHDL_Std_1993",
+- "Verilog_Standard" : "Vlg_Std_Sysv2017",
+- "WAKE_UP" : "0",
+- "show_all_warnings" : true,
+- "turn_off_bg" : false
++    "BACKGROUND_PROGRAMMING": "off",
++    "COMPRESS": false,
++    "CPU": true,
++    "CRC_CHECK": true,
++    "Clock_Route_Order": 0,
++    "Co-Place_IO_Registers": false,
++    "Convert_SDP32_36_to_SDP16_18": true,
++    "Correct_Hold_Violation": true,
++    "DONE": true,
++    "DOWNLOAD_SPEED": "210/3",
++    "DSP_Style": "Auto",
++    "Disable_Insert_Pad": false,
++    "ENABLE_CTP": false,
++    "ENABLE_MERGE_MODE": false,
++    "ENCRYPTION_KEY": false,
++    "ENCRYPTION_KEY_TEXT": "00000000000000000000000000000000",
++    "ERROR_DECTION_AND_CORRECTION": false,
++    "ERROR_DECTION_ONLY": false,
++    "ERROR_INJECTION": false,
++    "EXTERNAL_MASTER_CONFIG_CLOCK": false,
++    "Enable_DSRM": false,
++    "FORMAT": "binary",
++    "FREQUENCY_DIVIDER": "1",
++    "Generate_Constraint_File_of_Ports": false,
++    "Generate_IBIS_File": false,
++    "Generate_Plain_Text_Timing_Report": false,
++    "Generate_Post_PNR_Simulation_Model_File": false,
++    "Generate_Post_Place_File": false,
++    "Generate_SDF_File": false,
++    "Generate_VHDL_Post_PNR_Simulation_Model_File": false,
++    "Global_Freq": "default",
++    "GwSyn_Loop_Limit": 2000,
++    "HOTBOOT": false,
++    "I2C": false,
++    "I2C_SLAVE_ADDR": "00",
++    "INCREMENTAL_PLACE_AND_ROUTING": "0",
++    "INCREMENTAL_PLACE_ONLY": "0",
++    "IncludePath": [
++    ],
++    "Incremental_Compile": "",
++    "Initialize_Primitives": false,
++    "JTAG": true,
++    "MODE_IO": false,
++    "MSPI": true,
++    "MSPI_JUMP": false,
++    "MULTIBOOT_ADDRESS_WIDTH": "24",
++    "MULTIBOOT_MODE": "Single",
++    "MULTIBOOT_SPI_FLASH_ADDRESS": "000000",
++    "MULTIJUMP_ADDRESS_WIDTH": "24",
++    "MULTIJUMP_MODE": "Single",
++    "MULTIJUMP_SPI_FLASH_ADDRESS": "000000",
++    "Map_Option": "1",
++    "Max_Fanout": 1000,
++    "Multi_Boot": false,
++    "Netlist_Hierarchy": true,
++    "OUTPUT_BASE_NAME": "nanomig_tc138k",
++    "Optimization_Goal": "Auto",
++    "POWER_ON_RESET_MONITOR": true,
++    "PRINT_BSRAM_MODE": "Default Mode",
++    "PRINT_BSRAM_VALUE": true,
++    "PROGRAM_DONE_BYPASS": false,
++    "PlaceInRegToIob": true,
++    "PlaceIoRegToIob": true,
++    "PlaceOutRegToIob": true,
++    "Place_Option": "3",
++    "Process_Configuration_Verion": "1.0",
++    "Promote_Physical_Constraint_Warning_to_Error": true,
++    "RAM_Style": "Auto",
++    "READY": true,
++    "RECONFIG_N": false,
++    "ROM_Style": "Auto",
++    "Ram_RW_Check": false,
++    "Replicate_Resources": false,
++    "Report_Auto-Placed_Io_Information": false,
++    "Route_Maxfan": 23,
++    "Route_Option": "2",
++    "Run_Timing_Driven": true,
++    "SECURE_MODE": false,
++    "SECURITY_BIT": true,
++    "SEU_HANDLER": false,
++    "SEU_HANDLER_CHECKSUM": false,
++    "SEU_HANDLER_MODE": "auto",
++    "SSPI": true,
++    "STOP_SEU_HANDLER": false,
++    "SerDes_retiming": false,
++    "Shift_Registers_Style": "Auto",
++    "Show_All_Warnings": false,
++    "Synthesize_tool": "GowinSyn",
++    "TclPre": "scripts/update_xml_tang_console138k.tcl",
++    "TopModule": "top",
++    "USERCODE": "00000002",
++    "Unused_Pin": "As_input_tri_stated_with_pull_up",
++    "VCC": "0.9",
++    "VCCAUX": "3.3",
++    "VCCX": "1.8",
++    "VHDL_Standard": "VHDL_Std_1993",
++    "Verilog_Standard": "Vlg_Std_Sysv2017",
++    "WAKE_UP": "0",
++    "show_all_warnings": true,
++    "turn_off_bg": false
+ }
+diff --git a/src/minimig-aga/minimig.v b/src/minimig-aga/minimig.v
+index abfd2fa..5313840 100644
+--- a/src/minimig-aga/minimig.v
++++ b/src/minimig-aga/minimig.v
+@@ -146,7 +146,9 @@
+ // SB:
+ // 2012-03-23 - fixed sprite enable signal (coppermaster demo)
+ 
+-module minimig
++module minimig #(
++	parameter EXTERNAL_RAM_READ_WAIT = 1'b0
++)
+ (
+ 	//m68k pins
+ 	input [23:1]  cpu_address, // m68k address bus
+@@ -660,6 +662,25 @@ ciab CIAB1
+ 	.portb_out({_motor,_sel3,_sel2,_sel1,_sel0,side,direc,_step})
+ );
+ 
++// The original asynchronous SRAM meets the first fixed DTACK point. Slower
++// board-local memory backends can request one additional 7 MHz read cycle.
++// ROM reads are excluded because the Console 138K serves Kickstart from BSRAM.
++reg external_ram_read_waited;
++// rd_cyc remains asserted at the CCK phase where the bridge samples nrdy;
++// ram_rd is intentionally deasserted in that phase and cannot qualify a wait.
++wire cpu_external_ram_read = rd_cyc &&
++                             ((|sel_chip) || (|sel_slow));
++wire external_ram_nrdy = EXTERNAL_RAM_READ_WAIT &&
++                         cpu_external_ram_read &&
++                         !external_ram_read_waited;
++
++always @(posedge clk) begin
++	if(reset || !cpu_external_ram_read)
++		external_ram_read_waited <= 1'b0;
++	else if(clk7n_en && cck && !(dbr && dbs))
++		external_ram_read_waited <= 1'b1;
++end
++
+ //instantiate cpu bridge
+ minimig_m68k_bridge CPU1 
+ (
+@@ -675,9 +696,9 @@ minimig_m68k_bridge CPU1
+ 	.dbs(dbs),
+ 	.xbs(xbs),
+ `ifndef DISABLE_IDE
+-	.nrdy(gayle_nrdy & rd_cyc),
+-`else
+-	.nrdy(1'b0),
++	.nrdy((gayle_nrdy & rd_cyc) | external_ram_nrdy),
++`else
++	.nrdy(external_ram_nrdy),
+ `endif
+ 	.bls(bls),
+ 	.memory_config(memory_config[3:0]),
+diff --git a/src/misc/sdram.sv b/src/misc/sdram.sv
+index 872ea3b..87da2c1 100644
+--- a/src/misc/sdram.sv
++++ b/src/misc/sdram.sv
+@@ -32,7 +32,14 @@
+ // address map:  BA:--  RAS:21..9 CAS:8..0  no data mux
+ 
+ 
+-module sdram #(parameter DATA_WIDTH=16, RASCAS_DELAY=1, RAS_WIDTH=13, CAS_WIDTH=9) (
++module sdram #(
++	parameter DATA_WIDTH=16,
++	parameter RASCAS_DELAY=1,
++	parameter RAS_WIDTH=13,
++	parameter CAS_WIDTH=9,
++	parameter SYNC_DELAY=2,
++	parameter READ_LATCH_DELAY=0  // extra clocks before sd_data is latched
++) (
+ 	inout [DATA_WIDTH-1:0] sd_data, // 16/32 bit bidirectional data bus
+ 	output reg [RAS_WIDTH-1:0] sd_addr, // multiplexed address bus
+ 	output reg [(DATA_WIDTH/8)-1:0]  sd_dqm, // two/four byte masks
+@@ -63,10 +70,10 @@ module sdram #(parameter DATA_WIDTH=16, RASCAS_DELAY=1, RAS_WIDTH=13, CAS_WIDTH=
+ 	input		  p2_cs,   // cpu/chipset requests read/wrie
+ 	input		  p2_we,   // cpu/chipset requests write
+ 	output reg        p2_ack
+-);
++);
+ `ifndef LATTICE
+   `default_nettype none
+-`endif
++`endif
+ 
+ localparam BURST_LENGTH   = 3'b000; // 000=1, 001=2, 010=4, 011=8
+ localparam ACCESS_TYPE    = 1'b0;   // 0=sequential, 1=interleaved
+@@ -108,7 +115,7 @@ wire [31:0] p2_addr32 = { {(10+ADDR_BASE){1'b0}}, p2_addr[21:ADDR_BASE]};
+ // The state machine runs at 32Mhz synchronous to the sync signal.
+ localparam STATE_IDLE      = 4'd0;   // first state in cycle
+ localparam STATE_CMD_CONT  = STATE_IDLE + RASCAS_DELAY; // command can be continued
+-localparam STATE_READ      = STATE_CMD_CONT + CAS_LATENCY + 4'd1;
++localparam STATE_READ      = STATE_CMD_CONT + CAS_LATENCY + 4'd1 + READ_LATCH_DELAY;
+ localparam STATE_LAST      = 4'd6;  // last state in cycle
+    
+ // Cycle pattern:
+@@ -169,7 +176,7 @@ localparam PORT2=2'b01;
+ localparam PORTREFRESH=2'b10;
+ localparam PORTIDLE=2'b11;
+ reg [1:0] sdram_port;
+-localparam SYNCD = 2;
++localparam SYNCD = SYNC_DELAY;
+ 
+ always @(posedge clk) begin
+    reg [SYNCD:0] syncD;   
+diff --git a/src/nanomig.v b/src/nanomig.v
+index 21badef..cf09c31 100644
+--- a/src/nanomig.v
++++ b/src/nanomig.v
+@@ -8,7 +8,9 @@
+ // TODO:
+ // - check IDE head adressing heads[0] vs heads[drive]
+ 
+-module nanomig (
++module nanomig #(
++   parameter EXTERNAL_RAM_READ_WAIT = 1'b0
++) (
+    input	 clk_sys,
+    input	 reset,
+    input	 por,
+@@ -1179,7 +1181,9 @@ wire [15:0] ramdata_in_ext = int_rom_sel?romD:
+ wire [15:0] ramdata_in_ext = ramdata_in;
+ `endif
+ 
+-minimig minimig
++minimig #(
++	.EXTERNAL_RAM_READ_WAIT(EXTERNAL_RAM_READ_WAIT)
++) minimig
+ (
+ 	//m68k pins
+ 	.cpu_address  (chip_addr        ), // M68K address bus
+diff --git a/src/tang/console138k/gowin_pll/pll_142m_mod.v b/src/tang/console138k/gowin_pll/pll_142m_mod.v
+index 4a614bf..c48b176 100644
+--- a/src/tang/console138k/gowin_pll/pll_142m_mod.v
++++ b/src/tang/console138k/gowin_pll/pll_142m_mod.v
+@@ -120,8 +120,14 @@ defparam PLL_inst.CLKOUT0_PE_COARSE = 0;
+ defparam PLL_inst.CLKOUT0_PE_FINE = 0;
+ defparam PLL_inst.CLKOUT1_PE_COARSE = 0;
+ defparam PLL_inst.CLKOUT1_PE_FINE = 0;
+-defparam PLL_inst.CLKOUT2_PE_COARSE = 7;
+-defparam PLL_inst.CLKOUT2_PE_FINE = 4;
++// SDRAM clock phase (CLKOUT2, ODIV 10: one PE_COARSE step = 36 deg, one
++// PE_FINE step = 4.5 deg). With READ_LATCH_DELAY=1 the ramtest sweep shows
++// a huge clean region (everything except 81..158 deg). 216 deg sits well
++// inside it and gives the read capture a couple of nanoseconds more setup
++// than the stock 270 deg: the chip returns its data earlier while the
++// capture clock stays put.
++defparam PLL_inst.CLKOUT2_PE_COARSE = 6;
++defparam PLL_inst.CLKOUT2_PE_FINE = 0;
+ defparam PLL_inst.CLKOUT3_PE_COARSE = 5;
+ defparam PLL_inst.CLKOUT3_PE_FINE = 0;
+ defparam PLL_inst.CLKOUT4_PE_COARSE = 0;
+diff --git a/src/tang/console138k/nanomig.sdc b/src/tang/console138k/nanomig.sdc
+index bfa672d..fc21aa6 100644
+--- a/src/tang/console138k/nanomig.sdc
++++ b/src/tang/console138k/nanomig.sdc
+@@ -1,12 +1,27 @@
+-create_clock -name clk_osc -period 20 -waveform {0 10} [get_ports {clk}] -add
+-create_clock -name clk_companion_int -period 50 -waveform {0 25} [get_ports {spi_sclk}] -add
+-create_clock -name clk85 -period 11.684 -waveform {0 5.848} [get_pins {pll_hdmi/u_pll/PLL_inst/CLKOUT1}] -add
+-create_clock -name clk85_shift -period 11.684 -waveform {0 5.848} [get_pins {pll_hdmi/u_pll/PLL_inst/CLKOUT2}] -add
+-create_clock -name clk_flash -period 11.684 -waveform {0 5.848} [get_ports {mspi_clk}] -add
+-create_clock -name clk_hdmi -period 7 -waveform {0 3} [get_nets {clk_pixel_x5}] -add
+-create_clock -name i2s_clk -period 500 -waveform {0 3} [get_nets {i2s_clk}] -add
+-create_clock -name mcuclk -period 500 -waveform {0 3} [get_nets {mcu/n4_24}] -add
+-create_clock -name clk_audio -period 500 -waveform {0 3} [get_nets {clk_audio}] -add
+-create_generated_clock -name clk28 -source [get_pins {pll_hdmi/u_pll/PLL_inst/CLKOUT0}] -master_clock clk_hdmi -divide_by 5 [get_pins {clk_div_5/clkdiv_inst/CLKOUT}]
+-set_multicycle_path -from [get_clocks {clk28}] -to [get_clocks {clk85}]  -setup -start 2
+-set_multicycle_path -from [get_clocks {clk28}] -to [get_clocks {clk85}]  -hold -start 2
++create_clock -name clk_osc -period 20 -waveform {0 10} [get_ports {clk}] -add
++create_clock -name clk_companion_int -period 50 -waveform {0 25} [get_ports {spi_sclk}] -add
++create_clock -name clk85 -period 11.684 -waveform {0 5.848} [get_pins {pll_hdmi/u_pll/PLL_inst/CLKOUT1}] -add
++create_clock -name clk85_shift -period 11.684 -waveform {0 5.848} [get_pins {pll_hdmi/u_pll/PLL_inst/CLKOUT2}] -add
++create_clock -name clk_hdmi -period 7 -waveform {0 3} [get_nets {clk_pixel_x5}] -add
++create_clock -name mcuclk -period 500 -waveform {0 3} [get_nets {mcu/n4_24}] -add
++create_generated_clock -name clk28 -source [get_pins {pll_hdmi/u_pll/PLL_inst/CLKOUT0}] -master_clock clk_hdmi -divide_by 5 [get_pins {clk_div_5/clkdiv_inst/CLKOUT}]
++create_generated_clock -name i2s_clk -source [get_pins {clk_div_5/clkdiv_inst/CLKOUT}] -master_clock clk28 -divide_by 36 [get_nets {i2s_clk}]
++create_generated_clock -name clk_audio -source [get_pins {clk_div_5/clkdiv_inst/CLKOUT}] -master_clock clk28 -divide_by 590 [get_nets {clk_audio}]
++# clk28 and clk85 come from the same PLL, locked at exactly 1:3. The SDRAM
++# controller samples the sync strobe one 85 MHz clock after its 28 MHz launch
++# and the address one clock later, so every request signal must arrive within
++# a single 85 MHz period - a multicycle exception would allow P&R to build
++# routes the controller samples too late.
++set_max_delay -from [get_clocks {clk28}] -to [get_clocks {clk85}] 11
++# The read data is registered at 85 MHz 94 ns into the 141 ns bus slot and the
++# CPU bridge latches it at the 106 ns clk28 edge: bound the delivery instead
++# of false-pathing it, or P&R may route it slower than the 11.8 ns budget.
++set_max_delay -from [get_clocks {clk85}] -to [get_clocks {clk28}] 8
++# Only the quasi-static spi_ext flag still crosses from the oscillator domain.
++set_false_path -from [get_clocks {clk_osc}] -to [get_clocks {clk28}]
++set_false_path -from [get_clocks {clk_osc}] -to [get_clocks {mcuclk}]
++set_false_path -from [get_clocks {mcuclk}] -to [get_clocks {clk28}]
++set_false_path -from [get_clocks {clk28}] -to [get_clocks {mcuclk}]
++set_false_path -from [get_clocks {clk28}] -to [get_clocks {i2s_clk}]
++set_false_path -from [get_clocks {clk28}] -to [get_clocks {clk_audio}]
++set_false_path -from [get_clocks {clk_audio}] -to [get_clocks {clk28}]
+diff --git a/src/tang/console138k/top.sv b/src/tang/console138k/top.sv
+index 58118c8..051460d 100644
+--- a/src/tang/console138k/top.sv
++++ b/src/tang/console138k/top.sv
+@@ -2,12 +2,8 @@
+     top.sv - Minimig on tang console 138k toplevel
+ */ 
+ 
+-/* we need two copies in case of 256k kickroms
+-     openFPGALoader --external-flash -o 0x600000 kick13.rom
+-     openFPGALoader --external-flash -o 0x640000 kick13.rom
+-   or a single copy of e.g. a 512k diag rom
+-     openFPGALoader --external-flash -o 0x600000 DiagROM
+-*/
++/* The Console 138K project embeds one 256 KiB Kickstart image in BSRAM.
++   The boot copier mirrors it into NanoMig's 512 KiB SDRAM ROM window. */
+ 
+ // LED usage:
+ // RGB led1, CFG:  G = ready, R = power/sys_act, B = done
+@@ -124,15 +120,15 @@ assign leds[1] =  drv_leds[1] || drv_leds[0];
+     Phase: 0.0°
+   Output2:
+     Freq: 85.0 Mhz
+-    Phase: 216.0°
+-  Output2:
++    Phase: shifted, see CLKOUT2_PE_COARSE/PE_FINE in gowin_pll/pll_142m_mod.v
++  Output3:
+     Freq: 85.0 Mhz
+-    Phase: 
++    Phase: 180.0°
+ */
+ 
+-// 180° barely boots, crashes early
+-// 216° boots
+-// 252° boots, DiagROM reports some rom checksum errors
++// clkout2 drives the SDRAM clock pin phase-shifted. The shift is board and
++// routing dependent and is tuned in gowin_pll/pll_142m_mod.v; the stock
++// value failed SDRAM readback here (magenta boot state).
+ 
+ // Pixel clock if derived from 141 2/3 MHz
+ `define PIXEL_CLOCK 28333333
+@@ -144,13 +140,20 @@ wire pll_lock;
+ pll_142m pll_hdmi (
+     .clkout0(clk_pixel_x5),
+     .clkout1(clk_85m),
+-    .clkout2(clk_85m_shifted), // 216 deg phase shifted
++    .clkout2(clk_85m_shifted), // 270 deg phase shifted
+     .clkout3(), //mspi_clk),        // 180 deg phase shifted
+     .init_clk(clk),
+     .lock(pll_lock),
+     .clkin(clk)
+ );
+ 
++// The SDRAM and its boot logic run at 85 MHz from the same PLL as the 28 MHz
++// chipset clock: exactly 3x clk_28m and phase-locked to it, like the Tang
++// Console 60K port. The 50 MHz oscillator is unrelated to clk_28m (17/30
++// ratio), so clocking the SDRAM from it made the controller's sync edge
++// detector miss whole bus cycles; chip RAM then corrupted at runtime even
++// though the boot-time copy and readback passed.
++wire clk_sdram = clk_85m;
+ assign O_sdram_clk = clk_85m_shifted;
+ 
+ wire clk_pixel;
+@@ -195,6 +198,12 @@ wire	sys_jtagsel;
+ assign jtagseln = !(!pll_lock || spi_ext || bl616_jtagsel);
+ assign uart_ext_tx = bl616_tx;   // from BL616 to PMOD
+ 
++// V14 is also used as UART RX by the stock Tang Console firmware and may
++// remain high while no NanoMig companion firmware is installed. Keep that
++// signal for the JTAG mux above, but use the physical S0 button to hold the
++// NanoMig boot path in reset while programming the external flash.
++wire boot_hold = !reset_n;
++
+ // control signals generated by the user via the OSD
+ wire 	   osd_reset;   
+ wire [1:0] osd_chipmem;         // 0=512k, 1=1M, 2=1.5M, 3=2M
+@@ -214,11 +223,12 @@ wire [2:0] osd_volume;          // Mute=0, 1=25%, 2=50%, 3=75%, 4=100%
+ wire       osd_stereo_mix;      // 0=off, 1=on
+ 
+ wire       rom_done;
++reg        rom_signature_ok = 1'b0;
+ 
+ // generate a reset for some time after rom has been initialized
+ reg [15:0] reset_cnt;
+ always @(negedge clk_28m) begin
+-    if(bl616_jtagsel || !pll_lock || !rom_done || osd_reset || kbd_reset)
++    if(boot_hold || !pll_lock || !rom_done || !rom_signature_ok || osd_reset || kbd_reset)
+         reset_cnt <= 16'hffff;
+     else if(reset_cnt != 0)
+         reset_cnt = reset_cnt - 16'd1;
+@@ -237,7 +247,14 @@ wire spi_intn;
+ // intn and dout are outputs driven by the FPGA to the MCU
+ // din, ss and clk are inputs coming from the MCU
+ assign spi_dir = spi_io_dout;
+-assign spi_irqn = spi_intn;
++
++// U15 doubles as the stock BL616 firmware's USB-UART bridge. While the
++// SDRAM boot verification has failed, the pin carries the plain-text
++// failure report instead of the companion interrupt; a booted system
++// drives the normal companion signal.
++wire report_active;
++wire report_txd;
++assign spi_irqn = report_active ? report_txd : spi_intn;
+ 
+ assign pmod_companion_dout = spi_io_dout;
+ assign pmod_companion_intn = spi_intn;
+@@ -542,8 +559,6 @@ wire fastram_ready;
+ 
+ wire [15:0] sdram_dout;
+ 
+-assign ram_din = sdram_dout;
+-
+ // pack config values into minimig config
+ wire [5:0] chipset_config = { 1'b0,osd_chipset,osd_video_mode,1'b0 };
+ wire [7:0] memory_config = { 4'b0_000, osd_slowmem, osd_chipmem };   
+@@ -552,7 +567,14 @@ wire [3:0] floppy_config = { osd_floppy_drives, osd_floppy_wrprot, osd_floppy_tu
+ wire [3:0] video_config = { osd_video_filter, osd_video_scanlines };   
+ wire [5:0] ide_config = { 5'b00000, osd_ide_enable };   
+    
+-nanomig nanomig
++// EXTERNAL_RAM_READ_WAIT on: READ_LATCH_DELAY moves the SDRAM read data one
++// 85 MHz clock past the stock arrival, which misses the CPU bridge's first
++// fixed DTACK point (Kickstart then dies in its chip RAM test right after
++// its gray boot screens). The wait grants CPU chip/slow reads one extra
++// 7 MHz cycle; chipset DMA samples later in the bus slot and is unaffected.
++nanomig #(
++ .EXTERNAL_RAM_READ_WAIT(1'b1)
++) nanomig
+ (
+  .clk_sys(clk_28m),
+  .reset(cpu_reset),
+@@ -567,6 +589,7 @@ nanomig nanomig
+  
+  .memory_config(memory_config),
+  .fastram_config(fastram_config),
++ .cpu_config(2'b00),
+  .chipset_config(chipset_config),
+  .floppy_config(floppy_config),
+  .video_config(video_config),
+@@ -628,15 +651,16 @@ nanomig nanomig
+  .fastram_ready(fastram_ready)
+ );
+ 
+-wire           flash_ready;  
+-wire           mem_ready = sdram_ready && flash_ready && pll_lock;  
++// Kickstart is embedded in block ROM for this board. External SPI flash is
++// only needed for persistent FPGA configuration, not for the Amiga ROM.
++wire           mem_ready = sdram_ready && pll_lock;
+    
+ reg            start_rom_copy;
+ reg            mem_ready_D;
+ 
+ // geneate a start_rom_copy signal once flash and SDRAM are initialized
+ always @(posedge clk_28m or negedge pll_lock) begin
+- if(!pll_lock || bl616_jtagsel) begin
++ if(!pll_lock || boot_hold) begin
+       start_rom_copy <= 1'b0;
+       mem_ready_D <= 1'b0;
+          
+@@ -649,46 +673,114 @@ always @(posedge clk_28m or negedge pll_lock) begin
+    end
+ end
+ 
+-/* -------------- state machine copying data from flash to sdram ---------------- */
++/* -------- state machine copying embedded block ROM to external SDRAM ---------- */
+ reg [22:0]  flash_addr;  
+ wire [15:0] flash_dout;
+ reg [15:0]  flash_doutD;
+-reg		    flash_cs;  
+ reg [31:0]  word_count;
+ reg [4:0]   state;
+-wire        flash_data_strobe;
+-wire        flash_busy;   
+-
+-assign		rom_done = (word_count == 0);
+ 
+-reg [21:0]  flash_ram_addr;   
++// Registered: the combinational word_count comparator fed every SDRAM boot
++// mux and was the worst setup violation at 85 MHz. One cycle of delay still
++// switches the boot mux before the lookahead word's write phase at state 3.
++reg         rom_copy_done;
++wire        rom_verify_done;
++wire        rom_verify_pass;
++wire [7:0]  rom_verify_fail_map;
++wire [127:0] rom_verify_got;
++wire        verify_ram_access;
++wire [21:0] verify_ram_addr;
++
++assign      rom_done = rom_verify_done && rom_verify_pass;
++
++// Keep the verified embedded Kickstart as the CPU-visible ROM. The BSRAM
++// answers a ROM fetch faster than the SDRAM round trip and is immune to
++// SDRAM tuning, while the SDRAM copy/readback remains the boot integrity
++// test. SDRAM still carries all writable Amiga memory.
++wire        runtime_rom_address = rom_done &&
++                  ((ram_a[22:18] == 5'd30) || (ram_a[22:18] == 5'd31));
++wire        runtime_rom_read = runtime_rom_address && !ram_oe_n;
++wire [16:0] kickstart_addr = runtime_rom_address ? ram_a[17:1] :
++                                                   flash_addr[16:0];
++wire [15:0] runtime_kick_dout =
++                  (kickstart_addr == 17'h000aa && flash_dout == 16'h6678) ?
++                  16'h6078 : flash_dout;
++
++assign ram_din = runtime_rom_read ? runtime_kick_dout : sdram_dout;
++
++reg [21:0]  flash_ram_addr;
+ reg         flash_ram_write;
+-reg [5:0]   flash_cnt;  
++reg [5:0]   flash_cnt;
++reg [3:0]   boot_ref_gap;
++reg         boot_ref_slot;
++reg         boot_ref;
++
++kickstart_bram kickstart_rom (
++    .clk  ( clk_sdram        ),
++    .addr ( kickstart_addr    ),
++    .data ( flash_dout       )
++);
+ 
+-always @(posedge clk_85m or negedge mem_ready) begin
+-  if(!mem_ready || bl616_jtagsel) begin
+-       flash_addr <= 23'h300000;          // 6MB flash offset (word address),
+-	                                      // flash driver this results in the flash address being 600000
++always @(posedge clk_sdram or negedge mem_ready) begin
++  if(!mem_ready || boot_hold) begin
++       flash_addr <= 23'h300000;          // logical word address used by ROM patch checks
+        flash_ram_addr <= { 4'hf, 18'h0 }; // write into 512k sdram segment used for kick rom
+-       word_count <= 22'h40001;           // 512k bytes ROM data = 256k words
++       // One lookahead read is required because rom_copy_done switches the
++       // SDRAM boot mux before the current word's delayed write phase. This produces
++       // exactly 0x40000 SDRAM writes; the lookahead word is never written.
++       word_count <= 22'h40001;
++       rom_copy_done <= 1'b0;
++       rom_signature_ok <= 1'b1;
+ 
+        state <= 5'h0;
+        flash_ram_write <= 1'b0;
+-       flash_cs <= 1'b0;        
+        flash_cnt <= 6'd0;
++       boot_ref_gap <= 4'd0;
++       boot_ref_slot <= 1'b0;
++       boot_ref <= 1'b0;
+     end else begin
+-        if((start_rom_copy || state == 23) && (word_count != 0)) begin
+-            flash_cs <= 1'b1;
+-            flash_cnt <= 6'd45; // >= 45 @ 85MHz
++        rom_copy_done <= (word_count == 0);
++
++        // Refresh the SDRAM every 16 copied words. The auto-refresh slot sits
++        // in states 25..28 where the current word's SDRAM write has long
++        // finished, and the next block-ROM fetch is postponed from state 23
++        // to 31 so the controller's refresh cycle completes before the next
++        // write starts. Without this the whole 78 ms copy ran unrefreshed and
++        // the earliest rows decayed before the readback verification: zeroed
++        // reset vectors, single flipped bits in middle-aged words, and only
++        // the last written words intact.
++        if(state == 22) begin
++            boot_ref_slot <= (boot_ref_gap == 4'd15);
++            boot_ref_gap  <= boot_ref_gap + 4'd1;
++        end
++        if(state == 24 && boot_ref_slot) boot_ref <= 1'b1;
++        if(state == 28) boot_ref <= 1'b0;
++        if(state == 31) boot_ref_slot <= 1'b0;
++
++        if((start_rom_copy ||
++            (state == 23 && !boot_ref_slot) ||
++            (state == 31 &&  boot_ref_slot)) && (word_count != 0)) begin
++            flash_cnt <= 6'd3; // sampling delay; the 3-stage block-ROM
++                               // pipeline refills during the ~24-cycle loop
+         end else begin
+             if(flash_cnt != 0) flash_cnt <= flash_cnt - 6'd1;
+-            if(flash_busy)     flash_cs <= 1'b0;
+ 
+-            // ... static timing with fixed counter
++            // Fixed latency for the synchronous block-ROM output.
+             if(flash_cnt == 6'd1) begin
+                state <= 1;
+                flash_addr <= flash_addr + 23'd1;
+                word_count <= word_count - 22'd1;
++
++               // Validate the reset-vector prefix in both mirrored 256 KiB
++               // Kickstart halves while copying them into SDRAM.
++               if((flash_addr == 23'h300000 || flash_addr == 23'h320000) && flash_dout != 16'h1111)
++                 rom_signature_ok <= 1'b0;
++               if((flash_addr == 23'h300001 || flash_addr == 23'h320001) && flash_dout != 16'h4ef9)
++                 rom_signature_ok <= 1'b0;
++               if((flash_addr == 23'h300002 || flash_addr == 23'h320002) && flash_dout != 16'h00fc)
++                 rom_signature_ok <= 1'b0;
++               if((flash_addr == 23'h300003 || flash_addr == 23'h320003) && flash_dout != 16'h00d2)
++                 rom_signature_ok <= 1'b0;
+ 			   
+                if ((flash_addr == 23'h3000aa || flash_addr == 23'h3200aa) && flash_dout == 16'h6678)
+ 				 // transform bne.b to bra.b in Kickstart ROM 1.2/1.3 @ $f80154 (mirror) and $fc0154
+@@ -702,14 +794,43 @@ always @(posedge clk_85m or negedge mem_ready) begin
+             end
+         end
+ 
+-        // advance ram write state
+-        if(state != 0)  state <= state + 5'd1;
++        // Advance the SDRAM write phase unless a new block-ROM word was
++        // latched above. In that cycle state <= 1 must retain priority.
++        if(state != 0 && flash_cnt != 6'd1)
++          state <= state + 5'd1;
+         if(state == 3)  flash_ram_write <= 1'b1;
+         if(state == 18) flash_ram_write <= 1'b0;
+         if(state == 21) flash_ram_addr <= flash_ram_addr + 22'd1;
+     end
+ end
+ 
++// Keep the NanoMig bus in reset until selected words from both mirrored ROM
++// halves have been read back successfully through the real SDRAM controller.
++sdram_boot_verify boot_verify (
++    .clk        ( clk_sdram                        ),
++    .reset_n    ( mem_ready && !boot_hold          ),
++    .start      ( rom_copy_done && (state == 5'd0) ),
++    .ram_dout   ( sdram_dout                       ),
++    .ram_access ( verify_ram_access                 ),
++    .ram_addr   ( verify_ram_addr                   ),
++    .done       ( rom_verify_done                   ),
++    .pass       ( rom_verify_pass                   ),
++    .fail_map   ( rom_verify_fail_map               ),
++    .got_flat   ( rom_verify_got                    )
++);
++
++// Plain-text readback report on U15 whenever the verification failed.
++assign report_active = rom_verify_done && !rom_verify_pass;
++
++amiga_boot_report boot_report (
++    .clk      ( clk_sdram           ),
++    .reset_n  ( pll_lock            ),
++    .active   ( report_active       ),
++    .fail_map ( rom_verify_fail_map ),
++    .got_flat ( rom_verify_got      ),
++    .uart_tx  ( report_txd          )
++);
++
+ // ----------------------------- SDRAM ---------------------------------
+ 
+ // there's a total of 16 sdram segments of 512kBytes. The last
+@@ -723,19 +844,35 @@ always @(posedge clk_28m)
+ 
+ wire        sdram_access  = (!ram_oe_n || !ram_we_n);  
+ wire	    sdram_rw      = !ram_we_n;
++wire        boot_ram_access = rom_copy_done ? verify_ram_access : flash_ram_write;
++wire [21:0] boot_ram_addr   = rom_copy_done ? verify_ram_addr   : flash_ram_addr;
+    
+-wire		sdram_cs      = rom_done?sdram_access:flash_ram_write;
++wire		sdram_cs      = rom_done?sdram_access:(boot_ram_access || boot_ref);
+ 
+-wire        sdram_sync    = rom_done?!cyc:flash_ram_write;
+-   
+-wire		sdram_refresh = rom_done?ram_refresh:1'b0;
++wire        sdram_sync    = rom_done?!cyc:(boot_ram_access || boot_ref);
++
++wire		sdram_refresh = rom_done?ram_refresh:boot_ref;
+    
+-wire [21:0] sdram_addr    = rom_done?ram_a[22:1]:flash_ram_addr;
++wire [21:0] sdram_addr    = rom_done?ram_a[22:1]:boot_ram_addr;
+ wire [15:0] sdram_din     = rom_done?ram_dout:flash_doutD;
+ wire [1:0]  sdram_be      = rom_done?ram_be:2'b00;
+-wire		sdram_we      = rom_done?sdram_rw:flash_ram_write; 
+-
+-sdram sdram (
++wire		sdram_we      = rom_done?sdram_rw:(!rom_copy_done && flash_ram_write);
++
++// RASCAS_DELAY 2: the stock single cycle puts ACTIVE and READ/WRITE only
++// 11.7 ns apart at 85 MHz, below the 15 ns tRCD of common TangSDRAM chips
++// (the 50 MHz revision met tRCD with 20 ns, which is why its copy passed).
++// SYNC_DELAY 1 starts the cycle one clock earlier so the read data still
++// returns at the same time as with the upstream 1/2 combination.
++// READ_LATCH_DELAY 1: with this build's input routing the chip's CL2 data
++// reaches the fabric just after the stock latch point; the readback then
++// captured the floating bus still holding the previous read's word. One
++// extra clock puts the latch safely inside the data window at the stock
++// 270 degree SDRAM clock phase.
++sdram #(
++	.RASCAS_DELAY     ( 2 ),
++	.SYNC_DELAY       ( 1 ),
++	.READ_LATCH_DELAY ( 1 )
++) sdram (
+ 	.sd_data    ( IO_sdram_dq   ), // 32 bit bidirectional data bus
+ 	.sd_addr    ( O_sdram_addr  ), // 11 bit multiplexed address bus
+ 	.sd_dqm     ( O_sdram_dqm   ), // two byte masks
+@@ -746,7 +883,7 @@ sdram sdram (
+ 	.sd_cas     ( O_sdram_cas_n ), // columns address select
+ 
+ 	// cpu/chipset interface
+-	.clk        ( clk_85m       ), // sdram is accessed at 85MHz
++	.clk        ( clk_sdram     ), // sdram is accessed at 85MHz, 3x clk_28m
+ 	.reset_n    ( pll_lock      ), // init signal after FPGA config to initialize RAM
+ 
+ 	.ready      ( sdram_ready   ), // ram is ready and has been initialized
+@@ -768,25 +905,14 @@ sdram sdram (
+ 	.p2_ack        ( fastram_ready   )
+ );
+ 
+-// run the flash a 85MHz. This is only used at power-up to copy kickstart
+-// from flash to sdram
+-assign mspi_clk = clk_85m;
+-flash #(.READ_DELAY(1)) flash (
+-    .clk       ( clk_85m     ),
+-    .resetn    ( !(!pll_lock || bl616_jtagsel) ),
+-    .ready     ( flash_ready ),
+-
+-    .address   ( flash_addr  ),
+-    .cs        ( flash_cs    ),
+-    .dout      ( flash_dout  ),
+-	.busy      ( flash_busy  ),
+-
+-    .mspi_cs   ( mspi_cs     ),
+-    .mspi_di   ( mspi_di     ),
+-    .mspi_hold ( mspi_hold   ),
+-    .mspi_wp   ( mspi_wp     ),
+-    .mspi_do   ( mspi_do     )
+-);
++// Keep the configuration flash deselected after FPGA startup. S0 releases
++// the pins completely when the user wants to program a persistent bitstream.
++assign mspi_cs   = boot_hold ? 1'bz : 1'b1;
++assign mspi_clk  = boot_hold ? 1'bz : 1'b0;
++assign mspi_di   = 1'bz;
++assign mspi_hold = 1'bz;
++assign mspi_wp   = 1'bz;
++assign mspi_do   = 1'bz;
+ 
+ /* -------------------- LCD video and audio -------------------- */
+ 
+@@ -965,10 +1091,60 @@ end
+ wire [2:0] tmds;
+ wire tmds_clock;
+ 
++// Give the HDMI timing generator a deterministic startup reset after FPGA
++// configuration, before the first complete Amiga video frame.
++reg [4:0] hdmi_startup_count = 5'd0;
++always @(posedge clk_pixel)
++  if(!hdmi_startup_count[4])
++    hdmi_startup_count <= hdmi_startup_count + 5'd1;
++
++wire hdmi_startup_reset = !hdmi_startup_count[4];
++wire hdmi_reset = hdmi_startup_reset || vreset;
++
++wire [23:0] amiga_rgb = { video_red, 2'b00, video_green, 2'b00, video_blue, 2'b00 };
++
++// Boot-state diagnostic colors on HDMI until the Amiga core is released:
++// red     - SDRAM initialization pending
++// yellow  - Kickstart copy to SDRAM running
++// orange  - embedded Kickstart signature invalid
++// blue    - SDRAM readback verification running
++// cyan    - post-copy CPU reset delay
++// All flags are quasi-static and covered by the clk85->clk28 false path.
++
++// On readback failure the screen steps through the eight verify samples,
++// about 0.7 s each, framed by a white separator: green = read back ok,
++// red = wrong. Sample order: 3C0000/1111, 3C0001/4EF9, 3C0002/00FC,
++// 3C0003/00D2, 3E0000/1111 (mirror), 3E0001/4EF9 (mirror),
++// 3C00AA/6078 (patched), 3FFFFF/001F (last word).
++reg [24:0] fail_seq_cnt = 25'd0;
++reg [3:0]  fail_seq_idx = 4'd0;   // 0 = white separator, 1..8 = samples 0..7
++always @(posedge clk_pixel) begin
++    if(fail_seq_cnt == 25'd19999999) begin
++        fail_seq_cnt <= 25'd0;
++        fail_seq_idx <= (fail_seq_idx == 4'd8) ? 4'd0 : fail_seq_idx + 4'd1;
++    end else
++        fail_seq_cnt <= fail_seq_cnt + 25'd1;
++end
++
++wire [23:0] fail_rgb =
++    (fail_seq_idx == 4'd0)                  ? 24'hffffff :
++    rom_verify_fail_map[fail_seq_idx - 4'd1] ? 24'hff0000 :
++                                              24'h00ff00;
++
++wire [23:0] hdmi_rgb =
++    !sdram_ready                          ? 24'hff0000 :
++    !rom_copy_done                        ? 24'hffff00 :
++    !rom_signature_ok                     ? 24'hff8000 :
++    (rom_verify_done && !rom_verify_pass) ? fail_rgb :
++    !rom_done                             ? 24'h0000ff :
++    cpu_reset                             ? 24'h00ffff :
++                                            amiga_rgb;
++
+ hdmi #(
+     .AUDIO_RATE(48000), .AUDIO_BIT_WIDTH(16),
+     .VENDOR_NAME( { "MiSTle", 16'd0} ),
+-    .PRODUCT_DESCRIPTION( {"Nanomig", 72'd0} )
++    .PRODUCT_DESCRIPTION( {"Nanomig", 72'd0} ),
++    .SYNC_SERIALIZER_RESET(1'b1)
+ ) hdmi(
+   .clk_pixel_x5(clk_pixel_x5),
+   .clk_pixel(clk_pixel),
+@@ -981,9 +1157,9 @@ hdmi #(
+   .short_frame ( short_frame ),
+   .screen ( osd_video_screen ),
+   .interlace(interlace),
+-  .reset(vreset),    // signal to synchronize HDMI
++  .reset(hdmi_reset),
+ 
+-  .rgb( { video_red, 2'b00, video_green, 2'b00, video_blue, 2'b00 } )
++  .rgb(hdmi_rgb)
+ );
+ 
+ // differential output

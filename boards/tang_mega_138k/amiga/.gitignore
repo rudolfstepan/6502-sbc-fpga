@@ -1,0 +1,8 @@
+generated/
+project/amiga_xml.hex
+project/kickstart13_words.hex
+project/*.user
+project/impl/
+sim/fake_kick13.hex
+sim/sdram_under_test.sv
+sim/*.vvp
