@@ -1,11 +1,11 @@
--- PS/2 keyboard controller — drop-in replacement for usb_hid_host.
+-- PS/2 keyboard controller - drop-in replacement for usb_hid_host.
 --
 -- Directly receives PS/2 clock and data from a PS/2 keyboard connector.
 -- Pins need external or FPGA-internal pull-ups (active-low, open-collector).
 --
 -- Register map (same as usb_hid_host, 4 registers, directly bus-mapped):
---   +0  STATUS  R   [7]=connected [0]=key_ready
---   +1  KEY     R   PS/2 scan code (Set 2 make code); read clears key_ready
+--   +0  STATUS  R   [7]=connected [2]=extended [1]=release [0]=key_ready
+--   +1  KEY     R   PS/2 scan code Set 2 event; read clears key_ready
 --   +2  MODIF   R   modifier byte [0]=LCtrl [1]=LShift [2]=LAlt
 --                                  [4]=RCtrl [5]=RShift [6]=RAlt
 --   +3  ASCII   R   ASCII translation; read clears key_ready
@@ -67,6 +67,8 @@ architecture rtl of ps2_keyboard is
   signal scancode_r : std_logic_vector(7 downto 0) := (others => '0');
   signal ascii_r    : std_logic_vector(7 downto 0) := (others => '0');
   signal key_ready  : std_logic := '0';
+  signal event_break : std_logic := '0';
+  signal event_ext   : std_logic := '0';
   signal key_ev_tog : std_logic := '0';
 
   -- Activity detector: connected if PS/2 clock toggled recently
@@ -236,7 +238,7 @@ architecture rtl of ps2_keyboard is
   -- Set 2 scan codes are positional and identical to the US table; only the
   -- produced characters differ.  AltGr (right Alt, modifier bit 6) selects the
   -- third level used for @ { [ ] } \ ~ | on a German layout.  Umlauts use
-  -- Latin-1 code points (ä=E4 ö=F6 ü=FC Ä=C4 Ö=D6 Ü=DC ß=DF), which the 256-entry
+  -- Latin-1 code points (ae=E4 oe=F6 ue=FC AE=C4 OE=D6 UE=DC ss=DF), which the 256-entry
   -- char ROM provides glyphs for.  Characters with no glyph (EUR, paragraph,
   -- degree, micro, acute accent) are returned as 0x00.
   function sc2_to_ascii_de(sc  : std_logic_vector(7 downto 0);
@@ -293,7 +295,7 @@ architecture rtl of ps2_keyboard is
         when 16#3E# => c := x"5B"; -- AltGr+8 = [
         when 16#46# => c := x"5D"; -- AltGr+9 = ]
         when 16#45# => c := x"7D"; -- AltGr+0 = }
-        when 16#4E# => c := x"5C"; -- AltGr+ß = backslash
+        when 16#4E# => c := x"5C"; -- AltGr+ss = backslash
         when 16#5B# => c := x"7E"; -- AltGr++ = ~
         when 16#61# => c := x"7C"; -- AltGr+< = |
         when others => c := x"00"; -- EUR, micro, etc. have no glyph
@@ -341,15 +343,15 @@ architecture rtl of ps2_keyboard is
         when 16#3E# => c := x"38"; -- 8
         when 16#46# => c := x"39"; -- 9
         when 16#45# => c := x"30"; -- 0
-        when 16#4E# => c := x"DF"; -- ß
+        when 16#4E# => c := x"DF"; -- German sharp s
         when 16#55# => c := x"00"; -- acute accent (dead key) -> none
         -- top letter row extras
-        when 16#54# => c := x"FC"; -- ü
+        when 16#54# => c := x"FC"; -- u umlaut
         when 16#5B# => c := x"2B"; -- +
         when 16#5D# => c := x"23"; -- #
         -- home row extras
-        when 16#4C# => c := x"F6"; -- ö
-        when 16#52# => c := x"E4"; -- ä
+        when 16#4C# => c := x"F6"; -- o umlaut
+        when 16#52# => c := x"E4"; -- a umlaut
         when 16#0E# => c := x"5E"; -- ^ (dead key, emitted directly)
         -- bottom row
         when 16#61# => c := x"3C"; -- < (102nd key)
@@ -395,7 +397,7 @@ architecture rtl of ps2_keyboard is
         -- shifted number row (German symbols)
         when 16#16# => c := x"21"; -- !
         when 16#1E# => c := x"22"; -- "
-        when 16#26# => c := x"00"; -- § (no glyph)
+        when 16#26# => c := x"00"; -- section sign (no glyph)
         when 16#25# => c := x"24"; -- $
         when 16#2E# => c := x"25"; -- %
         when 16#36# => c := x"26"; -- &
@@ -406,13 +408,13 @@ architecture rtl of ps2_keyboard is
         when 16#4E# => c := x"3F"; -- ?
         when 16#55# => c := x"60"; -- ` (grave accent)
         -- top letter row extras
-        when 16#54# => c := x"DC"; -- Ü
+        when 16#54# => c := x"DC"; -- U umlaut
         when 16#5B# => c := x"2A"; -- *
         when 16#5D# => c := x"27"; -- '
         -- home row extras
-        when 16#4C# => c := x"D6"; -- Ö
-        when 16#52# => c := x"C4"; -- Ä
-        when 16#0E# => c := x"00"; -- ° (no glyph)
+        when 16#4C# => c := x"D6"; -- O umlaut
+        when 16#52# => c := x"C4"; -- A umlaut
+        when 16#0E# => c := x"00"; -- degree sign (no glyph)
         -- bottom row
         when 16#61# => c := x"3E"; -- >
         when 16#41# => c := x"3B"; -- ;
@@ -537,6 +539,8 @@ begin
         scancode_r <= (others => '0');
         ascii_r    <= (others => '0');
         key_ready  <= '0';
+        event_break <= '0';
+        event_ext   <= '0';
         key_ev_tog <= '0';
       else
         if byte_rdy = '1' then
@@ -562,16 +566,19 @@ begin
               end case;
             end if;
 
-            -- On make (not break), latch scancode and ASCII.  On selected
-            -- break codes, discard a matching pending repeat immediately.
+            -- Publish every make and break code. Linux uses STATUS[2:1] to
+            -- distinguish extended and release events and can therefore keep
+            -- its input state exact, including standalone modifier changes.
+            scancode_r <= rx_byte;
+            event_break <= is_break;
+            event_ext <= is_ext;
             if is_break = '0' then
-              scancode_r <= rx_byte;
-              ascii_r    <= sc2_to_ascii_sel(rx_byte, modif_r, is_ext);
-              key_ready  <= '1';
-              key_ev_tog <= not key_ev_tog;
-            elsif break_clears_pending(rx_byte, is_ext, ascii_r) then
-              key_ready <= '0';
+              ascii_r <= sc2_to_ascii_sel(rx_byte, modif_r, is_ext);
+            else
+              ascii_r <= x"00";
             end if;
+            key_ready  <= '1';
+            key_ev_tog <= not key_ev_tog;
 
             is_break <= '0';
             is_ext   <= '0';
@@ -589,12 +596,13 @@ begin
   end process;
 
   -- Register read
-  process(cs, we, addr, connected, key_ready, scancode_r, modif_r, ascii_r)
+  process(cs, we, addr, connected, key_ready, event_ext, event_break,
+          scancode_r, modif_r, ascii_r)
   begin
     dout <= (others => '0');
     if cs = '1' and we = '0' then
       case addr is
-        when "00"   => dout <= connected & "000000" & key_ready;
+        when "00"   => dout <= connected & "0000" & event_ext & event_break & key_ready;
         when "01"   => dout <= scancode_r;
         when "10"   => dout <= modif_r;
         when others => dout <= ascii_r;

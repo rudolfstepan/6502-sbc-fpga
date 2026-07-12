@@ -1,0 +1,24 @@
+<?xml version="1" encoding="UTF-8"?>
+<!DOCTYPE gowin-fpga-project>
+<Project>
+    <Template>FPGA</Template>
+    <Version>5</Version>
+    <Device name="GW5AST-138C" pn="GW5AST-LV138PG484AC1/I0">gw5ast138c-007</Device>
+    <FileList>
+        <File path="src/usb20_host_controller/usb20_host_controller.v" type="file.verilog" enable="1"/>
+        <File path="src/usb2_0_softphy/usb2_0_softphy.v" type="file.verilog" enable="1"/>
+        <File path="../rtl/usb20_phy_pll.v" type="file.verilog" enable="1"/>
+        <File path="../rtl/tang138k_usb_hid_top.v" type="file.verilog" enable="1"/>
+        <File path="../constraints/tang138k_usb_hid.cst" type="file.cst" enable="1"/>
+        <File path="../constraints/tang138k_usb_hid.sdc" type="file.sdc" enable="1"/>
+    </FileList>
+    <Configuration>
+        <Option name="top_module" value="tang138k_usb_hid_top"/>
+        <Option name="output_base_name" value="tang138k_usb_hid"/>
+        <Option name="verilog_std" value="sysv2017"/>
+        <Option name="timing_driven" value="1"/>
+        <Option name="route_maxfan" value="23"/>
+        <Option name="use_cpu_as_gpio" value="1"/>
+        <Option name="use_sspi_as_gpio" value="1"/>
+    </Configuration>
+</Project>

@@ -11,8 +11,8 @@ module sys16_gorv32plus_top(
   output wire [3:0] led,
   input wire uart_rx,
   output wire uart_tx,
-  // Tang Console USB-A HID host (official Sipeed direct-GPIO pinout).
-  inout wire usb_dm, inout wire usb_dp,
+  // External PS/2 keyboard connector on spare 3.3-V GPIO header pins.
+  input wire ps2_clk, input wire ps2_data,
   // On-board 128Mbit NOR flash on the MSPI pins; boot code source.
   inout wire flash_cs_n, inout wire flash_clk,
   inout wire flash_mosi, inout wire flash_miso,
@@ -59,9 +59,9 @@ module sys16_gorv32plus_top(
   wire s_arready,s_arvalid,s_awready,s_awvalid,s_bready,s_bvalid,s_rlast,s_rready,s_rvalid,s_wlast,s_wready,s_wvalid;
   wire [31:0] fb_addr,fb_wdata,fb_rdata;wire [3:0] fb_be;wire fb_req,fb_we,fb_ready;
   wire hdmi_req,hdmi_ready; wire [31:0] hdmi_rdata;
-  wire usb_sel,usb_cs,usb_irq; wire [7:0] usb_dout;
-  wire usb_connected,usb_key_event,usb_polling; wire [7:0] usb_keycode,usb_modif,usb_ascii;
-  wire [3:0] usb_phase; wire usb_clk_12;
+  wire ps2_sel,ps2_cs,ps2_irq; wire [7:0] ps2_dout;
+  wire ps2_connected,ps2_key_event,ps2_polling; wire [7:0] ps2_keycode,ps2_modif,ps2_ascii;
+  wire [3:0] ps2_phase;
   wire cpu_uart_tx,probe_tx,probe_active,probe_done;
   reg uart_tx_r=1'b1;
   wire hdmi_pll_lock;
@@ -156,23 +156,19 @@ module sys16_gorv32plus_top(
   end
   assign uart_tx = uart_tx_r;
 
-  // Official Sipeed Tang Mega 138K low-speed USB HID host.  It is a tiny
-  // self-contained host (not a generic USB controller) and talks directly to
-  // the USB-A D+/D- pins at 1.5 Mbit/s.  Linux sees its four registers at
+  // PS/2 Set-2 keyboard receiver. Linux sees its four registers at
   // 0xE8800100 through the existing AXI extension window.
-  Gowin_USB_PLL usb_pll_i(.clkout0(usb_clk_12),.clkin(clk_50mhz));
-  assign usb_sel = (fb_addr[23:8] == 16'h8001);
-  assign usb_cs  = fb_req && usb_sel;
-  assign hdmi_req = fb_req && !usb_sel;
-  assign fb_ready = usb_sel ? fb_req : hdmi_ready;
-  assign fb_rdata = usb_sel ? {24'h000000,usb_dout} : hdmi_rdata;
-  usb_hid_host usb_hid_i(
-    .clk(clk_50mhz),.reset_n(resetn),.usb_clk(usb_clk_12),
-    .usb_dm(usb_dm),.usb_dp(usb_dp),.cs(usb_cs),.we(fb_we),
-    .addr(fb_addr[3:2]),.dout(usb_dout),.irq(usb_irq),
-    .diag_connected(usb_connected),.diag_keycode(usb_keycode),
-    .diag_modif(usb_modif),.diag_ascii(usb_ascii),.diag_phase(usb_phase),
-    .diag_key_event(usb_key_event),.diag_polling(usb_polling));
+  assign ps2_sel = (fb_addr[23:8] == 16'h8001);
+  assign ps2_cs  = fb_req && ps2_sel;
+  assign hdmi_req = fb_req && !ps2_sel;
+  assign fb_ready = ps2_sel ? fb_req : hdmi_ready;
+  assign fb_rdata = ps2_sel ? {24'h000000,ps2_dout} : hdmi_rdata;
+  ps2_keyboard #(.CLK_HZ(50000000),.KBD_LAYOUT("DE")) ps2_keyboard_i(
+    .clk(clk_50mhz),.reset_n(resetn),.ps2_clk(ps2_clk),.ps2_data(ps2_data),
+    .cs(ps2_cs),.we(fb_we),.addr(fb_addr[3:2]),.dout(ps2_dout),.irq(ps2_irq),
+    .diag_connected(ps2_connected),.diag_keycode(ps2_keycode),
+    .diag_modif(ps2_modif),.diag_ascii(ps2_ascii),.diag_phase(ps2_phase),
+    .diag_key_event(ps2_key_event),.diag_polling(ps2_polling));
 
   // The vendor IP owns the IOBUFs on the FLASH_QSPI and SD pads; fabric
   // logic must not tap those nets (EX0339). CPU liveness is observable on

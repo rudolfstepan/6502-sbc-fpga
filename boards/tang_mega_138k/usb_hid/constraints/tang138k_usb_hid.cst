@@ -1,0 +1,19 @@
+IO_LOC "clk" V22;
+IO_PORT "clk" PULL_MODE=NONE DRIVE=OFF BANK_VCCIO=3.3;
+
+// GPIO UART connector used for the USB 2.0 core smoke-test status.
+IO_LOC "uart_tx" U15;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8 BANK_VCCIO=3.3;
+
+// Tang Console dedicated 480-Mbit/s USB-C SoftPHY circuit.
+IO_LOC "usb_dxp_io" J19;
+IO_LOC "usb_dxn_io" H19;
+
+IO_LOC "usb_rxdp_p" H17;
+IO_PORT "usb_rxdp_p" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC "usb_rxdp_n" H18;
+IO_LOC "usb_rxdn_p" H20;
+IO_PORT "usb_rxdn_p" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC "usb_rxdn_n" G20;
+
+INS_LOC "phy_pll_i/PLL_inst" PLL_R[2];

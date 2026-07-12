@@ -1,0 +1,12 @@
+[General]
+ipc_version=4
+file=usb20_host_controller
+module=USB20_Host_Controller_Top
+target_device=gw5ast138c-007
+type=usb20_host_controller
+version=1.0
+
+[Config]
+Internal_Ram_Size=32KB
+LANG=0
+Synthesis_tool=GowinSynthesis

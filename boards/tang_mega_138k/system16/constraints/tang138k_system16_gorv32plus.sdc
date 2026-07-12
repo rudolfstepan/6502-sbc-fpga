@@ -42,10 +42,7 @@ set_false_path -from [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/res
 # (Restore them together with the sys16_hdmi_fb + DDR3 block from git history
 # if switching back to the RGB565 framebuffer.)
 
-# The compact USB HID core runs from its own 11.94 MHz PLL. Its VHDL wrapper
-# crosses reports into clk_50mhz with toggle handshakes and two-flop data
-# synchronisers; reset is asynchronous by design. Do not time these CDC paths
-# as if the unrelated PLL edges had a fixed phase relationship.
-create_clock -name usb_clk -period 83.752 [get_pins {usb_pll_i/PLL_inst/CLKOUT0}]
-set_clock_groups -asynchronous -group [get_clocks {usb_clk}] -group [get_clocks {clk_50mhz}]
-set_clock_groups -asynchronous -group [get_clocks {usb_clk}] -group [get_clocks {pix_clk pix_clk_5x}]
+# PS/2 clock and data are asynchronous external open-collector signals. The
+# receiver synchronizes ps2_clk into clk_50mhz before detecting its falling
+# edge; exclude only the asynchronous pad-to-first-stage paths.
+set_false_path -from [get_ports {ps2_clk ps2_data}]

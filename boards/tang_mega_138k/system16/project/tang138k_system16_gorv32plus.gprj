@@ -14,11 +14,7 @@
     <File path="../../../../third_party/alinx_sd/sd_card_sec_read_write.v" type="file.verilog" enable="1"/>
     <File path="../../../../third_party/alinx_sd/sd_card_top.v" type="file.verilog" enable="1"/>
     <File path="../../../../rtl/core/peripherals/uart_tx_ser.vhd" type="file.vhdl" enable="1"/>
-    <File path="../../../../third_party/usb_hid_host/usb_hid_host_rom.v" type="file.verilog" enable="1"/>
-    <File path="../../../../third_party/usb_hid_host/usb_hid_host_nm.v" type="file.verilog" enable="1"/>
-    <File path="usb_hid_host_rom.hex" type="file.other" enable="1"/>
-    <File path="../../../../rtl/core/usb/usb_hid_host.vhd" type="file.vhdl" enable="1"/>
-    <File path="../../sbc/project/src/gowin_pll/gowin_usb_pll.v" type="file.verilog" enable="1"/>
+    <File path="../../../../rtl/core/ps2/ps2_keyboard.vhd" type="file.vhdl" enable="1"/>
     <File path="../../../../rtl/core/mem/sdram_ctrl.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_bus32_pkg.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_axi32_to_bus32.v" type="file.verilog" enable="1"/>

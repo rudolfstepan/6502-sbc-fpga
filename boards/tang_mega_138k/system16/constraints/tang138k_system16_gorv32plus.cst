@@ -297,27 +297,18 @@ IO_PORT "ddr_dqs[1]"    IO_TYPE=SSTL15D PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC  "ddr_dqs[0]"    Y3,AA3;
 IO_PORT "ddr_dqs[0]"    IO_TYPE=SSTL15D PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 
-// Pin the HDMI PLL to the bottom corner, away from the right-edge USB PLL.
+// Pin the HDMI PLL to the proven bottom-corner location.
 INS_LOC "hdmi_i/pll_i/PLL_inst" PLL_B[2];
 // Keep each preserved OSER10 reset synchronizer beside its HDMI IOLOGIC.
 // These locations are taken from the routed lanes / the hardware-proven
-// colorbar build; otherwise unrelated USB placement can push the async reset
+// colorbar build; otherwise unrelated placement can push the async reset
 // route beyond the 1.33 ns half-cycle recovery window.
 INS_LOC "hdmi_i/dvi_i/gen_enc[0].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R101C170[0][A];
 INS_LOC "hdmi_i/dvi_i/gen_enc[1].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R101C166[0][A];
 INS_LOC "hdmi_i/dvi_i/gen_enc[2].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R79C180[0][A];
-// H13/G13 are in IOR98. Keep the low-speed USB PLL and its small
-// LUT/DFF/ROM cluster on the right edge, away from the central vendor CPU
-// and from the HDMI PLL at the bottom. The range is deliberately broad so
-// P&R can select a suitable BSRAM column for the USB microcode ROM.
-INS_LOC "usb_pll_i/PLL_inst" PLL_R[2];
-GROUP usb_hid_logic = { "usb_hid_i/*" };
-GRP_LOC usb_hid_logic R[1:88]C[110:152];
-
-// Tang Console USB-A HID port, verified against Sipeed's official
-// sipeed_usb_hid_host_138k reference design. The dock supplies VBUS and the
-// required host pull-downs; the FPGA directly drives low-speed D+/D-.
-IO_LOC  "usb_dp" H13;
-IO_PORT "usb_dp" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
-IO_LOC  "usb_dm" G13;
-IO_PORT "usb_dm" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+// PS/2 keyboard on Tang Console PMOD1 IO0/IO1. PS/2 is open-collector; the
+// internal 3.3-V pull-ups keep both lines high when the keyboard is idle.
+IO_LOC "ps2_clk" W19;
+IO_PORT "ps2_clk" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;
+IO_LOC "ps2_data" W20;
+IO_PORT "ps2_data" IO_TYPE=LVCMOS33 PULL_MODE=UP BANK_VCCIO=3.3;

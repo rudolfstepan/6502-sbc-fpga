@@ -20,6 +20,23 @@ The complete build procedure is in [linux-build-image.md](linux-build-image.md).
 For adding a new MMIO peripheral, coprocessor or Linux platform driver, see
 [hardware-treiber-entwicklung.md](hardware-treiber-entwicklung.md).
 
+## PS/2 keyboard
+
+The Linux FPGA build exposes a PS/2 Set-2 keyboard receiver at MMIO address
+`0xe8800100`. Connect the keyboard through the Tang Console PMOD1 header:
+
+| Signal | PMOD1 | FPGA pin |
+| --- | --- | --- |
+| PS/2 clock | `IO0` | `W19` |
+| PS/2 data | `IO1` | `W20` |
+| Keyboard supply | `+5V` | external 5 V |
+| Ground | `GND` | common ground |
+
+Clock and data are open-collector inputs with FPGA pull-ups to 3.3 V. Do not
+apply a push-pull 5 V signal to either FPGA pin. A PS/2 socket or adapter must
+power the keyboard from 5 V while keeping clock/data open-collector; use a
+proper open-drain level shifter if the adapter contains active 5 V logic.
+
 ## Hardware boot capture
 
 ![GoRV32 Plus ZSBL loading the GRV1 image from flash and starting OpenSBI](images/gorv32plus-opensbi-boot.png)

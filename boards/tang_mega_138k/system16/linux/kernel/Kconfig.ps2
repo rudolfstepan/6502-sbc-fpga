@@ -1,0 +1,6 @@
+config GORV32_PS2
+	bool "System16 FPGA PS/2 keyboard"
+	depends on INPUT && INPUT_KEYBOARD && OF && RISCV
+	help
+	  Polling input driver for the PS/2 Set-2 receiver synthesized into the
+	  System16 FPGA at 0xe8800100.
