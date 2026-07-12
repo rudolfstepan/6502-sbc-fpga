@@ -49,6 +49,18 @@ if [ "$profile" != qemu-sd ]; then
   grep -q 'CONFIG_GORV32_USB_HID' "$kernel/drivers/input/keyboard/Makefile" || \
     printf '\nobj-$(CONFIG_GORV32_USB_HID) += gorv32_usb_hid.o\n' >> \
       "$kernel/drivers/input/keyboard/Makefile"
+
+  # System16 hardware text console (built-in consw driver). Idempotent.
+  cp "$root/boards/tang_mega_138k/system16/linux/kernel/s16text_con.c" \
+     "$kernel/drivers/video/console/s16text_con.c"
+  cp "$root/boards/tang_mega_138k/system16/linux/kernel/Kconfig.s16text" \
+     "$kernel/drivers/video/console/Kconfig.s16text"
+  grep -q 'Kconfig.s16text' "$kernel/drivers/video/console/Kconfig" || \
+    printf '\nsource "drivers/video/console/Kconfig.s16text"\n' >> \
+      "$kernel/drivers/video/console/Kconfig"
+  grep -q 'CONFIG_SYS16_TEXTCON' "$kernel/drivers/video/console/Makefile" || \
+    printf '\nobj-$(CONFIG_SYS16_TEXTCON) += s16text_con.o\n' >> \
+      "$kernel/drivers/video/console/Makefile"
 fi
 
 if [ "$profile" = sd ] || [ "$profile" = rescue ]; then

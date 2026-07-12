@@ -1,0 +1,12 @@
+config SYS16_TEXTCON
+	bool "System16 GoRV32 hardware text console"
+	depends on VT && OF
+	default n
+	help
+	  Console driver for the System16 GoRV32 FPGA hardware text mode: an
+	  80x22 character-cell grid rendered from an on-chip 8x16 font ROM,
+	  reached through the AXI slave window (cells at 0xE8000000, registers
+	  at 0xE8800000). Cells are 16 bit (code + VGA-style attribute), so
+	  output and scrolling move a couple of bytes per character instead of
+	  a graphical framebuffer's pixels. Pairs with the USB-HID keyboard
+	  for a full text console without a framebuffer.

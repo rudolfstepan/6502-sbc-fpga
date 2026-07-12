@@ -210,90 +210,42 @@ module sys16_gorv32plus_top(
       default: diag_status<=16'h07E0; // green
     endcase
 
-  // DDR3 backing store for the framebuffer, bring-up copied from the
-  // proven tang138k_sbc port: the memory PLL free-runs (locks at power-on,
-  // independent of everything else), the controller reset is held a margin
-  // after PLL lock and released synchronously on clk_50mhz -- the IP's own
-  // reference clock -- and a calibration that does not finish within
-  // DDR_CAL_WAIT re-asserts the reset and retries automatically (Gowin
-  // DDR3 bring-up is occasionally marginal at power-on).
-  localparam DDR_RST_HOLD = 1023;     // reset assert width (~20 us @ 50 MHz)
-  localparam DDR_CAL_WAIT = 2500000;  // calibration timeout (~50 ms @ 50 MHz)
-  wire ddr_pll_lock, ddr_pll_stop, ddr_memory_clk, ddr_clk_x1;
-  reg [1:0] ddr_lock_sync=2'b00, ddr_cal_sync=2'b00;
-  reg ddr_rst_wait=1'b0, ddr_rst_n=1'b0;
-  reg [21:0] ddr_rst_cnt=22'd0;
-  always @(posedge clk_50mhz) begin
-    ddr_lock_sync <= {ddr_lock_sync[0], ddr_pll_lock};
-    ddr_cal_sync  <= {ddr_cal_sync[0],  ddr_calib};
-    if (!ddr_lock_sync[1]) begin
-      ddr_rst_wait <= 1'b0; ddr_rst_cnt <= 22'd0; ddr_rst_n <= 1'b0;
-    end else if (!ddr_rst_wait) begin
-      ddr_rst_n <= 1'b0;
-      if (ddr_rst_cnt == DDR_RST_HOLD) begin
-        ddr_rst_cnt <= 22'd0; ddr_rst_n <= 1'b1; ddr_rst_wait <= 1'b1;
-      end else
-        ddr_rst_cnt <= ddr_rst_cnt + 1'b1;
-    end else begin
-      ddr_rst_n <= 1'b1;
-      if (ddr_cal_sync[1])
-        ddr_rst_cnt <= 22'd0;               // calibrated: stay released
-      else if (ddr_rst_cnt == DDR_CAL_WAIT) begin
-        ddr_rst_cnt <= 22'd0; ddr_rst_wait <= 1'b0;  // timeout: retry
-      end else
-        ddr_rst_cnt <= ddr_rst_cnt + 1'b1;
-    end
-  end
-
-  Gowin_DDR_PLL ddr_mem_pll_i(
-    .lock(ddr_pll_lock),.clkout0(),.clkout1(),.clkout2(ddr_memory_clk),
-    .clkin(clk_50mhz),.init_clk(clk_50mhz),.reset(1'b0),
-    .enclk0(1'b1),.enclk1(1'b1),.enclk2(ddr_pll_stop));
-
-  // 32-bit DDR3 IP with 256-bit app beats; the framebuffer engine uses the
-  // proven 128-bit view, so the upper half is masked off (same adaptation
-  // as the SBC top).
-  wire [2:0] fb_app_cmd; wire fb_app_cmd_en; wire [26:0] fb_app_addr;
-  wire [127:0] fb_app_wdata; wire [15:0] fb_app_wmask;
-  wire fb_app_wren, fb_app_wend, fb_app_cmd_rdy, fb_app_wdata_rdy;
-  wire [255:0] fb_app_rdata256; wire fb_app_rvalid;
-  DDR3_Memory_Interface_Top ddr3_ip_i(
-    .clk(clk_50mhz),.memory_clk(ddr_memory_clk),.pll_lock(ddr_pll_lock),
-    .rst_n(ddr_rst_n),
-    .cmd_ready(fb_app_cmd_rdy),.cmd(fb_app_cmd),.cmd_en(fb_app_cmd_en),
-    .addr({2'b00, fb_app_addr}),
-    .wr_data_rdy(fb_app_wdata_rdy),.wr_data({128'h0, fb_app_wdata}),
-    .wr_data_en(fb_app_wren),.wr_data_end(fb_app_wend),
-    .wr_data_mask({16'hFFFF, fb_app_wmask}),
-    .rd_data(fb_app_rdata256),.rd_data_valid(fb_app_rvalid),.rd_data_end(),
-    .sr_req(1'b0),.ref_req(1'b0),.sr_ack(),.ref_ack(),
-    .init_calib_complete(ddr_calib),.clk_out(ddr_clk_x1),.ddr_rst(),
-    .pll_stop(ddr_pll_stop),.burst(1'b1),
-    .O_ddr_addr(ddr_addr),.O_ddr_ba(ddr_bank),.O_ddr_cs_n(ddr_cs),
-    .O_ddr_ras_n(ddr_ras),.O_ddr_cas_n(ddr_cas),.O_ddr_we_n(ddr_we),
-    .O_ddr_clk(ddr_ck),.O_ddr_clk_n(ddr_ck_n),.O_ddr_cke(ddr_cke),
-    .O_ddr_odt(ddr_odt),.O_ddr_reset_n(ddr_reset_n),.O_ddr_dqm(ddr_dm),
-    .IO_ddr_dq(ddr_dq),.IO_ddr_dqs(ddr_dqs),.IO_ddr_dqs_n(ddr_dqs_n));
-
-  // Framebuffer graphics card behind the AXI slave window: 480x270 RGB565
-  // in DDR3 (FB_DDR3 backend; only the double line buffer stays on-chip),
-  // shown 2x (960x540) centred in 720p. Pixel data at 0xE8000000,
-  // CTRL/STATUS at 0xE8800000. Resets to enabled framebuffer scanout so the
-  // Linux simple-framebuffer driver needs no board-specific CTRL write;
-  // STATUS bit1 reports the DDR3 calibration.
-  sys16_hdmi_fb hdmi_i(
+  // Video graphics card behind the AXI slave window (0xE8000000): a fast
+  // hardware TEXT CONSOLE (80x22 cells, 8x16 VGA font, scaled 2x to
+  // 1280x704 centred in 720p). Character cells and the font ROM live in
+  // BSRAM, so no external memory is used -- the DDR3 IP that backed the old
+  // RGB565 framebuffer is unwired here (its sources stay in the project),
+  // reclaiming its resources and build time. Registers at 0xE8800000 (ID
+  // reads "S16T"); cell array at 0xE8000000. To go back to the DDR3 RGB565
+  // framebuffer, restore the sys16_hdmi_fb + DDR3 block from git history.
+  sys16_hdmi_text hdmi_i(
     .clk_in(clk_50mhz),.reset_n(resetn),
     .req(hdmi_req),.we(fb_we),.addr(fb_addr[23:0]),.be(fb_be),
     .wdata(fb_wdata),.rdata(hdmi_rdata),.ready(hdmi_ready),
     .status_word(diag_status),
     .pll_lock(hdmi_pll_lock),.tmds_clk_p(tmds_clk_p),.tmds_clk_n(tmds_clk_n),
-    .tmds_d_p(tmds_d_p),.tmds_d_n(tmds_d_n),
-    .clk_x1(ddr_clk_x1),.calib_done(ddr_calib),
-    .app_cmd_rdy(fb_app_cmd_rdy),.app_cmd(fb_app_cmd),.app_cmd_en(fb_app_cmd_en),
-    .app_addr(fb_app_addr),.app_wdata(fb_app_wdata),.app_wdata_mask(fb_app_wmask),
-    .app_wren(fb_app_wren),.app_wdata_end(fb_app_wend),
-    .app_wdata_rdy(fb_app_wdata_rdy),
-    .app_rdata(fb_app_rdata256[127:0]),.app_rdata_valid(fb_app_rvalid));
+    .tmds_d_p(tmds_d_p),.tmds_d_n(tmds_d_n));
+
+  // On-board DDR3 unused in text mode: hold the SDRAM device in reset and
+  // park its bus at benign levels so the 1.5 V SSTL pins are not left
+  // floating. led[0] is repurposed to plain resetn (no calibration to show).
+  assign ddr_addr = 15'd0;
+  assign ddr_bank = 3'd0;
+  assign ddr_cs = 1'b1;
+  assign ddr_ras = 1'b1;
+  assign ddr_cas = 1'b1;
+  assign ddr_we = 1'b1;
+  assign ddr_ck = 1'b0;
+  assign ddr_ck_n = 1'b1;
+  assign ddr_cke = 1'b0;
+  assign ddr_odt = 1'b0;
+  assign ddr_reset_n = 1'b0;
+  assign ddr_dm = 4'b1111;
+  assign ddr_dq = 32'bz;
+  assign ddr_dqs = 4'bz;
+  assign ddr_dqs_n = 4'bz;
+  assign ddr_calib = resetn;
+
   assign dvi_a_psv=1'b0; assign dvi_ddc_clk=1'bz; assign dvi_ddc_dat=1'bz;
   assign sdram0_clk=clk_50mhz;
 endmodule

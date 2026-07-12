@@ -17,6 +17,8 @@ covered by the QEMU test. The current hardware driver intentionally exposes the
 card read-only because CMD24 writes are not reliable yet. Do not describe this
 profile as writable until the write path and filesystem integrity tests pass.
 The complete build procedure is in [linux-build-image.md](linux-build-image.md).
+For adding a new MMIO peripheral, coprocessor or Linux platform driver, see
+[hardware-treiber-entwicklung.md](hardware-treiber-entwicklung.md).
 
 ## Hardware boot capture
 

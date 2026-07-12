@@ -63,12 +63,14 @@ def main() -> int:
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(image)
     print(f"created {a.output} ({len(image)} bytes)")
-    print("  SD:    optional fallback; write raw starting at sector 0")
+    # ZSBL v12 is SD-first (try_sd before try_flash): the SD copy is what
+    # actually boots; flash 0x510000 is only the fallback.
+    print("  SD:    PRIMARY boot; write raw starting at sector 0 (LBA 0)")
     if len(image) > XIP_PAYLOAD_MAX:
-        print("  Flash: too large for the primary slot at 0x510000 (2.9 MB),"
+        print("  Flash: too large for the 0x510000 fallback slot (2.9 MB),"
               " SD boot only")
     else:
-        print("  Flash: burn at 0x510000 (primary)")
+        print("  Flash: optional fallback; burn at 0x510000")
     for (dst, name), data in zip(LOADS, blobs):
         print(f"  {name:7} DDR ${dst:06X}-${dst+len(data)-1:06X} ({len(data)} bytes)")
     return 0

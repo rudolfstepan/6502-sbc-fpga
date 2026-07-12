@@ -1,5 +1,16 @@
 # GoRV32 Plus: Framebuffer als Grafikkarte - Architekturplan
 
+> **Update 2026-07-12 - Pivot zur Hardware-Textkonsole.** Der DDR3-Pixel-
+> Framebuffer lief, aber fbcon-Scrollen war zaeh: jeder Full-Screen-Scroll
+> ist ein 259-KB-memmove durch das uncachte E8-Fenster, und alle Zugriffe
+> teilen sich EIN DDR3-Interface. Fuer eine Linux-Konsole ist ein
+> Hardware-Textmodus fundamental schneller (2 Byte/Zeichen statt hunderte
+> Pixelbytes; Scroll = Repaint kleiner Zellzahlen). Der aktive HDMI-Pfad
+> ist daher jetzt `sys16_hdmi_text` (80x22, 8x16-VGA-Font, kein DDR3) mit
+> dem Linux-consw-Treiber `s16text_con.c`; Details in der Memory
+> `system16-hdmi-text-console`. Der Framebuffer-Stack unten bleibt als
+> Referenz/Grafikoption erhalten (im Top abgekoppelt, per git reversibel).
+
 Ziel: Linux-Konsole und Grafik auf HDMI statt nur UART. Der Plan ist
 zweistufig - erst ein BSRAM-Framebuffer mit dem fertigen Kernel-Treiber
 `simple-framebuffer` (kein eigener Linux-Treiber), danach optional der

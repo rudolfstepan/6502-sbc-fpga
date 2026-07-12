@@ -28,6 +28,13 @@
     <File path="../rtl/sys16_sdram_probe.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_uart_probe.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_fb_ram8.vhd" type="file.vhdl" enable="1"/>
+    <!-- Hardware text console (active video path). The font package must be
+         analysed before the core that uses it. -->
+    <File path="../rtl/sys16_font_pkg.vhd" type="file.vhdl" enable="1"/>
+    <File path="../rtl/sys16_text_core.vhd" type="file.vhdl" enable="1"/>
+    <File path="../rtl/sys16_hdmi_text.vhd" type="file.vhdl" enable="1"/>
+    <!-- DDR3 RGB565 framebuffer path: kept in the project but no longer
+         instantiated by the top (text console replaces it). -->
     <File path="../rtl/sys16_fb_ddr3.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_hdmi_fb.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_hdmi_720p.vhd" type="file.vhdl" enable="1"/>

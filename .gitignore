@@ -270,3 +270,5 @@ boards/tang_mega_138k/system16/linux/zsbl/zsbl.bin
 boards/tang_mega_138k/system16/linux/zsbl/zsbl.elf
 .merge_tmp.config.*
 .tmp.config.*
+tmp/
+firmware/

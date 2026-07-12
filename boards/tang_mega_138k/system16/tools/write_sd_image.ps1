@@ -42,7 +42,20 @@ function Get-ValidatedTarget {
 }
 
 $disk = Get-ValidatedTarget
-$sourceHash = (Get-FileHash -LiteralPath $image.FullName -Algorithm SHA256).Hash
+# Hash with the .NET SHA256 API rather than Get-FileHash: the cmdlet is absent
+# on older/stripped PowerShell hosts, and [Convert]::ToHexString is .NET 5+
+# only. SHA256.Create + BitConverter work on Windows PowerShell 5.1 too.
+$sha256 = [Security.Cryptography.SHA256]::Create()
+try {
+    $srcStream = [IO.File]::OpenRead($image.FullName)
+    try {
+        $sourceHash = [BitConverter]::ToString($sha256.ComputeHash($srcStream)).Replace('-', '')
+    } finally {
+        $srcStream.Dispose()
+    }
+} finally {
+    $sha256.Dispose()
+}
 Write-Host "Writing $($image.FullName) ($($image.Length) bytes)"
 Write-Host "Target: PhysicalDrive$DiskNumber, $($disk.FriendlyName), serial $ExpectedSerial, $ExpectedSize bytes"
 
@@ -96,8 +109,7 @@ try {
     $deviceStream.Position = 0
     $remaining = [Int64]$image.Length
     $buffer = [byte[]]::new(4MB)
-    $targetHasher = [Security.Cryptography.IncrementalHash]::CreateHash(
-        [Security.Cryptography.HashAlgorithmName]::SHA256)
+    $targetHasher = [Security.Cryptography.SHA256]::Create()
     try {
         while ($remaining -gt 0) {
             $wanted = [int][Math]::Min($buffer.Length, $remaining)
@@ -105,10 +117,11 @@ try {
             if ($read -ne $wanted) {
                 throw "Short read during verification: wanted $wanted, got $read"
             }
-            $targetHasher.AppendData($buffer, 0, $read)
+            [void]$targetHasher.TransformBlock($buffer, 0, $read, $null, 0)
             $remaining -= $read
         }
-        $targetHash = [Convert]::ToHexString($targetHasher.GetHashAndReset())
+        [void]$targetHasher.TransformFinalBlock([byte[]]::new(0), 0, 0)
+        $targetHash = [BitConverter]::ToString($targetHasher.Hash).Replace('-', '')
     } finally {
         $targetHasher.Dispose()
     }

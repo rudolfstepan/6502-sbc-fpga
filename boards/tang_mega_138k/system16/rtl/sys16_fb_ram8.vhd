@@ -33,7 +33,9 @@ end entity;
 
 architecture rtl of sys16_fb_ram8 is
   type ram_t is array (0 to DEPTH-1) of std_logic_vector(7 downto 0);
-  shared variable ram : ram_t;
+  -- Power-up zero like real BSRAM, so an unwritten cell reads a defined 0
+  -- (matches hardware and keeps simulation free of metavalue noise).
+  shared variable ram : ram_t := (others => (others => '0'));
   signal addra_r : std_logic_vector(AW-1 downto 0) := (others => '0');
   signal dina_r  : std_logic_vector(7 downto 0) := (others => '0');
   signal wea_r   : std_logic := '0';

@@ -179,7 +179,8 @@ begin
   end process;
 
   stim : process
-    variable exp : std_logic_vector(31 downto 0);
+    variable exp    : std_logic_vector(31 downto 0);
+    variable t0, t1 : time;
 
     procedure check(name : string;
                     got : std_logic_vector(31 downto 0);
@@ -268,6 +269,43 @@ begin
     cpu_op(cpu_req, cpu_we, cpu_addr, cpu_be, cpu_wdata,
            '0', 720, "1111", x"00000000");
     check("post-fetch write", cpu_rdata, x"CAFE0000");
+
+    -- 7: the fix under test. Trigger line 6 (60-burst fetch, several
+    -- us uncontended), then immediately hammer 6 CPU writes without
+    -- waiting for the fetch to finish. Before burst-granular
+    -- arbitration these would have queued behind the WHOLE fetch (tens
+    -- of us); now each waits at most one burst.
+    wait until rising_edge(clk_pix);
+    line_num <= std_logic_vector(to_unsigned(6, 9));
+    line_req <= '1';
+    wait until rising_edge(clk_pix);
+    line_req <= '0';
+
+    t0 := now;
+    for i in 0 to 5 loop
+      cpu_op(cpu_req, cpu_we, cpu_addr, cpu_be, cpu_wdata,
+             '1', 800 + i, "1111",
+             std_logic_vector(to_unsigned(16#B000# + i, 32)));
+    end loop;
+    t1 := now;
+    report "contended: 6 cpu writes during an active fetch took " &
+           time'image(t1 - t0);
+    assert (t1 - t0) < 10 us
+      report "CPU writes blocked too long behind an in-flight line fetch"
+      severity error;
+
+    for i in 0 to 5 loop
+      cpu_op(cpu_req, cpu_we, cpu_addr, cpu_be, cpu_wdata,
+             '0', 800 + i, "1111", x"00000000");
+      check("contended readback " & integer'image(i), cpu_rdata,
+            std_logic_vector(to_unsigned(16#B000# + i, 32)));
+    end loop;
+
+    wait for 30 us;  -- let the (repeatedly interrupted) line-6 fetch finish
+    -- line 6 is even -> half 0; starts at byte 6*960=5760 -> beat 360 ->
+    -- word w of the line reads 1440+w (same linear pattern as lines 3/4).
+    pix_read(0,   std_logic_vector(to_unsigned(1440, 32)), "line6 w0 (contended)");
+    pix_read(239, std_logic_vector(to_unsigned(1679, 32)), "line6 w239 (contended)");
 
     if err_cnt = 0 then
       report "TB PASSED" severity note;

@@ -297,9 +297,7 @@ IO_PORT "ddr_dqs[1]"    IO_TYPE=SSTL15D PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 IO_LOC  "ddr_dqs[0]"    Y3,AA3;
 IO_PORT "ddr_dqs[0]"    IO_TYPE=SSTL15D PULL_MODE=NONE DRIVE=8 BANK_VCCIO=1.5;
 
-// Fixed placement (from the SBC port): pin the HDMI PLL and the DDR PLL to
-// separate corners and lock the DDR3 PHY's DLL and fclkdiv where the proven
-// build put them -- the two-PLL placement is otherwise fragile.
+// Pin the HDMI PLL to the bottom corner, away from the right-edge USB PLL.
 INS_LOC "hdmi_i/pll_i/PLL_inst" PLL_B[2];
 // Keep each preserved OSER10 reset synchronizer beside its HDMI IOLOGIC.
 // These locations are taken from the routed lanes / the hardware-proven
@@ -308,7 +306,6 @@ INS_LOC "hdmi_i/pll_i/PLL_inst" PLL_B[2];
 INS_LOC "hdmi_i/dvi_i/gen_enc[0].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R101C170[0][A];
 INS_LOC "hdmi_i/dvi_i/gen_enc[1].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R101C166[0][A];
 INS_LOC "hdmi_i/dvi_i/gen_enc[2].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R79C180[0][A];
-INS_LOC "ddr_mem_pll_i/u_pll/PLL_inst" PLL_L[0];
 // H13/G13 are in IOR98. Keep the low-speed USB PLL and its small
 // LUT/DFF/ROM cluster on the right edge, away from the central vendor CPU
 // and from the HDMI PLL at the bottom. The range is deliberately broad so
@@ -316,8 +313,6 @@ INS_LOC "ddr_mem_pll_i/u_pll/PLL_inst" PLL_L[0];
 INS_LOC "usb_pll_i/PLL_inst" PLL_R[2];
 GROUP usb_hid_logic = { "usb_hid_i/*" };
 GRP_LOC usb_hid_logic R[1:88]C[110:152];
-INS_LOC "ddr3_ip_i/gw3_top/u_ddr_phy_top/u_dll" DDRDLLM_BL;
-INS_LOC "ddr3_ip_i/gw3_top/u_ddr_phy_top/fclkdiv" LEFTSIDE[4];
 
 // Tang Console USB-A HID port, verified against Sipeed's official
 // sipeed_usb_hid_host_138k reference design. The dock supplies VBUS and the

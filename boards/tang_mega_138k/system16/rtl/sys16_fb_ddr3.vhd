@@ -31,6 +31,22 @@
 -- fetch fills buffer half line_num(0); rd_addr = half & word-in-line
 -- reads with the same 2-cycle latency as sys16_fb_ram8 port B, so the
 -- sys16_hdmi_fb fetch pipeline alignment is unchanged.
+--
+-- Arbitration (clk_x1): a line buffer holds ONE line at a time per
+-- half, so unlike a cache there is nothing to skip -- every due line
+-- genuinely has to be re-read from DDR3 every frame. What used to make
+-- CPU accesses (and therefore fbcon scrolling, a read+write per pixel
+-- moved) painfully slow was blocking each one behind an entire 60-burst
+-- line fetch. A freshly due line still preempts immediately (it has a
+-- real-time display deadline the CPU retry path does not), but once
+-- running, the fetch and a waiting CPU op alternate one burst at a
+-- time: worst-case CPU latency drops from "a whole line fetch" to "one
+-- burst", while the fetch still finishes within roughly 2x its
+-- uncontended time -- comfortably inside the ~44 us gap between line
+-- requests at this geometry. Under sustained heavy CPU traffic a fetch
+-- can still be abandoned mid-flight by the next due line; the half then
+-- shows a partial frame's worth of stale content for that one line,
+-- self-correcting once traffic settles.
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -114,6 +130,8 @@ architecture rtl of sys16_fb_ddr3 is
   signal line_sync   : std_logic_vector(2 downto 0) := (others => '0');
   signal cpu_pending : std_logic := '0';
   signal fill_pending: std_logic := '0';
+  signal fill_run     : std_logic := '0';  -- '1' while a fetch has bursts left
+  signal last_was_fill: std_logic := '0';  -- alternation token vs. cpu_pending
   signal op_we       : std_logic := '0';
   signal op_addr     : std_logic_vector(16 downto 0) := (others => '0');
   signal op_be       : std_logic_vector(3 downto 0) := (others => '0');
@@ -195,17 +213,19 @@ begin
   -- line fetch outranks the CPU (it has a display deadline, the CPU op
   -- is retried by the AXI bridge and guarded by the watchdog below).
   x1_p : process(clk_x1, rst_bus_n)
-    variable byteoff : unsigned(24 downto 0);
-    variable wl      : natural range 0 to 3;
-    variable bi      : natural range 0 to 511;
-    variable m       : std_logic_vector(15 downto 0);
-    variable wd      : std_logic_vector(127 downto 0);
+    variable byteoff    : unsigned(24 downto 0);
+    variable wl         : natural range 0 to 3;
+    variable bi         : natural range 0 to 511;
+    variable m          : std_logic_vector(15 downto 0);
+    variable wd         : std_logic_vector(127 downto 0);
+    variable run_cpu_now: boolean;
   begin
     if rst_bus_n = '0' then
       st <= S_CALIB;
       start_sync <= (others => '0');
       line_sync  <= (others => '0');
       cpu_pending <= '0'; fill_pending <= '0';
+      fill_run <= '0'; last_was_fill <= '0';
       op_we <= '0'; op_addr <= (others => '0');
       op_be <= (others => '0'); op_wdata <= (others => '0');
       fill_line <= (others => '0'); cur_half <= '0';
@@ -253,22 +273,38 @@ begin
 
         when S_IDLE =>
           if fill_pending = '1' then
-            fill_pending <= '0';
+            -- A freshly due line always preempts immediately, even a
+            -- still-running older fetch (see the arbitration note above).
+            fill_pending  <= '0';
+            fill_run      <= '1';
+            last_was_fill <= '1';   -- give the CPU the next contested turn
             cur_half  <= fill_line(0);
             line_base <= to_unsigned(
                            to_integer(unsigned(fill_line)) * LINE_BYTES, 25);
             col <= 0;
             st  <= S_FILL_REQ;
-          elsif cpu_pending = '1' then
-            -- The bus FSM holds we/addr/be/wdata stable until the ack.
-            op_we    <= cpu_we;
-            op_addr  <= cpu_addr;
-            op_be    <= cpu_be;
-            op_wdata <= cpu_wdata;
-            if cpu_we = '1' then
-              st <= S_CW_REQ;
-            else
-              st <= S_CR_REQ;
+          else
+            -- Neither pending: idle. Only fill_run pending: continue it.
+            -- Only cpu_pending: service it. Both pending: alternate 1:1
+            -- via last_was_fill so a scroll's CPU traffic gets a
+            -- burst-granular turn instead of blocking behind the fetch.
+            run_cpu_now := cpu_pending = '1' and
+                            (fill_run = '0' or last_was_fill = '1');
+            if run_cpu_now then
+              last_was_fill <= '0';
+              -- The bus FSM holds we/addr/be/wdata stable until the ack.
+              op_we    <= cpu_we;
+              op_addr  <= cpu_addr;
+              op_be    <= cpu_be;
+              op_wdata <= cpu_wdata;
+              if cpu_we = '1' then
+                st <= S_CW_REQ;
+              else
+                st <= S_CR_REQ;
+              end if;
+            elsif fill_run = '1' then
+              last_was_fill <= '1';
+              st <= S_FILL_REQ;
             end if;
           end if;
 
@@ -295,10 +331,13 @@ begin
           lbuf(bi) <= fill_data(store_idx*32 + 31 downto store_idx*32);
           if store_idx = 3 then
             if col + 1 = BURSTS_PL then
+              fill_run <= '0';
               st <= S_IDLE;
             else
               col <= col + 1;
-              st  <= S_FILL_REQ;
+              -- Back to the arbiter after every burst (not straight to
+              -- the next one) so a waiting CPU op can interject.
+              st <= S_IDLE;
             end if;
           else
             store_idx <= store_idx + 1;

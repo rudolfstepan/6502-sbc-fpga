@@ -26,15 +26,6 @@
 	memory@400000 {
 		device_type = "memory"; reg = <0x00400000 0x00c00000>;
 	};
-	framebuffer0: framebuffer@e8000000 {
-		compatible = "simple-framebuffer";
-		reg = <0xe8000000 0x0003f480>;
-		width = <480>;
-		height = <270>;
-		stride = <960>;
-		format = "r5g6b5";
-		status = "okay";
-	};
 	soc {
 		#address-cells = <1>; #size-cells = <1>;
 		compatible = "simple-bus"; ranges;
@@ -61,6 +52,12 @@
 			compatible = "gowin,system16-usb-hid";
 			reg = <0xe8800100 0x10>;
 			poll-interval-ms = <10>;
+			status = "okay";
+		};
+		textcon0: textcon@e8000000 {
+			compatible = "gowin,system16-textcon";
+			/* char cells (0xE8000000) + registers (0xE8800000) */
+			reg = <0xe8000000 0x00001000>, <0xe8800000 0x20>;
 			status = "okay";
 		};
 		sdhost@f0600000 {
