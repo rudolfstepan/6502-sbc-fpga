@@ -1,9 +1,9 @@
 # GoRV32 Plus Linux programmieren (Tang Console 138K)
 
-Der hardwarebestaetigte Stand verwendet **ZSBL v11 flash-first**. Nach dem
+Der aktuelle Stand verwendet **ZSBL v12 SD-first**. Nach dem
 Power-on startet die CPU den ZSBL aus dem XIP-Fenster bei CPU-Adresse
-`0x80000000`. Der ZSBL laedt normalerweise den GRV1-Container aus Flash
-`0x510000`; SD-LBA 0 ist nur noch der Rueckfallpfad.
+`0x80000000`. Der ZSBL laedt normalerweise den GRV1-Container von SD-LBA 0;
+Flash `0x510000` ist der Rueckfallpfad.
 
 Der XTX XT25F64B besitzt 8 MiB (JEDEC `0x0b4017`). Adressen ab `0x800000`
 liegen ausserhalb des Chips und koennen auf den Bitstream zurueckspiegeln.
@@ -14,8 +14,8 @@ liegen ausserhalb des Chips und koennen auf den Bitstream zurueckspiegeln.
 | --- | --- | --- |
 | Flash `0x000000` | FPGA-Bitstream | `project/impl/pnr/tang138k_system16_gorv32plus.fs` |
 | Flash `0x500000` | XIP-ZSBL | `linux/zsbl/zsbl.bin` |
-| Flash `0x510000` | primaerer GRV1-Container | profilabhaengige `.bin`, siehe unten |
-| SD LBA 0 | optionaler GRV1-Fallback | Anfang von `gorv32-linux-sd.img` |
+| Flash `0x510000` | optionaler GRV1-Rueckfall | profilabhaengige `.bin`, siehe unten |
+| SD LBA 0 | primaerer GRV1-Container | Anfang von `gorv32-linux-sd.img` |
 | SD LBA 32768 | 512-MiB-ext2-RootFS | Rest von `gorv32-linux-sd.img` |
 
 `0x500000` muss zugleich als `Flash_Burn_Address=500000` im GoRV32-Plus-IP
@@ -23,7 +23,7 @@ stehen. Der GRV1-Platz von `0x510000` bis `0x7fffff` ist `0x2f0000` Bytes
 gross. Die Image-Werkzeuge brechen mit `--require-flash-fit` ab, wenn er nicht
 ausreicht.
 
-## Welche GRV1-Datei kommt nach `0x510000`?
+## Welche GRV1-Datei kann als Flash-Rueckfall nach `0x510000`?
 
 | Profil | Datei | Zweck |
 | --- | --- | --- |
@@ -97,6 +97,9 @@ make -C boards/tang_mega_138k/system16 gorv32-sd-image
 
 `build/gorv32-linux-sd/gorv32-linux-sd.img` mit einem Raw-Writer auf das
 **gesamte SD-Geraet** schreiben. Es gibt absichtlich keine MBR-/GPT-Tabelle.
+`tools/write_sd_image.ps1` kann dafuer in einer Administrator-PowerShell
+verwendet werden; der Writer prueft Nummer, USB-Seriennummer und Groesse des
+Ziels und verifiziert den geschriebenen Bereich danach per SHA-256.
 Spaetere Kernel-/Treiber-Aenderungen brauchen kein neues Kartenabbild:
 
 ```powershell
@@ -104,7 +107,8 @@ make -C boards/tang_mega_138k/system16 kernel-sd-wsl
 make -C boards/tang_mega_138k/system16 gorv32-sd-boot-image
 ```
 
-Dann nur `gorv32-linux-sd-boot.bin` bei Flash `0x510000` aktualisieren.
+Dann nur `gorv32-linux-sd-boot.bin` raw ab SD-LBA 0 aktualisieren. Der
+ext2-Bereich ab LBA 32768 bleibt dabei unveraendert.
 
 ## Erwartete UART-Ausgabe
 
@@ -112,8 +116,8 @@ Terminal: **115200 8N1**.
 
 ```text
 FPGA BOOT OK
-System16 GoRV32 ZSBL v11 flash-first
-boot from flash
+System16 GoRV32 ZSBL v12 SD-first
+boot from SD
 copy $00000000 len $...
 copy $003F0000 len $...
 copy $00400000 len $...

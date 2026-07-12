@@ -115,8 +115,8 @@ qemu-sd-test: kernel-qemu-sd-wsl
 	"$(PYTHON)" tools/qemu_sd_rootfs_test.py
 
 ## GoRV32 Plus vendor-CPU Linux, built entirely from the WSL environment.
-## Burn zsbl.bin at flash 0x500000 and the primary GRV1 payload at 0x510000.
-## A raw GRV1 image at SD LBA 0 remains the ZSBL fallback path.
+## Burn zsbl.bin at flash 0x500000. ZSBL v12 boots a raw GRV1 image at SD
+## LBA 0 first and falls back to the flash payload at 0x510000.
 gorv32-zsbl-wsl:
 	"$(PYTHON)" tools/build_gorv32_zsbl_wsl.py
 

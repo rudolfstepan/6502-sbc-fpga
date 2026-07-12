@@ -1,9 +1,9 @@
 # Linux-Images fuer System16 GoRV32 Plus bauen
 
 Diese Anleitung beschreibt den reproduzierbaren Stand vom 2026-07-12. Der
-Bootpfad ist **flash-first**: ZSBL liegt bei Flash `0x500000`, der primaere
-GRV1-Container bei `0x510000`. SD-LBA 0 bleibt ein Boot-Fallback; das grosse
-ext2-RootFS beginnt bei SD-LBA 32768.
+Bootpfad ist **SD-first**: ZSBL liegt bei Flash `0x500000` und laedt den
+primaeren GRV1-Container von SD-LBA 0. Flash `0x510000` bleibt der Rueckfall;
+das grosse ext2-RootFS beginnt bei SD-LBA 32768.
 
 ## Profile und Reifegrad
 
@@ -184,7 +184,7 @@ make -C boards/tang_mega_138k/system16 kernel-sd-wsl
 Der DTB verwendet aktuell:
 
 ```text
-root=/dev/gorv32sd ro rootwait rootfstype=ext2 init=/bin/sh -- -i
+root=/dev/gorv32sd ro rootwait rootfstype=ext2
 ```
 
 Linux sieht nur die 1048576 RootFS-Sektoren. Logischer Sektor 0 von
@@ -226,13 +226,26 @@ Layout:
 
 | Physischer Bereich | Inhalt |
 | --- | --- |
-| LBA 0 | GRV1-Header, ZSBL-Fallback |
+| LBA 0 | primaerer GRV1-Header fuer ZSBL v12 |
 | ab LBA 1 | sektor-ausgerichtete OpenSBI-/DTB-/Kernel-Daten |
 | bis LBA 32767 | reservierter Bootbereich (16 MiB) |
 | LBA 32768..1081343 | 512-MiB-ext2-RootFS |
 
 Es gibt keine MBR-/GPT-Partitionstabelle. Das `.img` mit einem Raw-Writer auf
-das gesamte SD-Geraet schreiben.
+das gesamte SD-Geraet schreiben. Der mitgelieferte PowerShell-Writer verlangt
+Datentraegernummer, Seriennummer und exakte Groesse als Schutz gegen ein
+falsches Ziel und liest den geschriebenen Bereich anschliessend vollstaendig
+fuer einen SHA-256-Vergleich zurueck. Er muss in einer Administrator-Shell
+gestartet werden:
+
+```powershell
+& boards/tang_mega_138k/system16/tools/write_sd_image.ps1 `
+  -ImagePath build/gorv32-linux-sd/gorv32-linux-sd.img `
+  -DiskNumber <NUMMER> -ExpectedSerial '<SERIENNUMMER>' `
+  -ExpectedSize <GROESSE_IN_BYTES>
+```
+
+Der Befehl ueberschreibt den angegebenen Datentraeger ohne Rueckfrage.
 
 ## 9. Schnelle Kernel-/Treiber-Iteration
 
@@ -243,10 +256,9 @@ make -C boards/tang_mega_138k/system16 kernel-sd-wsl
 make -C boards/tang_mega_138k/system16 gorv32-sd-boot-image
 ```
 
-Danach nur
-`build/gorv32-linux-sd/gorv32-linux-sd-boot.bin` bei Flash `0x510000`
-programmieren. `gorv32-sd-image` ist dafuer nicht noetig und wuerde nur das
-grosse Kartenabbild erneut erzeugen.
+Danach nur `build/gorv32-linux-sd/gorv32-linux-sd-boot.bin` raw ab SD-LBA 0
+schreiben. Das ersetzt nur den Bootbereich vor LBA 32768; `gorv32-sd-image`
+ist dafuer nicht noetig und wuerde das grosse Kartenabbild erneut erzeugen.
 
 ## 10. Typische Fehler
 
@@ -262,8 +274,9 @@ grosse Kartenabbild erneut erzeugen.
   mounten.
 - **Kalibrierung findet keinen Modus:** Sie akzeptiert absichtlich keine
   Retries oder FIFO-full-Ereignisse. Rescue-Linux bleibt trotzdem benutzbar.
-- **Flash-Image zu gross:** Die primaere GRV1-Datei muss unter `0x2f0000`
-  Bytes bleiben; ein groesseres Image kann nur ueber den SD-Fallback booten.
+- **Flash-Fallback zu gross:** Nur die optionale GRV1-Datei bei Flash
+  `0x510000` muss unter `0x2f0000` Bytes bleiben; der primaere SD-Boot ist
+  nicht an diese Flash-Grenze gebunden.
 
 Die exakten Programmer-Einstellungen stehen in
 [gorv32-brennen.md](gorv32-brennen.md).

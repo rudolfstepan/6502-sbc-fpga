@@ -4,7 +4,7 @@
 	compatible = "gowin,gorv32-plus";
 	model = "System16 GoRV32 Plus Linux FPGA (SD root)";
 	chosen {
-		bootargs = "console=tty0 console=ttyS0,115200n8 earlycon=sbi loglevel=8 root=/dev/gorv32sd ro rootwait rootfstype=ext2 panic=-1 init=/bin/sh -- -i";
+		bootargs = "console=tty0 console=ttyS0,115200n8 earlycon=sbi loglevel=8 root=/dev/gorv32sd ro rootwait rootfstype=ext2 panic=-1";
 		stdout-path = &uart0;
 	};
 	cpus {

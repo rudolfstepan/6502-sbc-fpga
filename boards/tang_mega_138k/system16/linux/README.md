@@ -22,18 +22,17 @@ The complete build procedure is in [linux-build-image.md](linux-build-image.md).
 
 ![GoRV32 Plus ZSBL loading the GRV1 image from flash and starting OpenSBI](images/gorv32plus-opensbi-boot.png)
 
-This is a historical capture from the earlier SD-first ZSBL. The current ZSBL
-is v11 and tries the flash payload first; the picture remains useful because it
-shows the same GRV1 copy layout and OpenSBI hand-off.
+The capture shows the SD-first GRV1 copy layout and OpenSBI hand-off used by
+the current ZSBL v12.
 
 ## Boot chain
 
 1. The FPGA loads its bitstream from the board's 8 MB XT25F64B flash.
 2. GoRV32 Plus resets at CPU address `0x80000000`. Its XIP window maps this
    address to flash offset `0x500000`, where the ZSBL executes in place.
-3. ZSBL v11 initializes UART1 and first validates the primary GRV1 image at
-   flash offset `0x510000`. Only if it is absent or invalid does it try the
-   fallback GRV1 container at SD LBA 0.
+3. ZSBL v12 initializes UART1 and first validates the GRV1 image at SD LBA 0.
+   If the card or image is unavailable, it tries the fallback GRV1 container
+   at flash offset `0x510000`.
 4. The ZSBL copies OpenSBI, the DTB and Linux into SDRAM0, verifies the
    additive payload checksum and jumps to OpenSBI at address zero.
 5. OpenSBI starts Linux at `0x00400000`. The `flash` and `rescue` profiles
@@ -52,8 +51,8 @@ is the authoritative format implementation.
 | --- | ---: | --- |
 | Flash | `0x000000` | FPGA bitstream, approximately 4.9 MB |
 | Flash | `0x500000` | ZSBL; also the IP Core Generator `Flash_Burn_Address` |
-| Flash | `0x510000` | Primary GRV1 image |
-| SD | LBA 0 | Raw GRV1 fallback boot container |
+| Flash | `0x510000` | Optional fallback GRV1 image |
+| SD | LBA 0 | Primary raw GRV1 boot container |
 | SD | LBA 32768 | SD profile's 512 MiB ext2 root filesystem |
 | CPU XIP | `0x80000000` | ZSBL mapping of flash offset `0x500000` |
 | SDRAM | `0x00000000` | OpenSBI (`FW_TEXT_START=0`) |
@@ -66,12 +65,12 @@ is the authoritative format implementation.
 
 Linux sees 12 MB from `0x00400000` through `0x00ffffff`. The lower 4 MB are
 reserved for OpenSBI and the DTB. The complete kernel plus initramfs must fit
-in the remaining region. The primary flash slot has a stricter 2.9 MB GRV1
-size limit; the packer reports when an image can boot only via the SD fallback.
+in the remaining region. The optional flash fallback slot has a stricter
+2.9 MB GRV1 size limit; SD boot is not restricted by that flash boundary.
 
 The UART uses 115200 baud, 8 data bits, no parity and one stop bit. Its APB
-registers use 32-bit accesses and a four-byte stride. The small ZSBL fallback
-reader identifies cards at 200 kHz and transfers at 1 MHz, preferring four-bit
+registers use 32-bit accesses and a four-byte stride. The small ZSBL SD reader
+identifies cards at 200 kHz and transfers at 1 MHz, preferring four-bit
 mode after ACMD6. This is independent of the Linux driver described below.
 
 ## Auto-calibrating Linux SD driver
@@ -165,9 +164,10 @@ make -C boards/tang_mega_138k/system16 kernel-sd-wsl
 make -C boards/tang_mega_138k/system16 gorv32-sd-boot-image
 ```
 
-Program the resulting `gorv32-linux-sd-boot.bin` at flash `0x510000`. Use
-`qemu-sd-test` to validate the Buildroot filesystem and native compiler through
-virtio; QEMU does not exercise the Gowin SD host. See
+Write the resulting `gorv32-linux-sd-boot.bin` raw at SD LBA 0; this replaces
+only the boot records before the ext2 filesystem. Use `qemu-sd-test` to
+validate the Buildroot filesystem and native compiler through virtio; QEMU
+does not exercise the Gowin SD host. See
 [linux-build-image.md](linux-build-image.md) and
 [gorv32-brennen.md](gorv32-brennen.md) for complete details.
 
@@ -177,8 +177,8 @@ The successful sequence starts with:
 
 ```text
 FPGA BOOT OK
-System16 GoRV32 ZSBL v11 flash-first
-boot from flash
+System16 GoRV32 ZSBL v12 SD-first
+boot from SD
 copy $00000000 len $...
 copy $003F0000 len $...
 copy $00400000 len $...

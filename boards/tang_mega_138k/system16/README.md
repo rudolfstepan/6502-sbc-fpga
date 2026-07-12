@@ -191,8 +191,8 @@ GW5AST-138 bitstream takes ~4.9 MB, so the burn address is `0x500000` -
 addresses at or above `0x800000` are beyond the chip and wrap onto the
 bitstream. The ZSBL in `linux/zsbl` runs there in place, initializes UART1
 (registers at `+0x20`, 4-byte stride, 32-bit APB access, divisor 27 for
-115200 at the 50 MHz APB clock) and copies the GRV1 flash image that
-follows at flash `0x510000` into SDRAM: OpenSBI to `$0`, `gorv32plus.dtb`
+115200 at the 50 MHz APB clock) and copies a GRV1 image into SDRAM: OpenSBI
+to `$0`, `gorv32plus.dtb`
 to `$3F0000`, the kernel to `$400000` - the same DDR layout as the
 VexRiscv SD profile. Hart 1 parks in a wfi loop. The DDR window at CPU
 address `0` is served by SDRAM0 through `sys16_axi32_to_bus32` and
@@ -205,11 +205,10 @@ sifive,clint0, timebase 50 MHz). OpenSBI needs a second build with
 `FW_TEXT_START=0x0` out of the same patched tree; the GoRV32 Plus is also a
 pre-MDT privilege-1.10 VexRiscv, so the existing fw_base.S patch applies.
 
-ZSBL v11 boots the GRV1 payload from flash at `0x510000` first. This keeps
-the large ext2 root filesystem permanently on SD while kernel, DTB and
-OpenSBI updates require programming only a small 2-3 MB flash payload. If
-that payload is absent or invalid, the ZSBL falls back to GRV1 at SD LBA 0.
-Its SD fallback uses the vendor host (MUG1532 chapter 16): identification
+ZSBL v12 boots the GRV1 payload at SD LBA 0 first. If the card is absent,
+unreadable or does not contain a valid image, it falls back to the GRV1
+payload in flash at `0x510000`. Its SD reader uses the vendor host (MUG1532
+chapter 16): identification
 at 200 kHz, conservative 1 MHz data transfers, 4-bit mode with a 1-bit
 fallback and single-block CMD17 reads. Records are 512-byte aligned and
 the RX FIFO word order is autodetected from the magic.
@@ -225,14 +224,14 @@ Build and program:
 5. `make gorv32-flash-image` - imports fw_jump/Image, compiles the DTB and
    packs `build/gorv32-linux-flash/gorv32-linux-flash.bin`.
 6. Flash (Gowin Programmer): bitstream at `0x000000`, `zsbl.bin` at
-   `0x500000`, and the GRV1 payload at `0x510000`.
+   `0x500000`, and optionally a fallback GRV1 payload at `0x510000`.
    Details in `linux/gorv32-brennen.md`.
 
 For the SD-root profile, create and write the full card only once with
 `make gorv32-sd-image`. During driver and kernel development use
-`make kernel-sd-wsl` followed by `make gorv32-sd-boot-image`, then program
-only `build/gorv32-linux-sd/gorv32-linux-sd-boot.bin` at flash `0x510000`.
-The 512 MB ext2 area on the SD card is not rewritten.
+`make kernel-sd-wsl` followed by `make gorv32-sd-boot-image`, then write only
+`build/gorv32-linux-sd/gorv32-linux-sd-boot.bin` raw at SD LBA 0. The 512 MB
+ext2 area beginning at LBA 32768 is not rewritten.
 
 The preferred hardware debug loop is `kernel-rescue-wsl` followed by
 `gorv32-rescue-image`: its embedded BusyBox shell starts independently of the

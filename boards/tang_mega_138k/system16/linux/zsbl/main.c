@@ -6,10 +6,10 @@
  * and jumps to OpenSBI with the DTB address in a1.
  *
  * Image sources, in order:
- *   1. QSPI XIP window at 0x80010000 (flash offset 0x510000).
- *   2. SD card fallback, raw GRV1 image starting at LBA 0 (vendor SD host at
+ *   1. SD card, raw GRV1 image starting at LBA 0 (vendor SD host at
  *      0xF0600000, registers per MUG1532 chapter 16; card brought up in
  *      4-bit mode at 1 MHz (1-bit fallback), single-block CMD17 reads).
+ *   2. QSPI XIP fallback at 0x80010000 (flash offset 0x510000).
  *
  * UART1 register file per MUG1532 chapter 9: 16550-compatible registers
  * at +0x20 with 4-byte stride, 32-bit APB access, 16x oversampling.
@@ -436,8 +436,8 @@ void main(void)
 	 * right after reset; wait until it is done or the banner gets
 	 * chopped up (~1.2 ms at 115200 for 14 characters). */
 	delay(2000000);
-	uart_puts("\nSystem16 GoRV32 ZSBL v11 flash-first\n");
-	try_flash();
+	uart_puts("\nSystem16 GoRV32 ZSBL v12 SD-first\n");
 	try_sd();
+	try_flash();
 	hang();
 }
