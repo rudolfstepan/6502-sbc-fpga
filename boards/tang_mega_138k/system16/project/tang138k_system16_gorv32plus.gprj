@@ -22,6 +22,8 @@
     <File path="../rtl/sys16_sd_bootloader.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_sdram_probe.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_uart_probe.vhd" type="file.vhdl" enable="1"/>
+    <File path="../rtl/sys16_fb_ram8.vhd" type="file.vhdl" enable="1"/>
+    <File path="../rtl/sys16_hdmi_fb.vhd" type="file.vhdl" enable="1"/>
     <File path="../rtl/sys16_hdmi_720p.vhd" type="file.vhdl" enable="1"/>
     <File path="../../hdmi_test/project/src/gowin_pll/gowin_hdmi_720p_pll.v" type="file.verilog" enable="1"/>
     <File path="../../sbc/project/src/dvi-tx/dvi_tx_clk_drv.v" type="file.verilog" enable="1"/>

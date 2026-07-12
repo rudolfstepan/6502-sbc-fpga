@@ -41,6 +41,13 @@ module sys16_gorv32plus_top(
   wire [31:0] sb_addr,sb_wdata,sb_rdata;wire [3:0] sb_be;wire sb_req,sb_we,sb_ready;
   wire mem_req,mem_we,mem_ready;wire [22:0] mem_addr;wire [1:0] mem_be;
   wire [15:0] mem_wdata,mem_rdata;
+  // AXI slave extension window (0xE8000000): framebuffer "graphics card".
+  wire [31:0] s_araddr,s_awaddr,s_wdata,s_rdata;
+  wire [1:0] s_arburst,s_awburst,s_bresp,s_rresp;wire [3:0] s_arcache,s_awcache,s_wstrb;
+  wire [7:0] s_arid,s_arlen,s_awid,s_awlen,s_bid,s_rid;wire s_arlock,s_awlock;
+  wire [2:0] s_arprot,s_arsize,s_awprot,s_awsize;
+  wire s_arready,s_arvalid,s_awready,s_awvalid,s_bready,s_bvalid,s_rlast,s_rready,s_rvalid,s_wlast,s_wready,s_wvalid;
+  wire [31:0] fb_addr,fb_wdata,fb_rdata;wire [3:0] fb_be;wire fb_req,fb_we,fb_ready;
   wire cpu_uart_tx,probe_tx,probe_active,probe_done;
   wire hdmi_pll_lock;
 
@@ -66,8 +73,30 @@ module sys16_gorv32plus_top(
     .DDR_RRESP(rresp),.DDR_RVALID(rvalid),
     .DDR_WDATA(wdata),.DDR_WLAST(wlast),.DDR_WREADY(wready),
     .DDR_WSTRB(wstrb),.DDR_WVALID(wvalid),
+    .SLV_ARADDR(s_araddr),.SLV_ARBURST(s_arburst),.SLV_ARCACHE(s_arcache),.SLV_ARID(s_arid),
+    .SLV_ARLEN(s_arlen),.SLV_ARLOCK(s_arlock),.SLV_ARPROT(s_arprot),.SLV_ARREADY(s_arready),
+    .SLV_ARSIZE(s_arsize),.SLV_ARVALID(s_arvalid),
+    .SLV_AWADDR(s_awaddr),.SLV_AWBURST(s_awburst),.SLV_AWCACHE(s_awcache),.SLV_AWID(s_awid),
+    .SLV_AWLEN(s_awlen),.SLV_AWLOCK(s_awlock),.SLV_AWPROT(s_awprot),.SLV_AWREADY(s_awready),
+    .SLV_AWSIZE(s_awsize),.SLV_AWVALID(s_awvalid),
+    .SLV_BID(s_bid),.SLV_BREADY(s_bready),.SLV_BRESP(s_bresp),.SLV_BVALID(s_bvalid),
+    .SLV_RDATA(s_rdata),.SLV_RID(s_rid),.SLV_RLAST(s_rlast),.SLV_RREADY(s_rready),
+    .SLV_RRESP(s_rresp),.SLV_RVALID(s_rvalid),
+    .SLV_WDATA(s_wdata),.SLV_WLAST(s_wlast),.SLV_WREADY(s_wready),
+    .SLV_WSTRB(s_wstrb),.SLV_WVALID(s_wvalid),
     .JTAG_TMS(1'b0),.JTAG_TDI(1'b0),.JTAG_TDO(jtag_tdo),.JTAG_TCK(1'b0)
   );
+
+  sys16_axi32_to_bus32 axi_fb(
+    .clk(clk_50mhz),.resetn(resetn),
+    .araddr(s_araddr),.arburst(s_arburst),.arid(s_arid),.arlen(s_arlen),.arsize(s_arsize),
+    .arvalid(s_arvalid),.arready(s_arready),.rdata(s_rdata),.rid(s_rid),.rlast(s_rlast),
+    .rresp(s_rresp),.rvalid(s_rvalid),.rready(s_rready),
+    .awaddr(s_awaddr),.awburst(s_awburst),.awid(s_awid),.awlen(s_awlen),.awsize(s_awsize),
+    .awvalid(s_awvalid),.awready(s_awready),.wdata(s_wdata),.wlast(s_wlast),.wstrb(s_wstrb),
+    .wvalid(s_wvalid),.wready(s_wready),.bid(s_bid),.bresp(s_bresp),.bvalid(s_bvalid),.bready(s_bready),
+    .bus_req(fb_req),.bus_we(fb_we),.bus_addr(fb_addr),.bus_wdata(fb_wdata),
+    .bus_be(fb_be),.bus_rdata(fb_rdata),.bus_ready(fb_ready));
 
   sys16_axi32_to_bus32 axi_sdram(
     .clk(clk_50mhz),.resetn(resetn),
@@ -135,6 +164,11 @@ module sys16_gorv32plus_top(
       default: diag_status<=16'h07E0; // green
     endcase
 
+  // Isolation build: keep the regenerated CPU/AXI-slave interface, but use
+  // the proven HDMI diagnostic generator without the large BSRAM framebuffer.
+  // Tie off the unused bus32 response so accidental E8 accesses still finish.
+  assign fb_rdata = 32'h00000000;
+  assign fb_ready = fb_req;
   sys16_hdmi_720p hdmi_i(
     .clk_in(clk_50mhz),.reset_n(resetn),.status_word(diag_status),
     .pll_lock(hdmi_pll_lock),.tmds_clk_p(tmds_clk_p),.tmds_clk_n(tmds_clk_n),
