@@ -264,6 +264,10 @@ third_party/opensbi-1.8.1/
 .tmp/opensbi-1.8.1.tar.gz
 third_party/VexRiscv/
 
+# NanoMig is a local, standalone project. Do not add its source tree to this
+# parent repository.
+/third_party/NanoMig/
+
 # System16 Linux build products and merge_config scratch files. Sources,
 # configuration, linker scripts and image packers remain tracked.
 boards/tang_mega_138k/system16/linux/zsbl/zsbl.bin
@@ -272,3 +276,5 @@ boards/tang_mega_138k/system16/linux/zsbl/zsbl.elf
 .tmp.config.*
 tmp/
 firmware/
+!boards/tang_mega_138k/ae350_itcm/firmware/
+!boards/tang_mega_138k/ae350_itcm/firmware/**

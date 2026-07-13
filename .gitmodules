@@ -1,3 +1,0 @@
-[submodule "third_party/NanoMig"]
-	path = third_party/NanoMig
-	url = https://github.com/harbaum/NanoMig.git
