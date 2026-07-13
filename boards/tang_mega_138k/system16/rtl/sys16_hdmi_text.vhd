@@ -1,6 +1,6 @@
 -- HDMI text console "graphics card" for the GoRV32 Plus shell.
 --
--- Thin wrapper around sys16_text_core: the 720p PLL, the pixel-domain reset
+-- Thin wrapper around sys16_text_core: the CEA 720p PLL, pixel-domain reset
 -- shift register and the DVI serialiser (all identical to sys16_hdmi_fb),
 -- plus the testable text core that does the character rendering. Pin- and
 -- register-compatible drop-in for sys16_hdmi_fb minus the DDR3 app port:

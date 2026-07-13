@@ -2,7 +2,7 @@
 /*
  * System16 GoRV32 hardware text console.
  *
- * The FPGA presents an 80x22 character-cell grid behind the AXI slave
+ * The FPGA presents an 80x25 character-cell grid behind the AXI slave
  * window: a 16-bit cell (low byte = character code, high byte = a
  * VGA-style attribute) at 0xE8000000, and control/cursor registers at
  * 0xE8800000. The cell layout is identical to what the VT layer keeps in
@@ -36,7 +36,7 @@
 static void __iomem *s16t_cells;
 static void __iomem *s16t_regs;
 static unsigned int  s16t_cols = 80;
-static unsigned int  s16t_rows = 22;
+static unsigned int  s16t_rows = 25;
 
 static inline void s16t_cell(unsigned int idx, u16 v)
 {
@@ -53,6 +53,13 @@ static void s16con_init(struct vc_data *vc, bool init)
 	vc->vc_can_do_color = 1;
 	vc->vc_complement_mask = 0x7700;
 	vc->vc_hi_font_mask = 0;
+	/*
+	 * visual_init() drops the previous console's unimap before calling us.
+	 * Reattach Linux's CP437 map so Unicode input such as U+00E4 reaches the
+	 * matching hardware glyph (0x84) instead of the replacement character.
+	 */
+	if (con_set_default_unimap(vc))
+		pr_warn_once("system16-textcon: cannot install CP437 Unicode map\n");
 	if (init) {
 		vc->vc_cols = s16t_cols;
 		vc->vc_rows = s16t_rows;

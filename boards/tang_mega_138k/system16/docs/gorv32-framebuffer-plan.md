@@ -6,7 +6,7 @@
 > teilen sich EIN DDR3-Interface. Fuer eine Linux-Konsole ist ein
 > Hardware-Textmodus fundamental schneller (2 Byte/Zeichen statt hunderte
 > Pixelbytes; Scroll = Repaint kleiner Zellzahlen). Der aktive HDMI-Pfad
-> ist daher jetzt `sys16_hdmi_text` (80x22, 8x16-VGA-Font, kein DDR3) mit
+> ist daher jetzt `sys16_hdmi_text` (80x25, 8x16-VGA-Font, kein DDR3) mit
 > dem Linux-consw-Treiber `s16text_con.c`; Details in der Memory
 > `system16-hdmi-text-console`. Der Framebuffer-Stack unten bleibt als
 > Referenz/Grafikoption erhalten (im Top abgekoppelt, per git reversibel).

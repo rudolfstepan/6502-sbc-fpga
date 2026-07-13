@@ -26,6 +26,7 @@ set_clock_groups -asynchronous -group [get_clocks {sd_clk_d}] -group [get_clocks
 # (TA2004) and this parser also rejects get_clocks -of_objects; naming
 # them explicitly on the same pins (periods from the P&R clock report)
 # gives a name usable in set_clock_groups, same as flash_clk/sd_clk_d.
+# CEA 1280x720p: 75 MHz pixel, 375 MHz DDR serializer clock.
 create_clock -name pix_clk -period 13.333 [get_pins {hdmi_i/pll_i/PLL_inst/CLKOUT0}]
 create_clock -name pix_clk_5x -period 2.667 [get_pins {hdmi_i/pll_i/PLL_inst/CLKOUT1}]
 set_clock_groups -asynchronous -group [get_clocks {pix_clk pix_clk_5x}] -group [get_clocks {clk_50mhz}]
@@ -33,8 +34,10 @@ set_clock_groups -asynchronous -group [get_clocks {pix_clk pix_clk_5x}] -group [
 # OSER10 RESET is an asynchronous control input.  Its synchronizers are
 # preserved per lane and physically anchored beside the three serializers in
 # the CST, matching the hardware-proven colorbar design.  Exclude the
-# half-cycle recovery analysis so timing-driven routing spends its effort on
-# the real pixel, CPU and DDR data paths.
+# asynchronous assertion path into those three-stage synchronizers and the
+# half-cycle OSER recovery analysis. Deassertion is made synchronous by the
+# shift registers themselves, so neither path is an ordinary timed data path.
+set_false_path -from [get_pins {hdmi_i/reset_sr*/Q}] -to [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/reset_5x_sr*/PRESET}]
 set_false_path -from [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/reset_5x_sr*/Q}] -to [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/tmds_serdes_inst0/RESET}]
 
 # DDR3 main-memory backend: hard 400 MHz memory clock and 100 MHz app clock.

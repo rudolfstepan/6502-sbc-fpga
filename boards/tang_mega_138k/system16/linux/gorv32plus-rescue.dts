@@ -70,6 +70,11 @@
 			 * Only exact, retry-free reads without FIFO-full events pass. */
 			gowin,auto-calibrate;
 			gowin,read-only;
+			/* One probe-time CMD24 test in the unused gap.  The driver
+			 * saves/restores LBA 16384 and never exposes it through
+			 * /dev/gorv32sd.  Before CMD24 it verifies the actual GRV1
+			 * end is below LBA 8192; ext2 starts at LBA 32768. */
+			gowin,write-self-test-lba = <16384>;
 			/* Printed during probe; no interactive UART command required. */
 			gowin,self-test-sectors = <16>;
 			status = "okay";

@@ -34,7 +34,9 @@ architecture sim of tb_sys16_text_core is
   constant BLACK : std_logic_vector(23 downto 0) := x"000000";
 begin
   clk_in  <= not clk_in  after 10 ns   when not done else '0';
-  clk_pix <= not clk_pix after 6.734 ns when not done else '0';
+  -- Accelerated pixel clock: scanout is cycle based, so this keeps the
+  -- full 1680x831-frame test quick without changing any video coordinates.
+  clk_pix <= not clk_pix after 1 ns when not done else '0';
 
   dut : entity work.sys16_text_core
     port map (
@@ -100,7 +102,9 @@ begin
     assert r = x"53313654" report "ID mismatch" severity error;
     bus_read(x"800010", r);   -- GEOM: cell_h,cell_w,rows,cols
     assert r(7 downto 0) = x"50" report "GEOM cols/=80" severity error;    -- 80
-    assert r(15 downto 8) = x"16" report "GEOM rows/=22" severity error;   -- 22
+    assert r(15 downto 8) = x"19" report "GEOM rows/=25" severity error;   -- 25
+    assert r(23 downto 16) = x"10" report "GEOM cell width/=16" severity error;
+    assert r(31 downto 24) = x"1C" report "GEOM cell height/=28" severity error;
 
     -- cursor register write + readback
     bus_write(x"80000C", x"0001040A", "1111");   -- en=1,row=4,col=10
@@ -115,6 +119,9 @@ begin
     -- 'A' into cell (3,5) = cell index 245 (odd -> high half), byte offset
     -- 490 = 0x1EA, word 122, be=1100. Exercises the row/col address multiply.
     bus_write(x"0001EA", x"0F410000", "1100");
+    -- 'A' into the first cell of the 25th row. This is word 960 of the
+    -- 1000-word character RAM and verifies the enlarged geometry.
+    bus_write(x"000F00", x"00000F41", "0011");
     -- CTRL: enable on, test pattern OFF, stripe OFF
     bus_write(x"800004", x"00000001", "0001");
 
@@ -122,21 +129,22 @@ begin
     for i in 0 to 20 loop wait until rising_edge(clk_pix); end loop;
 
     -- Sample the glyph. 'A' 8x16 (bit7=leftmost):
-    --   row0=00 row2=10 row7=FE ; 2x scale, cell(0,0) at x=0..15,y=8..39.
-    --   glyph (r,c) shown at x=2c, y=8+2r.
-    sample(0,  0, BLACK, "top border");                 -- y<8 border
-    sample(0,  4, BLACK, "top border 2");
-    sample(0,  8, BLACK, "A r0c0");                      -- row0 blank
-    sample(0, 12, BLACK, "A r2c0");                      -- row2 bit7=0
-    sample(6, 12, WHITE, "A r2c3");                      -- row2 0x10 bit4=1
-    sample(0, 22, WHITE, "A r7c0");                      -- row7 0xFE bit7=1
-    sample(14,22, BLACK, "A r7c7");                      -- row7 0xFE bit0=0
-    sample(16,22, BLACK, "cell(0,1) blank");             -- neighbour cell empty
-    -- 'A' at cell (3,5): content window x=80..95, y=104..135.
-    sample(80, 104, BLACK, "cell(3,5) A r0c0");          -- row0 blank
-    sample(86, 108, WHITE, "cell(3,5) A r2c3");          -- row2 0x10 bit4=1
-    sample(80, 118, WHITE, "cell(3,5) A r7c0");          -- row7 0xFE bit7=1
-    sample(64, 118, BLACK, "cell(3,4) blank");           -- neighbour col empty
+    --   row0=00 row2=10 row7=FE; cell(0,0) is x=0..15,y=10..37.
+    --   Vertical glyph rows are stretched from 16 to 28 scanlines.
+    sample(0,  0, BLACK, "top border");                  -- y<10 border
+    sample(0, 10, BLACK, "A r0c0");                      -- row0 blank
+    sample(0, 14, BLACK, "A r2c0");                      -- row2 bit7=0
+    sample(6, 14, WHITE, "A r2c3");                      -- row2 0x10 bit4=1
+    sample(0, 23, WHITE, "A r7c0");                      -- row7 0xFE bit7=1
+    sample(14,23, BLACK, "A r7c7");                      -- row7 0xFE bit0=0
+    sample(16,23, BLACK, "cell(0,1) blank");             -- neighbour cell empty
+    -- 'A' at cell (3,5): content window x=80..95, y=94..121.
+    sample(80,  94, BLACK, "cell(3,5) A r0c0");          -- row0 blank
+    sample(86,  98, WHITE, "cell(3,5) A r2c3");          -- row2 0x10 bit4=1
+    sample(80, 107, WHITE, "cell(3,5) A r7c0");          -- row7 0xFE bit7=1
+    sample(64, 107, BLACK, "cell(3,4) blank");           -- neighbour col empty
+    -- First cell of row 24 occupies y=682..709, proving all 25 rows scan.
+    sample(6, 686, WHITE, "cell(24,0) A r2c3");
 
     if errors = 0 then report "TB PASSED" severity note;
     else report "TB FAILED, " & integer'image(errors) & " errors" severity error;

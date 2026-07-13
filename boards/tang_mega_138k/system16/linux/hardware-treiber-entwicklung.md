@@ -73,7 +73,8 @@ Ersteinrichtung für Linux 6.12.95, OpenSBI 1.8.1 und Buildroot 2025.02 steht in
 - `flash`: kleines, eingebettetes Initramfs; hardwareverifiziert.
 - `rescue`: Initramfs plus read-only SD-Treiber. Dieses Profil ist für neue
   Hardware und Treiber am sichersten, weil ein defekter SD-Treiber das
-  Starten der Shell nicht verhindert.
+  Starten der Shell nicht verhindert. Nur dieses Profil enthält zusätzlich
+  den eng begrenzten CMD24-Scratch-Test auf physischem LBA 16384.
 - `sd`: experimentelles, read-only ext2-Rootfs auf der SD-Karte.
 - `qemu-sd`: prüft den generischen RV32-Kernel und das Rootfs, aber keine
   System16-MMIO-Hardware.
@@ -103,6 +104,22 @@ boards/tang_mega_138k/system16/build/gorv32-linux-rescue/
 Dieses GRV1-Image wird am Flash-Offset `0x510000` programmiert. Ein
 Kernel-/Treiber-Neubau ändert nicht den FPGA-Bitstream am Offset `0x000000`
 und nicht den ZSBL am Offset `0x500000`.
+
+Bei SD-Treiberarbeiten ist die SD-first-Reihenfolge wichtig: Eine gültige
+GRV1-Datei an SD-LBA 0 wird vor dem Flash-Rückfall gestartet. Für den
+Rescue-CMD24-Test muss deshalb das neu gebaute Rescue-GRV1 zusätzlich raw an
+LBA 0 geschrieben werden; es endet vor LBA 8192, der Scratch-Sektor liegt bei
+LBA 16384 und ext2 beginnt bei LBA 32768. Der Test sichert Original und
+Sentinels, schreibt ein Muster, liest es zweimal, restauriert das Original mit
+einem einzigen CMD24, liest es zweimal und vergleicht die Sentinels. CMD24 wird
+nie automatisch wiederholt und `/dev/gorv32sd` bleibt read-only.
+
+Der erste Lauf erfolgt nur mit einer entbehrlichen oder vollständig geklonten
+Karte. Nach dem Rescue-Overlay wird ein vollständiges Raw-Abbild als Baseline
+erstellt; nach genau einem Boot und der UART-PASS-Zeile wird die ganze Karte
+erneut gelesen und mit dieser Baseline verglichen. Zusätzlich muss
+`cat /sys/block/gorv32sd/ro` den Wert `1` ausgeben. Allgemeine Schreibzugriffe
+sind damit ausdrücklich noch nicht freigegeben.
 
 Der vollständige SD-Build lautet:
 
@@ -402,7 +419,9 @@ untersucht werden müssen:
 3. Bitstream bauen, Timingbericht und Synthesewarnungen kontrollieren.
 4. Nur den neuen Bitstream programmieren und die ID mit `devmem` lesen.
 5. Device Tree und minimalistischen Pollingtreiber hinzufügen.
-6. `rescue`-Kernel und GRV1-Image bauen und nur Offset `0x510000` erneuern.
+6. `rescue`-Kernel und GRV1-Image bauen und Offset `0x510000` erneuern. Bei
+   einem SD-Treibertest wegen SD-first auch das Rescue-GRV1 an SD-LBA 0
+   aktualisieren; die Klon-/Baseline-Regel oben beachten.
 7. Probe-Log mit `dmesg` prüfen und einen Userspace-Selbsttest ausführen.
 8. Fehlerfälle testen: Divisor null, Timeout, START während BUSY, falsche ID,
    mehrere Prozesse und wiederholte Aufträge.

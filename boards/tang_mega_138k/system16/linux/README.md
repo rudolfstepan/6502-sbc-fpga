@@ -9,13 +9,17 @@ There are three deliberately separate profiles:
 | Profile | Userspace/root | Board SD driver | Status |
 | --- | --- | --- | --- |
 | `flash` | embedded BusyBox initramfs | no | hardware verified |
-| `rescue` | embedded BusyBox initramfs | read-only, auto-calibrating | hardware verified; preferred SD bring-up loop |
+| `rescue` | embedded BusyBox initramfs | read-only, auto-calibrating; isolated probe-time scratch test | read path hardware verified; CMD24 scratch test pending hardware verification |
 | `sd` | 512 MiB ext2 at physical LBA 32768 | read-only, auto-calibrating | experimental external-root profile |
 
 The SD image can contain GNU make, binutils and a native GCC, and that image is
-covered by the QEMU test. The current hardware driver intentionally exposes the
-card read-only because CMD24 writes are not reliable yet. Do not describe this
-profile as writable until the write path and filesystem integrity tests pass.
+covered by the QEMU test. The current hardware driver still exposes
+`/dev/gorv32sd` read-only. Only the rescue DTB enables one tightly scoped
+probe-time CMD24 test at physical LBA 16384; it does not enable block-device or
+filesystem writes. The rescue profile deliberately omits ext2 support so it
+cannot mount the card; the separate `sd` profile retains ext2. Do not describe
+this profile as writable until the write path and filesystem integrity tests
+pass.
 The complete build procedure is in [linux-build-image.md](linux-build-image.md).
 For adding a new MMIO peripheral, coprocessor or Linux platform driver, see
 [hardware-treiber-entwicklung.md](hardware-treiber-entwicklung.md).
@@ -36,6 +40,17 @@ Clock and data are open-collector inputs with FPGA pull-ups to 3.3 V. Do not
 apply a push-pull 5 V signal to either FPGA pin. A PS/2 socket or adapter must
 power the keyboard from 5 V while keeping clock/data open-collector; use a
 proper open-drain level shifter if the adapter contains active 5 V logic.
+
+The hardware profiles compile a German QWERTZ, no-dead-keys map into the Linux
+VT layer. This changes only PS/2/USB keyboard input on the HDMI `tty1`; bytes
+received from a serial terminal retain that terminal's own layout. BusyBox runs
+independent gettys on `tty1` and `ttyS0`. Kernel output is still mirrored to
+both consoles, but interactive input no longer passes through `conspy`, whose
+polling caused visible keyboard latency and interrupted UART sessions.
+The text-console driver restores Linux's CP437 Unicode map when it takes over
+from the boot console. The existing hardware font therefore renders
+`ÄÖÜäöüß`, section and degree signs at their CP437 glyph positions; no separate
+font ROM or bitstream update is required for these characters.
 
 ## Hardware boot capture
 
@@ -72,6 +87,7 @@ is the authoritative format implementation.
 | Flash | `0x500000` | ZSBL; also the IP Core Generator `Flash_Burn_Address` |
 | Flash | `0x510000` | Optional fallback GRV1 image |
 | SD | LBA 0 | Primary raw GRV1 boot container |
+| SD | LBA 16384 | Rescue-only CMD24 scratch sector in the unused gap |
 | SD | LBA 32768 | SD profile's 512 MiB ext2 root filesystem |
 | CPU XIP | `0x80000000` | ZSBL mapping of flash offset `0x500000` |
 | SDRAM | `0x00000000` | OpenSBI (`FW_TEXT_START=0`) |
@@ -112,8 +128,15 @@ read benchmark: 16 sectors in 42 ms (190 KiB/s), 0 retries, 0 FIFO-full events
 ```
 
 The result is measured on every boot and is not hard-coded; another card can
-select a different mode. Both board DTS files set `gowin,read-only`, so Linux
-cannot issue the still-unproven CMD24 path.
+select a different mode. Both board DTS files set `gowin,read-only`, so the
+registered block device rejects writes. The rescue DTB additionally sets
+`gowin,write-self-test-lba = <16384>`. At probe time the driver switches to
+1-bit/1 MHz, reads the original sector and four sentinels twice, writes one test
+pattern, reads it twice, restores the original with one CMD24, reads it twice
+again and compares the sentinels. The sentinels are physical LBAs 0, 16383,
+16385 and 32770. A CMD24 is never retried: a failed completion indication is
+ambiguous, so the driver reinitializes and verifies instead of issuing the same
+write again. Pass or fail, `/dev/gorv32sd` remains read-only.
 
 ## Source and generated files
 
@@ -163,9 +186,19 @@ make -C boards/tang_mega_138k/system16 gorv32-rescue-image
 ```
 
 Program only
-`build/gorv32-linux-rescue/gorv32-linux-rescue.bin` at flash `0x510000`.
-The initramfs starts without SD, so a driver failure cannot prevent access to
-the shell. No SD card rewrite or FPGA rebuild is needed for this loop.
+`build/gorv32-linux-rescue/gorv32-linux-rescue.bin` at flash `0x510000` for
+the normal fallback loop. The initramfs starts without SD, so a driver failure
+cannot prevent access to the shell. No FPGA rebuild is needed.
+
+For the CMD24 scratch test, however, SD-first selects a valid GRV1 at LBA 0
+before the flash fallback. Therefore write the newly built rescue GRV1 raw at
+SD LBA 0 as well. It is flash-sized and ends below LBA 8192; the scratch sector
+at LBA 16384 and the ext2 root at LBA 32768 are outside that overlay. Before
+CMD24, the driver also reads the actual GRV1 header twice and refuses the test
+unless its canonical records leave the full 8192-sector guard. Perform
+the first test only on a disposable or completely cloned card. Create a full
+raw baseline after this deliberate rescue overlay, boot once, then read the
+card again and compare the complete raw images byte-for-byte.
 
 Provision the external-root card only for a new or changed root filesystem:
 
@@ -216,12 +249,17 @@ copy $00400000 len $...
 checksum ok, jump to OpenSBI
 OpenSBI ...
 [    0.000000] Linux version ...
+[    0.000000] Machine model: System16 GoRV32 Plus Linux FPGA (rescue)
 gorv32-sd f0600000.sdhost: auto calibration: testing ...
 gorv32-sd f0600000.sdhost: auto calibration selected ...
+gorv32-sd f0600000.sdhost: CMD24 scratch self-test at physical LBA 16384; root window stays read-only
+gorv32-sd f0600000.sdhost: CMD24 scratch self-test PASS at physical LBA 16384; original restored
 gorv32-sd f0600000.sdhost: read benchmark: ... 0 retries, 0 FIFO-full events
 ```
 
 After initramfs startup, BusyBox supplies the minimal user space and shell.
+`cat /sys/block/gorv32sd/ro` must print `1`; a PASS line does not authorize
+general SD writes.
 The HDMI top stripe is a coarse hardware diagnostic: red means no CPU UART or
 DDR traffic, blue means DDR reads without UART, magenta means DDR writes
 without UART, yellow means UART without DDR, cyan means UART plus reads, and
@@ -238,7 +276,9 @@ loop, but the UART log remains the authoritative boot result.
   drive or probe those pads, or synthesis reports EX0339.
 - OpenSBI 1.8.1 requires the local pre-MDT `fw_base.S` adjustment implemented
   by the build helper for this privilege-architecture implementation.
-- The Linux SD device is read-only. CMD17 reads are hardware verified; CMD24
-  writes and writable ext2/swap operation are not.
+- The Linux SD device is read-only. CMD17 reads are hardware verified. The
+  rescue-only LBA-16384 CMD24 save/test/restore sequence is an isolated
+  integrity test; general writes and writable ext2/swap operation are not
+  enabled.
 - QEMU validates the generic RV32 kernel and early console, not the board's
   XIP, AXI-to-SDRAM bridge, SD host or UART wiring.

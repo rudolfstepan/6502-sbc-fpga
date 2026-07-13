@@ -1,6 +1,6 @@
 # Linux-Images fuer System16 GoRV32 Plus bauen
 
-Diese Anleitung beschreibt den reproduzierbaren Stand vom 2026-07-12. Der
+Diese Anleitung beschreibt den reproduzierbaren Stand vom 2026-07-13. Der
 Bootpfad ist **SD-first**: ZSBL liegt bei Flash `0x500000` und laedt den
 primaeren GRV1-Container von SD-LBA 0. Flash `0x510000` bleibt der Rueckfall;
 das grosse ext2-RootFS beginnt bei SD-LBA 32768.
@@ -10,15 +10,19 @@ das grosse ext2-RootFS beginnt bei SD-LBA 32768.
 | Profil | Userspace/root | Ergebnis | Hardwarestatus |
 | --- | --- | --- | --- |
 | `flash` | BusyBox-initramfs im Kernel | `build/gorv32-linux-flash/gorv32-linux-flash.bin` | bestaetigt |
-| `rescue` | dasselbe initramfs plus SD-Treiber | `build/gorv32-linux-rescue/gorv32-linux-rescue.bin` | bestaetigt, bevorzugter SD-Test |
+| `rescue` | dasselbe initramfs plus read-only SD-Treiber und isolierter Scratch-Test | `build/gorv32-linux-rescue/gorv32-linux-rescue.bin` | Leseweg bestaetigt; CMD24-Test noch auf Hardware zu pruefen |
 | `sd` | ext2 ab physischem LBA 32768 | `build/gorv32-linux-sd/gorv32-linux-sd-boot.bin` und `.img` | Lesen bestaetigt, RootFS absichtlich read-only |
 | `qemu-sd` | dasselbe ext2 ueber virtio | WSL-Buildausgabe | RootFS-/Toolchain-Test ohne Board-Hardware |
 
 CMD17-Lesen ist auf dem FPGA bestaetigt. Beide SD-DTBs enthalten
-`gowin,read-only`, weil CMD24-Schreiben noch nicht zuverlaessig ist. Das
-Buildroot-Image enthaelt zwar Swap und einen nativen GCC, aber beschreibbares
-ext2, Swap und Compilerbetrieb sind auf der echten Hardware noch nicht
-freigegeben. QEMU kann diese Inhalte unabhaengig vom Board-SD-Host pruefen.
+`gowin,read-only`; `/dev/gorv32sd` bleibt deshalb auch nach einem erfolgreichen
+Test schreibgeschuetzt. Nur das Rescue-DTB erlaubt dem Treiber bei der Probe
+einen isolierten CMD24-Save/Test/Restore-Lauf auf physischem LBA 16384. Das
+Rescue-Profil enthaelt bewusst keinen ext2-Treiber und kann die Karte daher
+nicht mounten; nur das getrennte `sd`-Profil behaelt ext2. Das Buildroot-Image
+enthaelt zwar Swap und einen nativen GCC, aber beschreibbares ext2, Swap und
+Compilerbetrieb sind auf der echten Hardware noch nicht freigegeben. QEMU kann
+diese Inhalte unabhaengig vom Board-SD-Host pruefen.
 
 ## 1. Voraussetzungen
 
@@ -122,14 +126,26 @@ make -C boards/tang_mega_138k/system16 kernel-rescue-wsl
 make -C boards/tang_mega_138k/system16 gorv32-rescue-image
 ```
 
-Nur diese Datei bei Flash `0x510000` programmieren:
+Fuer den normalen Rueckfalltest diese Datei bei Flash `0x510000` programmieren:
 
 ```text
 build/gorv32-linux-rescue/gorv32-linux-rescue.bin
 ```
 
-Die SD-Karte, der Bitstream und ZSBL bleiben unveraendert. Das ist der
-empfohlene Ablauf fuer jede weitere SD-Treiberaenderung.
+Bitstream und ZSBL bleiben unveraendert. Bei einer gueltigen GRV1-Datei auf der
+Karte startet SD-first jedoch diese Datei und nicht den Flash-Rueckfall. Um den
+neuen Rescue-Treiber samt CMD24-Scratch-Test wirklich auszufuehren, muss daher
+dieselbe `gorv32-linux-rescue.bin` raw ab SD-LBA 0 geschrieben werden. Das
+Flash-fit-Limit haelt dieses Rescue-GRV1 unter LBA 8192; LBA 16384 und das ext2
+ab LBA 32768 werden durch das Overlay nicht beruehrt.
+
+Der erste CMD24-Versuch gehoert ausschliesslich auf eine entbehrliche oder
+vollstaendig geklonte Karte. Nach dem Rescue-Overlay zuerst ein neues
+vollstaendiges Raw-Abbild als Baseline lesen. Erst danach einmal booten, die
+Karte erneut raw lesen und beide Abbilder bytegenau vergleichen. Die Baseline
+muss nach dem Overlay entstehen, damit der beabsichtigte GRV1-Austausch nicht
+als Testabweichung erscheint. Der genaue Brenn- und Vergleichsablauf steht in
+[gorv32-brennen.md](gorv32-brennen.md).
 
 ## 5. Automatische SD-Kalibrierung
 
@@ -154,6 +170,29 @@ read benchmark: 16 sectors in 42 ms (190 KiB/s), 0 retries, 0 FIFO-full events
 ```
 
 Die Auswahl wird bei jedem Boot neu gemessen und ist nicht fest vorgegeben.
+
+Nur `gorv32plus-rescue.dts` setzt
+`gowin,write-self-test-lba = <16384>`. Anschliessend an die Kalibrierung laeuft
+der Test bewusst bei 1 Bit/1 MHz:
+
+1. Den realen GRV1-Header zweimal lesen und dessen kanonische Records sowie
+   mindestens 8192 Sektoren Abstand bis LBA 16384 verifizieren.
+2. Original von LBA 16384 und die Sentinel-Sektoren zweimal identisch lesen.
+3. Genau ein Testmuster per CMD24 schreiben und zweimal zuruecklesen.
+4. Das gesicherte Original mit genau einem CMD24 wiederherstellen und zweimal
+   zuruecklesen.
+5. Die Sentinel-Sektoren erneut mit der Sicherung vergleichen.
+
+Weder Muster- noch Restore-CMD24 werden automatisch wiederholt. Bei einer
+unklaren Abschlussmeldung initialisiert der Treiber die Karte neu und liest zur
+Verifikation, statt blind erneut zu schreiben. Der Blocktreiber bleibt in jedem
+Fall read-only; im gestarteten Rescue-System muss
+`cat /sys/block/gorv32sd/ro` den Wert `1` liefern. Ein erfolgreicher Lauf meldet:
+
+```text
+CMD24 scratch self-test at physical LBA 16384; root window stays read-only
+CMD24 scratch self-test PASS at physical LBA 16384; original restored
+```
 
 ## 6. SD-RootFS mit Buildroot erstellen
 
@@ -226,10 +265,14 @@ Layout:
 
 | Physischer Bereich | Inhalt |
 | --- | --- |
-| LBA 0 | primaerer GRV1-Header fuer ZSBL v12 |
-| ab LBA 1 | sektor-ausgerichtete OpenSBI-/DTB-/Kernel-Daten |
-| bis LBA 32767 | reservierter Bootbereich (16 MiB) |
+| LBA 0..32767 | reservierter Raw-Bootbereich; primaerer GRV1-Header bei LBA 0 |
+| LBA 0..8191 (Rescue-Test) | Rescue-GRV1; tatsaechliches Ende buildabhaengig |
+| LBA 16384 (Rescue-Test) | einzelner CMD24-Scratch-Sektor in der ungenutzten Luecke |
 | LBA 32768..1081343 | 512-MiB-ext2-RootFS |
+
+Das fuer den Scratch-Test verwendete Rescue-GRV1 endet wegen des Flash-fit-
+Limits vor LBA 8192. Die tatsaechliche letzte belegte Boot-LBA haengt vom
+jeweiligen Build ab und wird nicht als feste Zahl vorausgesetzt.
 
 Es gibt keine MBR-/GPT-Partitionstabelle. Das `.img` mit einem Raw-Writer auf
 das gesamte SD-Geraet schreiben. Der mitgelieferte PowerShell-Writer verlangt
@@ -249,7 +292,12 @@ Der Befehl ueberschreibt den angegebenen Datentraeger ohne Rueckfrage.
 
 ## 9. Schnelle Kernel-/Treiber-Iteration
 
-Wenn das RootFS bereits auf der Karte liegt:
+Fuer einen Rescue-Treibertest den neuen Rescue-Container wegen SD-first raw an
+LBA 0 aktualisieren; nur das Programmieren von Flash `0x510000` reicht bei
+einem gueltigen SD-GRV1 nicht. Fuer den erstmaligen CMD24-Lauf gelten die
+Baseline- und Klonregeln aus Abschnitt 4.
+
+Wenn das RootFS bereits auf der Karte liegt und das `sd`-Profil getestet wird:
 
 ```powershell
 make -C boards/tang_mega_138k/system16 kernel-sd-wsl
@@ -274,6 +322,9 @@ ist dafuer nicht noetig und wuerde das grosse Kartenabbild erneut erzeugen.
   mounten.
 - **Kalibrierung findet keinen Modus:** Sie akzeptiert absichtlich keine
   Retries oder FIFO-full-Ereignisse. Rescue-Linux bleibt trotzdem benutzbar.
+- **CMD24-Test meldet keinen PASS:** Keine allgemeinen Schreibtests starten.
+  UART-Log sichern, Karte ausschalten und das Raw-Abbild mit der nach dem
+  Rescue-Overlay erstellten Baseline vergleichen. `/dev/gorv32sd` bleibt RO.
 - **Flash-Fallback zu gross:** Nur die optionale GRV1-Datei bei Flash
   `0x510000` muss unter `0x2f0000` Bytes bleiben; der primaere SD-Boot ist
   nicht an diese Flash-Grenze gebunden.

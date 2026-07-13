@@ -3,6 +3,7 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../../../.." && pwd)
 kernel=${KERNEL_SRC:-"$root/third_party/linux-6.12.95"}
 profile=${SYSTEM16_PROFILE:-${1:-flash}}
+keymap_make=()
 case "$profile" in
   flash)
     out=${KERNEL_OUT:-"$HOME/system16-out"}
@@ -39,6 +40,10 @@ esac
 cross=${CROSS_COMPILE:-riscv64-linux-gnu-}
 
 if [ "$profile" != qemu-sd ]; then
+  command -v loadkeys >/dev/null 2>&1 || {
+    echo "loadkeys is required to compile defkeymap-de.map (Ubuntu: sudo apt install kbd)" >&2
+    exit 1
+  }
   cp "$root/boards/tang_mega_138k/system16/linux/kernel/gorv32_ps2.c" \
      "$kernel/drivers/input/keyboard/gorv32_ps2.c"
   cp "$root/boards/tang_mega_138k/system16/linux/kernel/Kconfig.ps2" \
@@ -61,6 +66,16 @@ if [ "$profile" != qemu-sd ]; then
   grep -q 'CONFIG_SYS16_TEXTCON' "$kernel/drivers/video/console/Makefile" || \
     printf '\nobj-$(CONFIG_SYS16_TEXTCON) += s16text_con.o\n' >> \
       "$kernel/drivers/video/console/Makefile"
+
+  # Compile the German QWERTZ map into the VT keyboard layer.  This affects
+  # physical keyboards feeding tty1, but deliberately leaves byte-oriented
+  # serial-terminal input on ttyS0 untouched.  Recreate the generated source
+  # on every build so a changed map cannot be hidden by an old O= tree.
+  cp "$root/boards/tang_mega_138k/system16/linux/kernel/defkeymap-de.map" \
+     "$kernel/drivers/tty/vt/defkeymap.map"
+  rm -f "$out/drivers/tty/vt/defkeymap.c" \
+        "$out/drivers/tty/vt/defkeymap.o"
+  keymap_make=(GENERATE_KEYMAP=1)
 fi
 
 if [ "$profile" = sd ] || [ "$profile" = rescue ]; then
@@ -79,7 +94,8 @@ fi
 make -C "$kernel" O="$out" ARCH=riscv CROSS_COMPILE="$cross" allnoconfig
 "$kernel/scripts/kconfig/merge_config.sh" -m -O "$out" "$out/.config" "${fragments[@]}"
 make -C "$kernel" O="$out" ARCH=riscv CROSS_COMPILE="$cross" olddefconfig
-make -C "$kernel" O="$out" ARCH=riscv CROSS_COMPILE="$cross" -j"${JOBS:-4}" Image
+make -C "$kernel" O="$out" ARCH=riscv CROSS_COMPILE="$cross" \
+  "${keymap_make[@]}" -j"${JOBS:-4}" Image
 dtc -i "$(dirname "$dts")" -I dts -O dtb -o "$out/$dtb" "$dts"
 echo "Kernel: $out/arch/riscv/boot/Image (load at 0x00400000)"
 echo "DTB:    $out/$dtb"

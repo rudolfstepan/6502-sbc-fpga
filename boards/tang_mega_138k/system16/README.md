@@ -235,10 +235,22 @@ ext2 area beginning at LBA 32768 is not rewritten.
 
 The preferred hardware debug loop is `kernel-rescue-wsl` followed by
 `gorv32-rescue-image`: its embedded BusyBox shell starts independently of the
-card while the built-in driver calibrates read-only access. On the verified
-2026-07-12 run it selected 1-bit mode at 2.5 MHz and measured 190 KiB/s with
-zero retries and zero FIFO-full events. All 50 combinations from 25 to 1 MHz
-are tested at each boot; later errors automatically reduce the clock.
+root filesystem while the built-in driver calibrates read-only access. On the
+verified 2026-07-12 read run it selected 1-bit mode at 2.5 MHz and measured
+190 KiB/s with zero retries and zero FIFO-full events. All 50 combinations
+from 25 to 1 MHz are tested at each boot; later read errors automatically
+reduce the clock.
+
+The rescue DTB now also requests one isolated probe-time CMD24 test at physical
+LBA 16384. It saves the sector, writes and twice reads one pattern, restores and
+twice reads the original, and checks surrounding/boot/root sentinels. CMD24 is
+never retried, and `/dev/gorv32sd` remains read-only (`.../ro` reports `1`).
+Because ZSBL is SD-first, this test requires the newly built rescue GRV1 at SD
+LBA 0; programming only flash `0x510000` does not replace an already valid SD
+payload. The rescue overlay ends below LBA 8192, the scratch is at LBA 16384,
+and ext2 starts at LBA 32768. Use only a disposable or fully cloned card for
+the first run, create a full raw baseline after the overlay, and compare the
+whole card with that baseline after the PASS message.
 
 The whole console chain - probe, ZSBL, OpenSBI, kernel - runs 115200 8N1.
 The "System16 GoRV32 ZSBL" banner is the first milestone and only needs the
@@ -262,5 +274,6 @@ For the initramfs profiles, kernel plus embedded rootfs must stay inside the
 12 MB between `$400000` and `$FFFFFF`; the primary flash payload has the
 stricter 2.9 MB GRV1 limit.
 The current board DTS exposes the SD device read-only: CMD17 and ext2 reads
-are verified, while CMD24, writable ext2, swap and native compilation on the
-FPGA remain future work. QEMU can already validate the rootfs and toolchain.
+are verified. The rescue-only LBA-16384 save/test/restore transaction does not
+enable general writes; writable ext2, swap and native compilation on the FPGA
+remain future work. QEMU can already validate the rootfs and toolchain.

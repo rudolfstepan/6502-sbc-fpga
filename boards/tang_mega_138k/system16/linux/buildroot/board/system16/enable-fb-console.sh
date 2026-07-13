@@ -4,18 +4,17 @@ set -eu
 target=$1
 inittab="$target/etc/inittab"
 
-# There is exactly one login session: tty1, rendered by fbcon and driven by a
-# normal virtual-console keyboard (including the FPGA USB-HID input device).
+# tty1 is rendered by the System16 text console and driven by the normal Linux
+# virtual-console keyboard path (PS/2 and FPGA USB-HID input devices).
 if ! grep -q '^tty1::respawn:' "$inittab"; then
     printf '%s\n' 'tty1::respawn:/sbin/getty -L tty1 0 linux' >> "$inittab"
 fi
 
-# /dev/console is ttyS0 because it is the last console on the kernel command
-# line.  Do not start a second getty there.  cttyhack gives conspy the
-# controlling terminal it needs; conspy then mirrors virtual console 1 to the
-# UART and forwards UART keystrokes back to that same login and shell.
+# Give the UART its own direct getty.  Kernel messages are already mirrored to
+# tty0 and ttyS0 by the two console= arguments; conspy is neither needed nor
+# desirable here because its polling makes both keyboard paths feel sluggish.
 if grep -q '^console::respawn:' "$inittab"; then
-    sed -i 's|^console::respawn:.*|console::respawn:/bin/cttyhack /bin/conspy -c -f 1|' "$inittab"
+    sed -i 's|^console::respawn:.*|console::respawn:/sbin/getty -L ttyS0 115200 vt100|' "$inittab"
 else
-    printf '%s\n' 'console::respawn:/bin/cttyhack /bin/conspy -c -f 1' >> "$inittab"
+    printf '%s\n' 'console::respawn:/sbin/getty -L ttyS0 115200 vt100' >> "$inittab"
 fi

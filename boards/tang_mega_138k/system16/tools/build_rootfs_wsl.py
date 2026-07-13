@@ -73,13 +73,11 @@ fi
 # GCC 15 defaults to C23, which breaks the old gnulib in several host
 # packages (m4, bison, gettext); pin the host builds to gnu17.
 make -j"$(nproc)" HOSTCC="/usr/bin/gcc -std=gnu17" HOSTCXX="/usr/bin/g++"
-grep -q '^CONFIG_CONSPY=y' output/build/busybox-*/.config
-test -e output/target/bin/conspy -o -e output/target/usr/bin/conspy
-grep -q '^CONFIG_CTTYHACK=y' output/build/busybox-*/.config
-test -e output/target/bin/cttyhack -o -e output/target/usr/bin/cttyhack
+grep -q '^# CONFIG_CONSPY is not set' output/build/busybox-*/.config
+grep -q '^# CONFIG_CTTYHACK is not set' output/build/busybox-*/.config
 grep -qx 'tty1::respawn:/sbin/getty -L tty1 0 linux' output/target/etc/inittab
-grep -qx 'console::respawn:/bin/cttyhack /bin/conspy -c -f 1' output/target/etc/inittab
-echo 'Verified: one tty1 getty, UART attached to tty1 through cttyhack/conspy'
+grep -qx 'console::respawn:/sbin/getty -L ttyS0 115200 vt100' output/target/etc/inittab
+echo 'Verified: independent low-latency gettys on tty1 and ttyS0'
 ls -la output/images/
 '''
 script = script.replace(

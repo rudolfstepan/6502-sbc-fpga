@@ -272,8 +272,8 @@ module sys16_gorv32plus_top(
     endcase
 
   // Video graphics card behind the AXI slave window (0xE8000000): a fast
-  // hardware TEXT CONSOLE (80x22 cells, 8x16 VGA font, scaled 2x to
-  // 1280x704 centred in 720p). Character cells and the font ROM live in
+  // hardware TEXT CONSOLE (80x25 cells, 8x16 VGA font, scaled to
+  // 1280x700 and centred in CEA 720p). Character cells and the font ROM live in
   // BSRAM, so no external memory is used -- the DDR3 IP that backed the old
   // RGB565 framebuffer is unwired here (its sources stay in the project),
   // reclaiming its resources and build time. Registers at 0xE8800000 (ID

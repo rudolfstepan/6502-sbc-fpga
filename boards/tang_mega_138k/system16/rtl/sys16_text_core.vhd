@@ -2,9 +2,10 @@
 -- half of sys16_hdmi_text (no PLL / no DVI serialiser, so GHDL can drive
 -- clk_pix directly and observe the rendered pixels).
 --
--- 80x22 character cells, 8x16 glyphs, scaled 2x (16x32 screen pixels per
--- cell) -> 1280x704 content, centred in 1280x720 (8-line top/bottom
--- border). One 16-bit cell per character: low byte = code, high byte =
+-- 80x25 character cells, 8x16 glyphs, scaled 2x horizontally and 1.75x
+-- vertically (16x28 screen pixels per cell) ->
+-- 1280x700 content, centred in CEA 1280x720. One 16-bit cell per character:
+-- low byte = code, high byte =
 -- VGA-style attribute (fg = attr[3:0], bg = attr[7:4], both 16 colours).
 --
 -- Why this is fast where the pixel framebuffer was slow: the CPU writes
@@ -35,7 +36,7 @@ use work.sys16_font_pkg.all;
 entity sys16_text_core is
   generic (
     COLS      : natural := 80;
-    ROWS      : natural := 22;
+    ROWS      : natural := 25;
     H_ACTIVE  : natural := 1280;
     H_FP      : natural := 110;
     H_SYNC    : natural := 40;
@@ -59,7 +60,7 @@ entity sys16_text_core is
     boot_data : in std_logic_vector(7 downto 0) := (others => '0');
     boot_valid: in std_logic := '0';
     status_word : in std_logic_vector(15 downto 0);
-    -- pixel clock domain (74.25 MHz), video output
+    -- pixel clock domain (75 MHz), video output
     clk_pix   : in  std_logic;
     reset_pix : in  std_logic;          -- active-high, synchronous to clk_pix
     de        : out std_logic;
@@ -77,15 +78,38 @@ architecture rtl of sys16_text_core is
   constant V_TOTAL : natural := V_ACTIVE + V_FP + V_SYNC + V_BP;
 
   constant CELL_W  : natural := 16;   -- 8 glyph px x 2
-  constant CELL_H  : natural := 32;   -- 16 glyph px x 2
+  constant CELL_H  : natural := 28;   -- 16 glyph px stretched to 28
   constant CONT_W  : natural := COLS * CELL_W;                 -- 1280
-  constant CONT_H  : natural := ROWS * CELL_H;                 -- 704
+  constant CONT_H  : natural := ROWS * CELL_H;                 -- 700
   constant XBORDER : natural := (H_ACTIVE - CONT_W) / 2;       -- 0
-  constant YBORDER : natural := (V_ACTIVE - CONT_H) / 2;       -- 8
+  constant YBORDER : natural := (V_ACTIVE - CONT_H) / 2;       -- 10
   constant WORDS_PL: natural := COLS / 2;                      -- 40 words/row
-  constant CRAM_W  : natural := WORDS_PL * ROWS;               -- 880 words
+  constant CRAM_W  : natural := WORDS_PL * ROWS;               -- 1000 words
   constant CRAM_AW : natural := 10;                            -- 2**10 = 1024
-  constant LOOKAHEAD : natural := 5;   -- prefetch pipeline depth (see below)
+  constant LOOKAHEAD : natural := 6;   -- prefetch pipeline depth (see below)
+
+  subtype glyph_row_t is unsigned(3 downto 0);
+  function glyph_row_28(p : natural) return glyph_row_t is
+  begin
+    case p is
+      when 0 | 1   => return to_unsigned(0, 4);
+      when 2 | 3   => return to_unsigned(1, 4);
+      when 4 | 5   => return to_unsigned(2, 4);
+      when 6       => return to_unsigned(3, 4);
+      when 7 | 8   => return to_unsigned(4, 4);
+      when 9 | 10  => return to_unsigned(5, 4);
+      when 11 | 12 => return to_unsigned(6, 4);
+      when 13      => return to_unsigned(7, 4);
+      when 14 | 15 => return to_unsigned(8, 4);
+      when 16 | 17 => return to_unsigned(9, 4);
+      when 18 | 19 => return to_unsigned(10, 4);
+      when 20      => return to_unsigned(11, 4);
+      when 21 | 22 => return to_unsigned(12, 4);
+      when 23 | 24 => return to_unsigned(13, 4);
+      when 25 | 26 => return to_unsigned(14, 4);
+      when others  => return to_unsigned(15, 4);
+    end case;
+  end function;
 
   -- 16-colour palette -> RGB888 (standard VGA/CGA).
   type pal_t is array (0 to 15) of std_logic_vector(23 downto 0);
@@ -131,6 +155,8 @@ architecture rtl of sys16_text_core is
   -- pixel domain
   signal x        : unsigned(10 downto 0) := (others => '0');
   signal y        : unsigned(9 downto 0) := (others => '0');
+  signal scan_row : natural range 0 to ROWS-1 := 0;
+  signal scan_y_cell : natural range 0 to CELL_H-1 := 0;
   signal active   : std_logic;
   signal vblank_pix : std_logic;
   signal cur_blink : unsigned(24 downto 0) := (others => '0');
@@ -143,6 +169,10 @@ architecture rtl of sys16_text_core is
   signal strt_meta, strt_sync     : unsigned(4 downto 0) := (others => '0');
 
   -- scanout pipeline (control aligned to the char-RAM/font-ROM latency)
+  signal fetch_row_0 : unsigned(4 downto 0) := (others => '0');
+  signal fetch_col_0 : unsigned(6 downto 0) := (others => '0');
+  signal frow_0      : unsigned(3 downto 0) := (others => '0');
+  signal testp_0     : std_logic := '0';
   signal frow_1, frow_2, frow_3 : unsigned(3 downto 0) := (others => '0');
   signal half_1, half_2, half_3 : std_logic := '0';
   signal testp_1, testp_2, testp_3 : std_logic := '0';
@@ -270,12 +300,13 @@ begin
   end process;
 
   ---------------------------------------------------------------- pixel side
-  -- video timing (identical structure to sys16_hdmi_720p)
+  -- CEA 1280x720p video timing
   timing_p : process(clk_pix)
   begin
     if rising_edge(clk_pix) then
       if reset_pix = '1' then
         x <= (others => '0'); y <= (others => '0');
+        scan_row <= 0; scan_y_cell <= 0;
         ctrl_meta <= (others => '0'); ctrl_sync <= (others => '0');
         status_meta <= (others => '0'); status_sync <= (others => '0');
         curcol_meta <= (others => '0'); curcol_sync <= (others => '0');
@@ -293,8 +324,28 @@ begin
         cur_blink <= cur_blink + 1;
         if x = to_unsigned(H_TOTAL-1, x'length) then
           x <= (others => '0');
-          if y = to_unsigned(V_TOTAL-1, y'length) then y <= (others => '0');
-          else y <= y + 1; end if;
+          if y = to_unsigned(V_TOTAL-1, y'length) then
+            y <= (others => '0');
+            scan_row <= 0; scan_y_cell <= 0;
+          else
+            y <= y + 1;
+            -- Track the text row once per scanline. This replaces division
+            -- by 28 in the pixel path and keeps the 75 MHz timing shallow.
+            if y = to_unsigned(YBORDER-1, y'length) then
+              scan_row <= 0; scan_y_cell <= 0;
+            elsif y >= to_unsigned(YBORDER, y'length) and
+                  y < to_unsigned(YBORDER + CONT_H - 1, y'length) then
+              if scan_y_cell = CELL_H-1 then
+                scan_y_cell <= 0;
+                if scan_row = ROWS-1 then scan_row <= 0;
+                else scan_row <= scan_row + 1; end if;
+              else
+                scan_y_cell <= scan_y_cell + 1;
+              end if;
+            else
+              scan_row <= 0; scan_y_cell <= 0;
+            end if;
+          end if;
         else
           x <= x + 1;
         end if;
@@ -320,10 +371,10 @@ begin
   fetch_p : process(clk_pix)
     variable nx    : unsigned(10 downto 0);
     variable ny    : unsigned(9 downto 0);
-    variable yc    : unsigned(9 downto 0);
     variable rowp  : unsigned(4 downto 0);
     variable lrow  : unsigned(4 downto 0);
     variable colp  : unsigned(6 downto 0);
+    variable cell_y: natural range 0 to CELL_H-1;
     variable in_c  : boolean;
     variable char3 : std_logic_vector(7 downto 0);
     variable tcode : unsigned(12 downto 0);
@@ -340,28 +391,50 @@ begin
 
       in_c := (ny >= YBORDER) and (ny < YBORDER + CONT_H) and (nx < CONT_W);
       if in_c then
-        yc   := ny - YBORDER;
+        -- Usually lookahead remains on the current scanline. For the final
+        -- five pixels it wraps to the next line, so advance a local copy of
+        -- the line counters without putting a divider in the pixel path.
+        lrow := to_unsigned(scan_row, lrow'length);
+        cell_y := scan_y_cell;
+        if ny /= y then
+          if y = to_unsigned(YBORDER-1, y'length) then
+            lrow := (others => '0'); cell_y := 0;
+          elsif scan_y_cell = CELL_H-1 then
+            cell_y := 0;
+            if scan_row = ROWS-1 then lrow := (others => '0');
+            else lrow := to_unsigned(scan_row + 1, lrow'length); end if;
+          else
+            cell_y := scan_y_cell + 1;
+          end if;
+        end if;
         -- logical cell row, offset by the hardware scroll start row (mod ROWS)
-        lrow := yc(9 downto 5);
         rowp := lrow + strt_sync;
         if rowp >= ROWS then rowp := rowp - ROWS; end if;
         colp := nx(10 downto 4);
         -- Integer arithmetic: "unsigned * natural" would coerce WORDS_PL/COLS
         -- into the operand's narrow width and silently wrap (40 -> 8, 80 -> 16).
-        saddr_r <= std_logic_vector(to_unsigned(
-                     to_integer(rowp) * WORDS_PL + to_integer(colp(6 downto 1)),
-                     CRAM_AW));
-        frow_1  <= yc(4 downto 1);
-        half_1  <= colp(0);
-        testp_1 <= ctrl_sync(1);
-        tcode   := to_unsigned(to_integer(rowp) * COLS + to_integer(colp),
-                               tcode'length);                  -- 0..1759
-        tchar_1 <= std_logic_vector(tcode(7 downto 0));        -- test pattern mod 256
+        -- Register row/column before the address multipliers. Besides making
+        -- the 28-line scaler cheap, this cuts the x-to-BSRAM path at 75 MHz.
+        fetch_row_0 <= rowp;
+        fetch_col_0 <= colp;
+        frow_0 <= glyph_row_28(cell_y);
+        testp_0 <= ctrl_sync(1);
       else
-        saddr_r <= (others => '0');
-        frow_1 <= (others => '0'); half_1 <= '0';
-        testp_1 <= ctrl_sync(1); tchar_1 <= (others => '0');
+        fetch_row_0 <= (others => '0');
+        fetch_col_0 <= (others => '0');
+        frow_0 <= (others => '0');
+        testp_0 <= ctrl_sync(1);
       end if;
+
+      saddr_r <= std_logic_vector(to_unsigned(
+                   to_integer(fetch_row_0) * WORDS_PL +
+                   to_integer(fetch_col_0(6 downto 1)), CRAM_AW));
+      frow_1  <= frow_0;
+      half_1  <= fetch_col_0(0);
+      testp_1 <= testp_0;
+      tcode   := to_unsigned(to_integer(fetch_row_0) * COLS +
+                             to_integer(fetch_col_0), tcode'length);
+      tchar_1 <= std_logic_vector(tcode(7 downto 0));          -- mod 256
 
       -- align control with the 2-cycle char-RAM read
       frow_2 <= frow_1; frow_3 <= frow_2;
@@ -385,10 +458,10 @@ begin
 
   -- Output mux, recomputed from the current beam position.
   paint_p : process(x, y, active, font_byte, attr_5, ctrl_sync, status_sync,
-                    curcol_sync, currow_sync, curen_sync, strt_sync, cur_blink)
+                    curcol_sync, currow_sync, curen_sync, strt_sync, cur_blink,
+                    scan_row)
     variable gx     : integer range 0 to 7;
     variable colc   : unsigned(6 downto 0);
-    variable yc     : unsigned(9 downto 0);
     variable rowc   : unsigned(4 downto 0);   -- logical cell row
     variable inwin  : boolean;
     variable fgpix  : boolean;
@@ -400,10 +473,8 @@ begin
     inwin := (y >= YBORDER) and (y < YBORDER + CONT_H) and (x < CONT_W);
     gx    := to_integer(x(3 downto 1));           -- 2x horizontal
     colc  := x(10 downto 4);
-    if inwin then yc := y - to_unsigned(YBORDER, y'length);
-    else          yc := (others => '0'); end if;
     -- logical row of the displayed cell (screen cell row + scroll start)
-    rowc := yc(9 downto 5) + strt_sync;
+    rowc := to_unsigned(scan_row, rowc'length) + strt_sync;
     if rowc >= ROWS then rowc := rowc - ROWS; end if;
 
     fgpix := font_byte(7 - gx) = '1';
