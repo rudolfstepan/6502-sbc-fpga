@@ -52,6 +52,63 @@ from the boot console. The existing hardware font therefore renders
 `ÄÖÜäöüß`, section and degree signs at their CP437 glyph positions; no separate
 font ROM or bitstream update is required for these characters.
 
+## USB CDC development link
+
+The GoRV32 Plus FPGA project contains a full-speed USB CDC ACM device on the
+Tang Console USB-C device connector. Windows enumerates the hardware proof as
+`33aa:0121`, serial `CDC138K002`, and binds it to `usbser.sys` as a virtual COM
+port. The standalone loopback project first verified the pins, SoftPHY,
+descriptor path and endpoint-2 transfer independently of Linux.
+
+The System16 integration exposes endpoint 2 as a polling MMIO byte stream at
+`0xe8800300`. This is the first hardware-bring-up layer; it deliberately does
+not connect an unverified PLIC interrupt and is not yet registered as a Linux
+TTY. Both directions use 512-byte asynchronous FIFOs. USB OUT packets become
+visible only after a valid CRC indication, and USB IN data is retained until
+the controller confirms successful transmission. IN packets are limited to
+63 bytes to avoid Windows `usbser` waiting on an exact multiple of the
+64-byte maximum packet size.
+
+| Offset | Name | Access | Meaning |
+| ---: | --- | --- | --- |
+| `0x00` | `ID` | RO | `0x53313655` (`S16U`) |
+| `0x04` | `CAPS` | RO | ABI `1.0`, RX/TX FIFO size as log2 |
+| `0x08` | `STATUS` | RO | online, suspend, modem, FIFO and sticky error bits |
+| `0x0c` | `RX_DATA` | RO | read and remove one received byte; zero if empty |
+| `0x10` | `TX_DATA` | WO | enqueue the low byte; full FIFO sets overflow |
+| `0x14` | `RX_LEVEL` | RO | received bytes available |
+| `0x18` | `TX_LEVEL` | RO | used in bits 15:0, free in bits 31:16 |
+| `0x1c` | `IRQ_STATUS` | RO/W1C | polling-visible event flags |
+| `0x20` | `IRQ_ENABLE` | RW | event enable bits; hardware IRQ not connected yet |
+| `0x24` | `CONTROL` | W1P | flush RX/TX, clear errors/events, IRQ test |
+| `0x28` | `LINE_BAUD` | RO | host-selected CDC baud value |
+| `0x2c` | `LINE_FORMAT` | RO | data bits, parity and stop bits |
+| `0x30` | `MODEM` | RO | DTR and RTS |
+
+After programming the System16 bitstream and booting Linux, the non-destructive
+identity checks are:
+
+```sh
+devmem 0xe8800300 32
+devmem 0xe8800304 32
+devmem 0xe8800308 32
+```
+
+The first two reads must return `0x53313655` and `0x01000909`. To test Linux to
+PC, open the new COM port and enqueue the ASCII byte `A`:
+
+```sh
+devmem 0xe8800310 8 0x41
+```
+
+For PC to Linux, send one byte from the COM terminal, verify that STATUS bit 4
+or `RX_LEVEL` is nonzero, then pop it exactly once:
+
+```sh
+devmem 0xe8800314 32
+devmem 0xe880030c 8
+```
+
 ## Hardware boot capture
 
 ![GoRV32 Plus ZSBL loading the GRV1 image from flash and starting OpenSBI](images/gorv32plus-opensbi-boot.png)
@@ -95,6 +152,8 @@ is the authoritative format implementation.
 | SDRAM | `0x00400000` | Linux `Image`; initramfs in `flash`/`rescue` only |
 | MMIO | `0xe4000000` | PLIC |
 | MMIO | `0xe6000000` | CLINT |
+| MMIO | `0xe8800100` | PS/2 keyboard registers |
+| MMIO | `0xe8800300` | USB CDC endpoint-2 byte-stream registers |
 | MMIO | `0xf0200020` | UART1 16550 register window |
 | MMIO | `0xf0600000` | Vendor SD host |
 

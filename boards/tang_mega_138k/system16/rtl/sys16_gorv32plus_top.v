@@ -13,6 +13,13 @@ module sys16_gorv32plus_top(
   output wire uart_tx,
   // External PS/2 keyboard connector on spare 3.3-V GPIO header pins.
   input wire ps2_clk, input wire ps2_data,
+  // Dedicated USB-C device port. Full-speed uses J19/H19 directly; the
+  // remaining USB-2-only pads stay explicitly neutral.
+  inout wire usb_dp_io, inout wire usb_dn_io,
+  input wire usb_rxdp_p, input wire usb_rxdp_n,
+  input wire usb_rxdn_p, input wire usb_rxdn_n,
+  inout wire usb_term_dp_io, inout wire usb_term_dn_io,
+  inout wire usb_pullup_en_io,
   // On-board 128Mbit NOR flash on the MSPI pins; boot code source.
   inout wire flash_cs_n, inout wire flash_clk,
   inout wire flash_mosi, inout wire flash_miso,
@@ -61,6 +68,7 @@ module sys16_gorv32plus_top(
   wire [31:0] fb_addr,fb_wdata,fb_rdata;wire [3:0] fb_be;wire fb_req,fb_we,fb_ready;
   wire hdmi_req,hdmi_ready; wire [31:0] hdmi_rdata;
   wire ps2_sel,ps2_cs,ps2_irq; wire [7:0] ps2_dout;
+  wire usb_sel,usb_cs,usb_ready,usb_irq; wire [31:0] usb_rdata;
   wire ps2_connected,ps2_key_event,ps2_polling; wire [7:0] ps2_keycode,ps2_modif,ps2_ascii;
   wire [3:0] ps2_phase;
   wire cpu_uart_tx,probe_tx,probe_active,probe_done;
@@ -220,13 +228,237 @@ module sys16_gorv32plus_top(
     .clk(clk_50mhz),.reset_n(resetn),.rx(uart_tx_r),
     .data(boot_uart_data),.valid(boot_uart_valid));
 
+  // ---------------------------------------------------------------------
+  // USB full-speed CDC ACM device.  The controller/SoftPHY/descriptor path
+  // is identical to the standalone hardware test (33aa:0121, CDC138K002).
+  // Endpoint 2 crosses into the 50-MHz CPU domain through packet-aware
+  // asynchronous FIFOs and appears at 0xE8800300.  USB bus reset only clears
+  // packet-local state; it must not detach D+ or reset the SoftPHY.
+  // ---------------------------------------------------------------------
+  wire usb_clk60,usb_pll_lock;
+  usb_fs_pll usb_phy_pll_i(
+    .lock(usb_pll_lock),.clk60(usb_clk60),.clkin(clk_50mhz));
+
+  // Match the standalone hardware proof's approximately 21-ms power-on
+  // settling interval before advertising the device to the host.
+  reg [19:0] usb_power_on_count=0;
+  always @(posedge clk_50mhz) begin
+    if(!resetn) usb_power_on_count<=0;
+    else if(!(&usb_power_on_count))
+      usb_power_on_count<=usb_power_on_count+1'b1;
+  end
+  wire usb_power_on_ready=&usb_power_on_count;
+  wire usb_async_reset=!usb_power_on_ready || !usb_pll_lock;
+  reg [2:0] usb_reset_pipe=3'b111;
+  always @(posedge usb_clk60 or posedge usb_async_reset) begin
+    if(usb_async_reset) usb_reset_pipe<=3'b111;
+    else usb_reset_pipe<={usb_reset_pipe[1:0],1'b0};
+  end
+  wire usb_controller_reset=usb_reset_pipe[2];
+  wire usb_bus_reset,usb_high_speed_unused,usb_suspend,usb_online;
+  wire usb_datapath_reset=usb_controller_reset || usb_bus_reset;
+
+  // R129 connects M17 to D+ through 1.5 kohm.  Attach by driving HIGH; while
+  // reset/detached the pad is high impedance and is never driven LOW.
+  wire usb_pullup_sense;
+  IOBUF usb_pullup_enable_iobuf(
+    .O(usb_pullup_sense),.IO(usb_pullup_en_io),
+    .I(1'b1),.OEN(usb_controller_reset));
+
+  // USB-2-only termination/receiver pads remain electrically neutral.  Feed
+  // their sense values into a read-only diagnostic bit so synthesis retains
+  // the explicit high-impedance I/O configuration.
+  wire usb_term_dp_sense,usb_term_dn_sense;
+  IOBUF usb_term_dp_disable_iobuf(
+    .O(usb_term_dp_sense),.IO(usb_term_dp_io),.I(1'b0),.OEN(1'b1));
+  IOBUF usb_term_dn_disable_iobuf(
+    .O(usb_term_dn_sense),.IO(usb_term_dn_io),.I(1'b0),.OEN(1'b1));
+  wire usb_pad_diag=usb_rxdp_p ^ usb_rxdp_n ^ usb_rxdn_p ^ usb_rxdn_n ^
+                    usb_term_dp_sense ^ usb_term_dn_sense ^
+                    usb_pullup_sense;
+
+  wire [7:0] usb_phy_data_out,usb_phy_data_in;
+  wire usb_phy_tx_valid,usb_phy_tx_ready;
+  wire usb_phy_rx_active,usb_phy_rx_valid,usb_phy_rx_error;
+  wire [1:0] usb_phy_line_state,usb_phy_op_mode,usb_phy_xcvr_select;
+  wire usb_phy_term_select;
+  wire [7:0] usb_rx_data;
+  wire usb_rx_valid,usb_rx_active,usb_rx_packet_valid,usb_rx_ready;
+  wire [3:0] usb_endpoint;
+  wire usb_setup,usb_sof,usb_tx_pop,usb_tx_active,usb_tx_packet_finished;
+
+  wire [7:0] usb_ep0_tx_data;
+  wire usb_ep0_tx_valid;
+  wire [11:0] usb_ep0_tx_length;
+  wire [31:0] usb_line_baud;
+  wire [7:0] usb_line_stop_bits,usb_line_parity,usb_line_data_bits;
+  wire [15:0] usb_control_lines;
+  usb_cdc_acm_control usb_control_i(
+    .clk(usb_clk60),.reset(usb_datapath_reset),
+    .setup(usb_setup),.endpoint(usb_endpoint),
+    .rx_active(usb_rx_active),.rx_valid(usb_rx_valid),
+    .rx_data(usb_rx_data),.tx_active(usb_tx_active),
+    .tx_pop(usb_tx_pop),.tx_data(usb_ep0_tx_data),
+    .tx_valid(usb_ep0_tx_valid),.tx_length(usb_ep0_tx_length),
+    .line_baud(usb_line_baud),.line_stop_bits(usb_line_stop_bits),
+    .line_parity(usb_line_parity),.line_data_bits(usb_line_data_bits),
+    .control_lines(usb_control_lines));
+
+  wire usb_ep2_rx_ready,usb_ep2_tx_cork;
+  wire [7:0] usb_ep2_tx_data;
+  wire [11:0] usb_ep2_tx_length;
+  sys16_usb_cdc_mmio #(.FIFO_ADDR_WIDTH(9)) usb_mmio_i(
+    .cpu_clk(clk_50mhz),.cpu_reset_n(cpu_resetn),
+    .usb_clk(usb_clk60),.usb_datapath_reset(usb_datapath_reset),
+    .bus_req(usb_cs),.bus_we(fb_we),.bus_addr(fb_addr[7:0]),
+    .bus_be(fb_be),.bus_wdata(fb_wdata),.bus_rdata(usb_rdata),
+    .bus_ready(usb_ready),.irq(usb_irq),
+    .usb_online(usb_online),.usb_suspend(usb_suspend),
+    .usb_bus_reset(usb_bus_reset),.pad_diag(usb_pad_diag),
+    .usb_line_baud(usb_line_baud),
+    .usb_line_stop_bits(usb_line_stop_bits),
+    .usb_line_parity(usb_line_parity),
+    .usb_line_data_bits(usb_line_data_bits),
+    .usb_control_lines(usb_control_lines),
+    .endpoint(usb_endpoint),.rx_active(usb_rx_active),
+    .rx_valid(usb_rx_valid),.rx_packet_valid(usb_rx_packet_valid),
+    .rx_data(usb_rx_data),.ep2_rx_ready(usb_ep2_rx_ready),
+    .tx_active(usb_tx_active),.tx_pop(usb_tx_pop),
+    .tx_packet_finished(usb_tx_packet_finished),
+    .ep2_tx_cork(usb_ep2_tx_cork),.ep2_tx_data(usb_ep2_tx_data),
+    .ep2_tx_length(usb_ep2_tx_length));
+
+  wire [7:0] usb_controller_tx_data=
+    (usb_endpoint==0) ? usb_ep0_tx_data : usb_ep2_tx_data;
+  wire [11:0] usb_controller_tx_length=
+    (usb_endpoint==0) ? usb_ep0_tx_length :
+    (usb_endpoint==2) ? usb_ep2_tx_length : 12'd0;
+  wire usb_controller_tx_cork=
+    (usb_endpoint==0) ? 1'b0 :
+    (usb_endpoint==2) ? usb_ep2_tx_cork : 1'b1;
+  assign usb_rx_ready=(usb_endpoint==0) ? 1'b1 :
+                      (usb_endpoint==2) ? usb_ep2_rx_ready : 1'b0;
+
+  wire [15:0] usb_desc_read_address;
+  wire [7:0] usb_desc_index,usb_desc_type,usb_desc_read_data;
+  wire [15:0] usb_desc_device_address,usb_desc_device_length;
+  wire [15:0] usb_desc_qualifier_address,usb_desc_qualifier_length;
+  wire [15:0] usb_desc_fs_address,usb_desc_fs_length;
+  wire [15:0] usb_desc_hs_address,usb_desc_hs_length;
+  wire [15:0] usb_desc_other_address,usb_desc_lang_address;
+  wire [15:0] usb_desc_vendor_address,usb_desc_vendor_length;
+  wire [15:0] usb_desc_product_address,usb_desc_product_length;
+  wire [15:0] usb_desc_serial_address,usb_desc_serial_length;
+  wire usb_desc_have_strings;
+  usb_cdc_descriptor usb_descriptor_i(
+    .read_address(usb_desc_read_address),.read_data(usb_desc_read_data),
+    .device_address(usb_desc_device_address),
+    .device_length(usb_desc_device_length),
+    .qualifier_address(usb_desc_qualifier_address),
+    .qualifier_length(usb_desc_qualifier_length),
+    .fs_config_address(usb_desc_fs_address),
+    .fs_config_length(usb_desc_fs_length),
+    .hs_config_address(usb_desc_hs_address),
+    .hs_config_length(usb_desc_hs_length),
+    .other_speed_address(usb_desc_other_address),
+    .string_lang_address(usb_desc_lang_address),
+    .string_vendor_address(usb_desc_vendor_address),
+    .string_vendor_length(usb_desc_vendor_length),
+    .string_product_address(usb_desc_product_address),
+    .string_product_length(usb_desc_product_length),
+    .string_serial_address(usb_desc_serial_address),
+    .string_serial_length(usb_desc_serial_length),
+    .have_strings(usb_desc_have_strings));
+
+  wire [7:0] usb_interface_alternate_out,usb_interface_select;
+  wire usb_interface_set;
+  reg [7:0] usb_interface0_alternate,usb_interface1_alternate;
+  wire [7:0] usb_interface_alternate_in=
+    (usb_interface_select==0) ? usb_interface0_alternate :
+    (usb_interface_select==1) ? usb_interface1_alternate : 8'd0;
+  always @(posedge usb_clk60 or posedge usb_datapath_reset) begin
+    if(usb_datapath_reset) begin
+      usb_interface0_alternate<=0;
+      usb_interface1_alternate<=0;
+    end else if(usb_interface_set) begin
+      if(usb_interface_select==0)
+        usb_interface0_alternate<=usb_interface_alternate_out;
+      else if(usb_interface_select==1)
+        usb_interface1_alternate<=usb_interface_alternate_out;
+    end
+  end
+
+  USB_Device_Controller_Top usb_controller_i(
+    .clk_i(usb_clk60),.reset_i(usb_controller_reset),
+    .usbrst_o(usb_bus_reset),.highspeed_o(usb_high_speed_unused),
+    .suspend_o(usb_suspend),.online_o(usb_online),
+    .txdat_i(usb_controller_tx_data),
+    .txval_i(usb_ep0_tx_valid && (usb_endpoint==0)),
+    .txdat_len_i(usb_controller_tx_length),.txiso_pid_i(4'b0011),
+    .txcork_i(usb_controller_tx_cork),.txpop_o(usb_tx_pop),
+    .txact_o(usb_tx_active),.txpktfin_o(usb_tx_packet_finished),
+    .rxdat_o(usb_rx_data),.rxval_o(usb_rx_valid),
+    .rxrdy_i(usb_rx_ready),.rxact_o(usb_rx_active),
+    .rxpktval_o(usb_rx_packet_valid),.setup_o(usb_setup),
+    .endpt_o(usb_endpoint),.sof_o(usb_sof),
+    .inf_alter_i(usb_interface_alternate_in),
+    .inf_alter_o(usb_interface_alternate_out),
+    .inf_sel_o(usb_interface_select),.inf_set_o(usb_interface_set),
+    .descrom_raddr_o(usb_desc_read_address),
+    .desc_index_o(usb_desc_index),.desc_type_o(usb_desc_type),
+    .descrom_rdata_i(usb_desc_read_data),
+    .desc_dev_addr_i(usb_desc_device_address),
+    .desc_dev_len_i(usb_desc_device_length),
+    .desc_qual_addr_i(usb_desc_qualifier_address),
+    .desc_qual_len_i(usb_desc_qualifier_length),
+    .desc_fscfg_addr_i(usb_desc_fs_address),
+    .desc_fscfg_len_i(usb_desc_fs_length),
+    .desc_hscfg_addr_i(usb_desc_hs_address),
+    .desc_hscfg_len_i(usb_desc_hs_length),
+    .desc_oscfg_addr_i(usb_desc_other_address),
+    .desc_hidrpt_addr_i(16'd0),.desc_hidrpt_len_i(16'd0),
+    .desc_bos_addr_i(16'd0),.desc_bos_len_i(16'd0),
+    .desc_strlang_addr_i(usb_desc_lang_address),
+    .desc_strvendor_addr_i(usb_desc_vendor_address),
+    .desc_strvendor_len_i(usb_desc_vendor_length),
+    .desc_strproduct_addr_i(usb_desc_product_address),
+    .desc_strproduct_len_i(usb_desc_product_length),
+    .desc_strserial_addr_i(usb_desc_serial_address),
+    .desc_strserial_len_i(usb_desc_serial_length),
+    .desc_have_strings_i(usb_desc_have_strings),
+    .utmi_dataout_o(usb_phy_data_out),.utmi_txvalid_o(usb_phy_tx_valid),
+    .utmi_txready_i(usb_phy_tx_ready),.utmi_datain_i(usb_phy_data_in),
+    .utmi_rxactive_i(usb_phy_rx_active),.utmi_rxvalid_i(usb_phy_rx_valid),
+    .utmi_rxerror_i(usb_phy_rx_error),.utmi_linestate_i(usb_phy_line_state),
+    .utmi_opmode_o(usb_phy_op_mode),
+    .utmi_xcvrselect_o(usb_phy_xcvr_select),
+    .utmi_termselect_o(usb_phy_term_select),.utmi_reset_o());
+
+  USB_SoftPHY_Top usb_softphy_i(
+    .clk_i(usb_clk60),.rst_i(usb_controller_reset),
+    .utmi_data_out_i(usb_phy_data_out),
+    .utmi_txvalid_i(usb_phy_tx_valid),
+    .utmi_op_mode_i(usb_phy_op_mode),
+    .utmi_xcvrselect_i(usb_phy_xcvr_select),
+    .utmi_termselect_i(usb_phy_term_select),
+    .utmi_data_in_o(usb_phy_data_in),
+    .utmi_txready_o(usb_phy_tx_ready),
+    .utmi_rxvalid_o(usb_phy_rx_valid),
+    .utmi_rxactive_o(usb_phy_rx_active),
+    .utmi_rxerror_o(usb_phy_rx_error),
+    .utmi_linestate_o(usb_phy_line_state),
+    .usb_dp_io(usb_dp_io),.usb_dn_io(usb_dn_io));
+
   // PS/2 Set-2 keyboard receiver. Linux sees its four registers at
-  // 0xE8800100 through the existing AXI extension window.
+  // 0xE8800100; USB CDC occupies 0xE8800300 in the same AXI window.
   assign ps2_sel = (fb_addr[23:8] == 16'h8001);
   assign ps2_cs  = fb_req && ps2_sel;
-  assign hdmi_req = fb_req && !ps2_sel;
-  assign fb_ready = ps2_sel ? fb_req : hdmi_ready;
-  assign fb_rdata = ps2_sel ? {24'h000000,ps2_dout} : hdmi_rdata;
+  assign usb_sel = (fb_addr[23:8] == 16'h8003);
+  assign usb_cs  = fb_req && usb_sel;
+  assign hdmi_req = fb_req && !ps2_sel && !usb_sel;
+  assign fb_ready = ps2_sel ? fb_req : usb_sel ? usb_ready : hdmi_ready;
+  assign fb_rdata = ps2_sel ? {24'h000000,ps2_dout} :
+                    usb_sel ? usb_rdata : hdmi_rdata;
   ps2_keyboard #(.CLK_HZ(50000000),.KBD_LAYOUT("DE")) ps2_keyboard_i(
     .clk(clk_50mhz),.reset_n(resetn),.ps2_clk(ps2_clk),.ps2_data(ps2_data),
     .cs(ps2_cs),.we(fb_we),.addr(fb_addr[3:2]),.dout(ps2_dout),.irq(ps2_irq),

@@ -9,6 +9,19 @@
          encrypted Gowin core contains an internal module with that name. -->
     <File path="src/gowin_gorv32_plus/gowin_gorv32_plus.v" type="file.verilog" enable="1"/>
 
+    <!-- Full-speed USB-CDC device path. Generated IP netlists and editable
+         .ipc metadata live together under project/src so this GPRJ opens and
+         builds directly in Gowin without another project. -->
+    <File path="src/usb_device_controller/usb_device_controller.v" type="file.verilog" enable="1"/>
+    <File path="src/usb_softphy/usb_softphy.v" type="file.verilog" enable="1"/>
+    <File path="../rtl/usb_fs_pll.v" type="file.verilog" enable="1"/>
+    <File path="../rtl/usb_cdc_descriptor.v" type="file.verilog" enable="1"/>
+    <File path="../rtl/usb_cdc_acm_control.v" type="file.verilog" enable="1"/>
+    <File path="../rtl/sys16_async_fifo.v" type="file.verilog" enable="1"/>
+    <File path="../rtl/sys16_cdc_snapshot.v" type="file.verilog" enable="1"/>
+    <File path="../rtl/sys16_usb_cdc_ep2.v" type="file.verilog" enable="1"/>
+    <File path="../rtl/sys16_usb_cdc_mmio.v" type="file.verilog" enable="1"/>
+
     <File path="../../../../third_party/alinx_sd/spi_master.v" type="file.verilog" enable="1"/>
     <File path="../../../../third_party/alinx_sd/sd_card_cmd.v" type="file.verilog" enable="1"/>
     <File path="../../../../third_party/alinx_sd/sd_card_sec_read_write.v" type="file.verilog" enable="1"/>

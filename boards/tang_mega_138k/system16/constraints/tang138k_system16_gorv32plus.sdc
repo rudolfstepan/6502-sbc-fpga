@@ -2,6 +2,17 @@
 # clocks are added when those blocks are connected to the vendor CPU.
 create_clock -name clk_50mhz -period 20 [get_ports {clk_50mhz}]
 
+# USB 1.1 SoftPHY and device controller run at 60 MHz. All CPU/USB payload
+# crossings use explicit dual-clock FIFOs; status crosses through 2FF syncs.
+create_clock -name usb_clk60 -period 16.667 [get_pins {usb_phy_pll_i/PLL_inst/CLKOUT0}]
+# Keep every 50/60-MHz CDC route below one USB period. This protects Gray
+# pointer coherency and bundled mailbox data; a blanket async clock group
+# would have higher precedence than these Gowin max-delay constraints.
+set_max_delay -from [get_clocks {clk_50mhz}] -to [get_clocks {usb_clk60}] 16.0
+set_max_delay -from [get_clocks {usb_clk60}] -to [get_clocks {clk_50mhz}] 16.0
+set_false_path -hold -from [get_clocks {clk_50mhz}] -to [get_clocks {usb_clk60}]
+set_false_path -hold -from [get_clocks {usb_clk60}] -to [get_clocks {clk_50mhz}]
+
 # The vendor QSPI controller loops the pad clock back in and samples MISO
 # with it (TA1132/PR1014 otherwise: unconstrained clock on generic routing).
 # 20 ns is the worst case; the real SCLK is divided down from ahb_clk.
@@ -30,6 +41,7 @@ set_clock_groups -asynchronous -group [get_clocks {sd_clk_d}] -group [get_clocks
 create_clock -name pix_clk -period 13.333 [get_pins {hdmi_i/pll_i/PLL_inst/CLKOUT0}]
 create_clock -name pix_clk_5x -period 2.667 [get_pins {hdmi_i/pll_i/PLL_inst/CLKOUT1}]
 set_clock_groups -asynchronous -group [get_clocks {pix_clk pix_clk_5x}] -group [get_clocks {clk_50mhz}]
+set_clock_groups -asynchronous -group [get_clocks {usb_clk60}] -group [get_clocks {pix_clk pix_clk_5x}]
 
 # OSER10 RESET is an asynchronous control input.  Its synchronizers are
 # preserved per lane and physically anchored beside the three serializers in
@@ -48,6 +60,7 @@ create_clock -name ddr_mem -period 2.5 -waveform {0 1.25} [get_pins {ddr_mem_pll
 create_clock -name ddr_clk_x1 -period 10 [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/fclkdiv/CLKOUT}]
 set_clock_groups -asynchronous -group [get_clocks {ddr_mem ddr_clk_x1}] -group [get_clocks {clk_50mhz}]
 set_clock_groups -asynchronous -group [get_clocks {ddr_mem ddr_clk_x1}] -group [get_clocks {pix_clk pix_clk_5x}]
+set_clock_groups -asynchronous -group [get_clocks {usb_clk60}] -group [get_clocks {ddr_mem ddr_clk_x1}]
 
 # Quasi-static vendor PHY calibration controls. These are written by the init
 # FSM and stable when consumed; timing them as ordinary synchronous paths can

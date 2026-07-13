@@ -1,0 +1,36 @@
+IO_LOC "clk" V22;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+
+// Full-speed USB data pair and external 1.5-kOhm D+ pull-up control.
+IO_LOC "usb_dp_io" J19;
+IO_PORT "usb_dp_io" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "usb_dn_io" H19;
+IO_PORT "usb_dn_io" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "usb_pullup_en_io" M17;
+IO_PORT "usb_pullup_en_io" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+// USB-2 receiver and termination pins are unused in full-speed mode. Keep
+// every pad explicitly neutral so the board's USB network is not loaded.
+IO_LOC "usb_rxdp_p" H17;
+IO_PORT "usb_rxdp_p" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
+IO_LOC "usb_rxdp_n" H18;
+IO_PORT "usb_rxdp_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
+IO_LOC "usb_rxdn_p" H20;
+IO_PORT "usb_rxdn_p" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
+IO_LOC "usb_rxdn_n" G20;
+IO_PORT "usb_rxdn_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=OFF;
+IO_LOC "usb_term_dp_io" J16;
+IO_PORT "usb_term_dp_io" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "usb_term_dn_io" AB16;
+IO_PORT "usb_term_dn_io" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+IO_LOC "led[0]" N18;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[1]" N19;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[2]" M18;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_LOC "led[3]" L18;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+
+INS_LOC "phy_pll_i/PLL_inst" PLL_R[2];
