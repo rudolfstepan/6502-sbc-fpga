@@ -1,0 +1,5 @@
+config BR2_PACKAGE_S16BENCH
+	bool "System16 memory benchmark"
+	help
+	  Install s16bench, a small sequential memory-bandwidth benchmark used
+	  to compare the System16 SDRAM0 and DDR3 main-memory backends.

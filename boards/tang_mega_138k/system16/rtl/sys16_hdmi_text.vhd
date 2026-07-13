@@ -23,6 +23,9 @@ entity sys16_hdmi_text is
     wdata       : in  std_logic_vector(31 downto 0);
     rdata       : out std_logic_vector(31 downto 0);
     ready       : out std_logic;
+    -- decoded bytes from the board UART TX, shown until Linux takes over
+    boot_data   : in  std_logic_vector(7 downto 0) := (others => '0');
+    boot_valid  : in  std_logic := '0';
     -- diagnostic stripe colour (top 16 lines when CTRL bit2 is set)
     status_word : in  std_logic_vector(15 downto 0);
     pll_lock    : out std_logic;
@@ -84,7 +87,8 @@ begin
     port map (
       clk_in => clk_in, reset_n => reset_n,
       req => req, we => we, addr => addr, be => be, wdata => wdata,
-      rdata => rdata, ready => ready, status_word => status_word,
+      rdata => rdata, ready => ready, boot_data => boot_data,
+      boot_valid => boot_valid, status_word => status_word,
       clk_pix => clk_pix, reset_pix => reset_video,
       de => de, hsync => hs, vsync => vs, pixel_data => pixel_data,
       dbg_x => open, dbg_y => open);

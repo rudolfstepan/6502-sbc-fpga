@@ -306,6 +306,12 @@ INS_LOC "hdmi_i/pll_i/PLL_inst" PLL_B[2];
 INS_LOC "hdmi_i/dvi_i/gen_enc[0].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R101C170[0][A];
 INS_LOC "hdmi_i/dvi_i/gen_enc[1].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R101C166[0][A];
 INS_LOC "hdmi_i/dvi_i/gen_enc[2].dvi_tx_tmds_phy_inst/reset_5x_sr_2_s1" R79C180[0][A];
+// DDR3 hard-block placement from the hardware-proven SBC/old framebuffer
+// build. Leaving these three blocks to the placer makes PHY calibration
+// placement-dependent and was the cause of repeated CALIBRATION FAIL.
+INS_LOC "ddr_mem_pll_i/u_pll/PLL_inst" PLL_L[0];
+INS_LOC "ddr3_ip_i/gw3_top/u_ddr_phy_top/u_dll" DDRDLLM_BL;
+INS_LOC "ddr3_ip_i/gw3_top/u_ddr_phy_top/fclkdiv" LEFTSIDE[4];
 // PS/2 keyboard on Tang Console PMOD1 IO0/IO1. PS/2 is open-collector; the
 // internal 3.3-V pull-ups keep both lines high when the keyboard is idle.
 IO_LOC "ps2_clk" W19;

@@ -28,7 +28,7 @@ module sys16_gorv32plus_top(
   output wire sdram0_we_n, output wire [1:0] sdram0_ba,
   output wire [12:0] sdram0_addr, output wire [1:0] sdram0_dqm,
   inout wire [15:0] sdram0_dq,
-  // On-board DDR3 (32-bit, on the core module): framebuffer backend.
+  // On-board DDR3 (32-bit, on the core module): Linux main memory.
   // Pins and bring-up copied from the proven tang138k_sbc port.
   output wire [14:0] ddr_addr, output wire [2:0] ddr_bank,
   output wire ddr_cs, output wire ddr_ras, output wire ddr_cas,
@@ -42,6 +42,7 @@ module sys16_gorv32plus_top(
     if(!key[0]) por <= 16'h0000;
     else if(por != 16'hffff) por <= por + 1'b1;
   wire resetn = &por;
+  wire cpu_resetn;
   wire jtag_tdo;
   wire [31:0] araddr,awaddr,wdata,rdata;
   wire [1:0] arburst,awburst,bresp,rresp;wire [3:0] arcache,awcache,wstrb;
@@ -63,13 +64,60 @@ module sys16_gorv32plus_top(
   wire ps2_connected,ps2_key_event,ps2_polling; wire [7:0] ps2_keycode,ps2_modif,ps2_ascii;
   wire [3:0] ps2_phase;
   wire cpu_uart_tx,probe_tx,probe_active,probe_done;
+  wire [7:0] boot_uart_data; wire boot_uart_valid;
+  wire ddr_report_tx,ddr_report_active,ddr_report_done;
+  wire ddr_progress_tx,ddr_progress_active;
   reg uart_tx_r=1'b1;
   wire hdmi_pll_lock;
-  wire ddr_calib;  // DDR3 init_calib_complete (declared here for the LED)
+  wire ddr_calib;
+  wire ddr_pll_lock,ddr_pll_stop,ddr_memory_clk,ddr_clk_x1;
+  wire [2:0] app_cmd; wire app_cmd_en,app_cmd_ready;
+  wire [27:0] app_addr; wire [255:0] app_wdata,app_rdata;
+  wire [31:0] app_wmask; wire app_wren,app_wend,app_wready,app_rvalid;
+  wire ddr_test_active,ddr_test_done,ddr_test_fail;
+  wire [29:0] ddr_test_fail_addr; wire [2:0] ddr_test_phase;
+  wire [6:0] ddr_test_progress;
+  reg [2:0] ddr_done_sync=0,ddr_fail_sync=0;
+  always @(posedge clk_50mhz) begin
+    ddr_done_sync<={ddr_done_sync[1:0],ddr_test_done};
+    ddr_fail_sync<={ddr_fail_sync[1:0],ddr_test_fail};
+  end
+  // Hold reset after the memory PLL locks and retry calibration after 50 ms.
+  localparam DDR_RST_HOLD=1023, DDR_CAL_WAIT=2500000;
+  reg [1:0] ddr_lock_sync=0,ddr_cal_sync=0;
+  reg ddr_rst_wait=0,ddr_rst_n=0; reg [21:0] ddr_rst_cnt=0;
+  reg [4:0] ddr_retry_count=0; reg ddr_cal_failed=0;
+  wire ddr_result_done=ddr_done_sync[2] || ddr_cal_failed;
+  wire ddr_result_fail=ddr_fail_sync[2] || ddr_cal_failed;
+  assign cpu_resetn=resetn && ddr_result_done && !ddr_result_fail && ddr_report_done;
+  always @(posedge clk_50mhz) begin
+    ddr_lock_sync<={ddr_lock_sync[0],ddr_pll_lock};
+    ddr_cal_sync<={ddr_cal_sync[0],ddr_calib};
+    if(!resetn || !ddr_lock_sync[1]) begin
+      ddr_rst_wait<=0;ddr_rst_cnt<=0;ddr_rst_n<=0;
+      ddr_retry_count<=0;ddr_cal_failed<=0;
+    end else if(ddr_cal_failed) begin
+      ddr_rst_n<=0;
+    end
+    else if(!ddr_rst_wait) begin
+      ddr_rst_n<=0;
+      if(ddr_rst_cnt==DDR_RST_HOLD) begin ddr_rst_cnt<=0;ddr_rst_n<=1;ddr_rst_wait<=1; end
+      else ddr_rst_cnt<=ddr_rst_cnt+1'b1;
+    end else begin
+      ddr_rst_n<=1;
+      if(ddr_cal_sync[1]) ddr_rst_cnt<=0;
+      else if(ddr_rst_cnt==DDR_CAL_WAIT) begin
+        ddr_rst_cnt<=0;ddr_rst_wait<=0;
+        if(ddr_retry_count==15) ddr_cal_failed<=1;
+        else ddr_retry_count<=ddr_retry_count+1'b1;
+      end
+      else ddr_rst_cnt<=ddr_rst_cnt+1'b1;
+    end
+  end
 
   Gowin_GoRV32_Plus_Top cpu(
     .axi_clk(clk_50mhz),.ahb_clk(clk_50mhz),.apb_clk(clk_50mhz),
-    .axi_resetn(resetn),.ahb_resetn(resetn),.apb_resetn(resetn),
+    .axi_resetn(cpu_resetn),.ahb_resetn(cpu_resetn),.apb_resetn(cpu_resetn),
     .FLASH_QSPI_CSN(flash_cs_n),.FLASH_QSPI_MISO(flash_miso),
     .FLASH_QSPI_MOSI(flash_mosi),.FLASH_QSPI_CLK(flash_clk),
     .FLASH_QSPI_HOLDN(flash_hold_n),.FLASH_QSPI_WPN(flash_wp_n),
@@ -125,24 +173,32 @@ module sys16_gorv32plus_top(
     .bus_req(sb_req),.bus_we(sb_we),.bus_addr(sb_addr),.bus_wdata(sb_wdata),
     .bus_be(sb_be),.bus_rdata(sb_rdata),.bus_ready(sb_ready));
 
-  sys16_bus32_to_sdram16 width_bridge(
-    .clk(clk_50mhz),.reset_n(resetn),.req(sb_req),.we(sb_we),.addr(sb_addr),
-    .be(sb_be),.wdata(sb_wdata),.rdata(sb_rdata),.ready(sb_ready),
-    .mem_req(mem_req),.mem_we(mem_we),.mem_addr(mem_addr),.mem_be(mem_be),
-    .mem_wdata(mem_wdata),.mem_rdata(mem_rdata),.mem_ready(mem_ready));
-
-  sys16_sdram_bridge dram(
-    .clk(clk_50mhz),.reset_n(resetn),.req(mem_req),.we(mem_we),.addr(mem_addr),
-    .be(mem_be),.wdata(mem_wdata),.rdata(mem_rdata),.ready(mem_ready),.init_done(),
-    .sdram_cs_n(sdram0_cs_n),.sdram_ras_n(sdram0_ras_n),.sdram_cas_n(sdram0_cas_n),
-    .sdram_we_n(sdram0_we_n),.sdram_ba(sdram0_ba),.sdram_addr(sdram0_addr),
-    .sdram_dqm(sdram0_dqm),.sdram_dq(sdram0_dq));
+  sys16_bus32_to_ddr3 main_ddr(
+    .bus_clk(clk_50mhz),.bus_resetn(resetn),.bus_req(sb_req),.bus_we(sb_we),
+    .bus_addr(sb_addr),.bus_be(sb_be),.bus_wdata(sb_wdata),
+    .bus_rdata(sb_rdata),.bus_ready(sb_ready),
+    .app_clk(ddr_clk_x1),.app_calib(ddr_calib),.app_cmd(app_cmd),
+    .app_cmd_en(app_cmd_en),.app_cmd_ready(app_cmd_ready),.app_addr(app_addr),
+    .app_wdata(app_wdata),.app_wmask(app_wmask),.app_wren(app_wren),
+    .app_wend(app_wend),.app_wready(app_wready),.app_rdata(app_rdata),
+    .app_rvalid(app_rvalid),.test_active(ddr_test_active),
+    .test_done(ddr_test_done),.test_fail(ddr_test_fail),
+    .test_fail_addr(ddr_test_fail_addr),.test_phase(ddr_test_phase),
+    .test_progress(ddr_test_progress));
 
   // Board-level sign of life independent of flash contents. The whole
   // console chain (probe, ZSBL, OpenSBI, Linux) runs 115200 8N1.
   sys16_uart_probe probe(
     .clk(clk_50mhz),.reset_n(resetn),.start(resetn),.tx(probe_tx),
     .active(probe_active),.done(probe_done));
+  sys16_ddr_test_reporter ddr_report(
+    .clk(clk_50mhz),.reset_n(resetn),
+    .start(ddr_result_done && probe_done && !ddr_progress_active),
+    .failed(ddr_result_fail),.calib_failed(ddr_cal_failed),
+    .tx(ddr_report_tx),.active(ddr_report_active),.done(ddr_report_done));
+  sys16_ddr_progress_reporter ddr_progress(
+    .clk(clk_50mhz),.reset_n(resetn),.enable(ddr_test_active && probe_done),
+    .progress(ddr_test_progress),.tx(ddr_progress_tx),.active(ddr_progress_active));
   // Keep the final mux off the package pin. With the DDR3 PHY present the
   // unconstrained combinational output route became placement-sensitive and
   // corrupted even the pre-CPU "FPGA BOOT OK" probe. A single 50 MHz output
@@ -152,9 +208,17 @@ module sys16_gorv32plus_top(
     if (!resetn)
       uart_tx_r <= 1'b1;
     else
-      uart_tx_r <= probe_active ? probe_tx : cpu_uart_tx;
+      uart_tx_r <= probe_active ? probe_tx :
+                   ddr_progress_active ? ddr_progress_tx :
+                   ddr_report_active ? ddr_report_tx : cpu_uart_tx;
   end
   assign uart_tx = uart_tx_r;
+
+  // Decode the actual outgoing serial stream and mirror it to HDMI until the
+  // Linux text-console driver takes ownership of the character RAM.
+  uart_rx_ser #(.CLK_HZ(50000000),.BAUD(115200)) boot_uart_tap(
+    .clk(clk_50mhz),.reset_n(resetn),.rx(uart_tx_r),
+    .data(boot_uart_data),.valid(boot_uart_valid));
 
   // PS/2 Set-2 keyboard receiver. Linux sees its four registers at
   // 0xE8800100 through the existing AXI extension window.
@@ -185,7 +249,8 @@ module sys16_gorv32plus_top(
       if(awvalid) saw_aw<=1'b1;
       beat<=beat+1'b1;
     end
-  assign led = {beat[24],saw_aw|saw_ar,saw_cpu_tx,ddr_calib};
+  // LED3 heartbeat, LED2 test failure, LED1 test pass, LED0 calibration.
+  assign led = {beat[24],ddr_result_fail,ddr_result_done&&!ddr_result_fail,ddr_calib};
 
   // Diagnosis on the HDMI status stripe (top 48 lines). A trapped CPU that
   // executes garbage only ever READS DDR; the ZSBL copy loop WRITES it.
@@ -218,30 +283,35 @@ module sys16_gorv32plus_top(
     .clk_in(clk_50mhz),.reset_n(resetn),
     .req(hdmi_req),.we(fb_we),.addr(fb_addr[23:0]),.be(fb_be),
     .wdata(fb_wdata),.rdata(hdmi_rdata),.ready(hdmi_ready),
+    .boot_data(boot_uart_data),.boot_valid(boot_uart_valid),
     .status_word(diag_status),
     .pll_lock(hdmi_pll_lock),.tmds_clk_p(tmds_clk_p),.tmds_clk_n(tmds_clk_n),
     .tmds_d_p(tmds_d_p),.tmds_d_n(tmds_d_n));
 
-  // On-board DDR3 unused in text mode: hold the SDRAM device in reset and
-  // park its bus at benign levels so the 1.5 V SSTL pins are not left
-  // floating. led[0] is repurposed to plain resetn (no calibration to show).
-  assign ddr_addr = 15'd0;
-  assign ddr_bank = 3'd0;
-  assign ddr_cs = 1'b1;
-  assign ddr_ras = 1'b1;
-  assign ddr_cas = 1'b1;
-  assign ddr_we = 1'b1;
-  assign ddr_ck = 1'b0;
-  assign ddr_ck_n = 1'b1;
-  assign ddr_cke = 1'b0;
-  assign ddr_odt = 1'b0;
-  assign ddr_reset_n = 1'b0;
-  assign ddr_dm = 4'b1111;
-  assign ddr_dq = 32'bz;
-  assign ddr_dqs = 4'bz;
-  assign ddr_dqs_n = 4'bz;
-  assign ddr_calib = resetn;
+  Gowin_DDR_PLL ddr_mem_pll_i(
+    .lock(ddr_pll_lock),.clkout0(),.clkout1(),.clkout2(ddr_memory_clk),
+    .clkin(clk_50mhz),.init_clk(clk_50mhz),.reset(1'b0),
+    .enclk0(1'b1),.enclk1(1'b1),.enclk2(ddr_pll_stop));
+
+  DDR3_Memory_Interface_Top ddr3_ip_i(
+    .clk(clk_50mhz),.memory_clk(ddr_memory_clk),.pll_lock(ddr_pll_lock),.rst_n(ddr_rst_n),
+    .cmd_ready(app_cmd_ready),.cmd(app_cmd),.cmd_en(app_cmd_en),.addr({1'b0,app_addr}),
+    .wr_data_rdy(app_wready),.wr_data(app_wdata),.wr_data_en(app_wren),
+    .wr_data_end(app_wend),.wr_data_mask(app_wmask),.rd_data(app_rdata),
+    .rd_data_valid(app_rvalid),.rd_data_end(),.sr_req(1'b0),.ref_req(1'b0),
+    .sr_ack(),.ref_ack(),.init_calib_complete(ddr_calib),.clk_out(ddr_clk_x1),
+    .ddr_rst(),.pll_stop(ddr_pll_stop),.burst(1'b1),
+    .O_ddr_addr(ddr_addr),.O_ddr_ba(ddr_bank),.O_ddr_cs_n(ddr_cs),
+    .O_ddr_ras_n(ddr_ras),.O_ddr_cas_n(ddr_cas),.O_ddr_we_n(ddr_we),
+    .O_ddr_clk(ddr_ck),.O_ddr_clk_n(ddr_ck_n),.O_ddr_cke(ddr_cke),
+    .O_ddr_odt(ddr_odt),.O_ddr_reset_n(ddr_reset_n),.O_ddr_dqm(ddr_dm),
+    .IO_ddr_dq(ddr_dq),.IO_ddr_dqs(ddr_dqs),.IO_ddr_dqs_n(ddr_dqs_n));
+
+  // The external SDRAM0 module is no longer needed by Linux.
+  assign sdram0_cs_n=1'b1; assign sdram0_ras_n=1'b1; assign sdram0_cas_n=1'b1;
+  assign sdram0_we_n=1'b1; assign sdram0_ba=0; assign sdram0_addr=0;
+  assign sdram0_dqm=2'b11; assign sdram0_dq=16'bz;
 
   assign dvi_a_psv=1'b0; assign dvi_ddc_clk=1'bz; assign dvi_ddc_dat=1'bz;
-  assign sdram0_clk=clk_50mhz;
+  assign sdram0_clk=1'b0;
 endmodule

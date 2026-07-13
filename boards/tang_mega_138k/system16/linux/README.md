@@ -82,10 +82,10 @@ is the authoritative format implementation.
 | MMIO | `0xf0200020` | UART1 16550 register window |
 | MMIO | `0xf0600000` | Vendor SD host |
 
-Linux sees 12 MB from `0x00400000` through `0x00ffffff`. The lower 4 MB are
-reserved for OpenSBI and the DTB. The complete kernel plus initramfs must fit
-in the remaining region. The optional flash fallback slot has a stricter
-2.9 MB GRV1 size limit; SD boot is not restricted by that flash boundary.
+Linux sees 1020 MiB from `0x00400000` through `0x3fffffff`. The lower 4 MiB
+of the 1 GiB DDR3 are reserved for OpenSBI and the DTB. The optional flash
+fallback slot has a stricter 2.9 MiB GRV1 size limit; SD boot is not restricted
+by that flash boundary.
 
 The UART uses 115200 baud, 8 data bits, no parity and one stop bit. Its APB
 registers use 32-bit accesses and a four-byte stride. The small ZSBL SD reader
@@ -174,6 +174,18 @@ make -C boards/tang_mega_138k/system16 rootfs-sd-wsl
 make -C boards/tang_mega_138k/system16 kernel-sd-wsl
 make -C boards/tang_mega_138k/system16 gorv32-sd-image
 ```
+
+The SD root filesystem includes `/usr/bin/s16bench` for measuring the on-board
+DDR3 main-memory backend. Its defaults use two 2 MiB buffers and eight passes;
+Linux receives 1020 MiB (`0x00400000..0x3fffffff`) from the 1 GiB device:
+
+```sh
+s16bench
+s16bench 1024 16       # optional: buffer size in KiB and pass count
+```
+
+It reports sequential write, read and `memcpy` throughput in KiB/s. Run the
+same command after a memory-backend change and compare all three values.
 
 This creates `build/gorv32-linux-sd/gorv32-linux-sd.img`. For later kernel,
 DTB or driver iterations leave the card untouched and use:

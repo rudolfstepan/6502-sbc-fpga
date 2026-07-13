@@ -24,7 +24,7 @@
 		};
 	};
 	memory@400000 {
-		device_type = "memory"; reg = <0x00400000 0x00c00000>;
+		device_type = "memory"; reg = <0x00400000 0x3fc00000>;
 	};
 	soc {
 		#address-cells = <1>; #size-cells = <1>;

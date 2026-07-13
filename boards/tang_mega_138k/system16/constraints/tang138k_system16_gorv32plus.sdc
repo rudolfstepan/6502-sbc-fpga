@@ -37,10 +37,21 @@ set_clock_groups -asynchronous -group [get_clocks {pix_clk pix_clk_5x}] -group [
 # the real pixel, CPU and DDR data paths.
 set_false_path -from [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/reset_5x_sr*/Q}] -to [get_pins {hdmi_i/dvi_i/gen_enc[*].dvi_tx_tmds_phy_inst/tmds_serdes_inst0/RESET}]
 
-# The text console needs no external memory, so the DDR3 IP is unwired in
-# this build: its clock and PHY-false-path constraints were removed with it.
-# (Restore them together with the sys16_hdmi_fb + DDR3 block from git history
-# if switching back to the RGB565 framebuffer.)
+# DDR3 main-memory backend: hard 400 MHz memory clock and 100 MHz app clock.
+# These constraints are the proven SBC/old framebuffer set, with the current
+# top-level hierarchy. The DDR clocks are unrelated to the CPU/HDMI domains;
+# all crossings use explicit toggle synchronizers.
+create_clock -name ddr_mem -period 2.5 -waveform {0 1.25} [get_pins {ddr_mem_pll_i/u_pll/PLL_inst/CLKOUT2}]
+create_clock -name ddr_clk_x1 -period 10 [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/fclkdiv/CLKOUT}]
+set_clock_groups -asynchronous -group [get_clocks {ddr_mem ddr_clk_x1}] -group [get_clocks {clk_50mhz}]
+set_clock_groups -asynchronous -group [get_clocks {ddr_mem ddr_clk_x1}] -group [get_clocks {pix_clk pix_clk_5x}]
+
+# Quasi-static vendor PHY calibration controls. These are written by the init
+# FSM and stable when consumed; timing them as ordinary synchronous paths can
+# route the calibration network badly enough that hardware training fails.
+set_false_path -from [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_init/read_rclksel_conf*/Q}] -to [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/u_dqs/HOLD}]
+set_false_path -from [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_init/hold_gen[*].hold_i*/Q}] -to [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/u_dqs/HOLD}]
+set_false_path -from [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/ides_calib_d*/Q}] -to [get_pins {ddr3_ip_i/gw3_top/u_ddr_phy_top/u_ddr_phy_wds/data_lane_gen[*].u_ddr_phy_data_lane/u_ddr_phy_data_io/iserdes_gen[*].u_ides8_mem/CALIB}]
 
 # PS/2 clock and data are asynchronous external open-collector signals. The
 # receiver synchronizes ps2_clk into clk_50mhz before detecting its falling

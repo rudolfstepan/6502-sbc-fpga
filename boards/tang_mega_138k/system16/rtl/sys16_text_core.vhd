@@ -56,6 +56,8 @@ entity sys16_text_core is
     wdata     : in  std_logic_vector(31 downto 0);
     rdata     : out std_logic_vector(31 downto 0);
     ready     : out std_logic;
+    boot_data : in std_logic_vector(7 downto 0) := (others => '0');
+    boot_valid: in std_logic := '0';
     status_word : in std_logic_vector(15 downto 0);
     -- pixel clock domain (74.25 MHz), video output
     clk_pix   : in  std_logic;
@@ -101,13 +103,22 @@ architecture rtl of sys16_text_core is
   signal cram_qb   : std_logic_vector(31 downto 0);
   signal cram_wea  : std_logic_vector(3 downto 0);
   signal cpu_widx  : std_logic_vector(CRAM_AW-1 downto 0);
+  signal ram_widx  : std_logic_vector(CRAM_AW-1 downto 0);
+  signal ram_wdata : std_logic_vector(31 downto 0);
+  signal boot_wea  : std_logic_vector(3 downto 0) := (others => '0');
+  signal boot_widx : std_logic_vector(CRAM_AW-1 downto 0) := (others => '0');
+  signal boot_wdata: std_logic_vector(31 downto 0) := (others => '0');
+  signal boot_wen  : std_logic := '0';
   signal saddr_r   : std_logic_vector(CRAM_AW-1 downto 0) := (others => '0');
 
   -- bus domain
   type bus_state_t is (B_IDLE, B_RDWAIT, B_RDWAIT2, B_RESP);
   signal bus_state : bus_state_t := B_IDLE;
   signal rdata_r   : std_logic_vector(31 downto 0) := (others => '0');
-  signal ctrl_reg  : std_logic_vector(2 downto 0) := "011";  -- enable+test
+  signal ctrl_reg  : std_logic_vector(2 downto 0) := "001";  -- enabled, blank RAM
+  signal boot_enable : std_logic := '1';
+  signal boot_col : natural range 0 to COLS-1 := 0;
+  signal boot_row : natural range 0 to ROWS-1 := 0;
   signal cur_col   : unsigned(6 downto 0) := (others => '0');
   signal cur_row   : unsigned(4 downto 0) := (others => '0');
   signal cur_en    : std_logic := '0';
@@ -143,13 +154,16 @@ begin
   sel_regs <= addr(23);
   reg_idx  <= addr(5 downto 2);
   cpu_widx <= addr(CRAM_AW+1 downto 2);   -- 32-bit word index into the cells
+  ram_widx <= boot_widx when boot_wen = '1' else cpu_widx;
+  ram_wdata <= boot_wdata when boot_wen = '1' else wdata;
   rdata    <= rdata_r;
   ready    <= '1' when bus_state = B_RESP else '0';
 
   -- CPU cell writes: byte-enable strobes while leaving B_IDLE (a cell is
   -- 16 bit, so a 16-bit store hits two byte lanes of one 32-bit word).
   wea_g : for i in 0 to 3 generate
-    cram_wea(i) <= '1' when bus_state = B_IDLE and req = '1' and we = '1'
+    cram_wea(i) <= boot_wea(i) when boot_wen = '1' else
+                   '1' when bus_state = B_IDLE and req = '1' and we = '1'
                             and sel_regs = '0' and be(i) = '1' else '0';
   end generate;
 
@@ -157,21 +171,48 @@ begin
     bank_i : entity work.sys16_fb_ram8
       generic map (DEPTH => CRAM_W, AW => CRAM_AW)
       port map (
-        clka  => clk_in,  wea => cram_wea(i), addra => cpu_widx,
-        dina  => wdata(8*i+7 downto 8*i), qa => cram_qa(8*i+7 downto 8*i),
+        clka  => clk_in,  wea => cram_wea(i), addra => ram_widx,
+        dina  => ram_wdata(8*i+7 downto 8*i), qa => cram_qa(8*i+7 downto 8*i),
         clkb  => clk_pix, addrb => saddr_r, qb => cram_qb(8*i+7 downto 8*i));
   end generate;
 
   bus_p : process(clk_in)
+    variable cell_idx : natural range 0 to COLS*ROWS-1;
   begin
     if rising_edge(clk_in) then
       if reset_n = '0' then
-        bus_state <= B_IDLE; ctrl_reg <= "011";
+        bus_state <= B_IDLE; ctrl_reg <= "001";
+        boot_enable <= '1'; boot_col <= 0; boot_row <= 0;
+        boot_wen <= '0'; boot_wea <= (others => '0');
         cur_col <= (others => '0'); cur_row <= (others => '0'); cur_en <= '0';
         start_row <= (others => '0');
         frame_cnt <= (others => '0');
         vblank_m <= '0'; vblank_s <= '0'; vblank_p <= '0';
       else
+        boot_wen <= '0';
+        boot_wea <= (others => '0');
+        -- Mirror the physical UART TX during ZSBL/OpenSBI/early Linux boot.
+        -- The first Linux CTRL write atomically hands the RAM back to the VT
+        -- driver, which then repaints the complete screen.
+        if boot_enable = '1' and boot_valid = '1' then
+          if boot_data = x"0D" then
+            boot_col <= 0;
+          elsif boot_data = x"0A" then
+            boot_col <= 0;
+            if boot_row = ROWS-1 then boot_row <= 0; else boot_row <= boot_row+1; end if;
+          elsif unsigned(boot_data) >= 32 then
+            cell_idx := boot_row * COLS + boot_col;
+            boot_widx <= std_logic_vector(to_unsigned(cell_idx / 2, CRAM_AW));
+            boot_wdata <= x"0F" & boot_data & x"0F" & boot_data;
+            if (cell_idx mod 2) = 0 then boot_wea <= "0011";
+            else                         boot_wea <= "1100"; end if;
+            boot_wen <= '1';
+            if boot_col = COLS-1 then
+              boot_col <= 0;
+              if boot_row = ROWS-1 then boot_row <= 0; else boot_row <= boot_row+1; end if;
+            else boot_col <= boot_col+1; end if;
+          end if;
+        end if;
         vblank_m <= vblank_pix; vblank_s <= vblank_m; vblank_p <= vblank_s;
         if vblank_s = '1' and vblank_p = '0' then
           frame_cnt <= frame_cnt + 1;
@@ -182,7 +223,9 @@ begin
             if req = '1' then
               if sel_regs = '1' and we = '1' then
                 case reg_idx is
-                  when "0001" => if be(0) = '1' then ctrl_reg <= wdata(2 downto 0); end if;
+                  when "0001" => if be(0) = '1' then
+                    ctrl_reg <= wdata(2 downto 0); boot_enable <= '0';
+                  end if;
                   when "0011" =>
                     cur_col <= unsigned(wdata(6 downto 0));
                     cur_row <= unsigned(wdata(12 downto 8));

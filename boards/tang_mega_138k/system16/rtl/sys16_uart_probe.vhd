@@ -7,9 +7,11 @@ entity sys16_uart_probe is
   port(clk,reset_n,start:in std_logic; tx:out std_logic; active,done:out std_logic);
 end entity;
 architecture rtl of sys16_uart_probe is
-  constant N:natural:=14;
+  constant N:natural:=38;
   type bytes_t is array(0 to N-1) of std_logic_vector(7 downto 0);
-  constant MSG:bytes_t:=(x"46",x"50",x"47",x"41",x"20",x"42",x"4F",x"4F",x"54",x"20",x"4F",x"4B",x"0D",x"0A");
+  constant MSG:bytes_t:=(
+    x"46",x"50",x"47",x"41",x"20",x"42",x"4F",x"4F",x"54",x"20",x"4F",x"4B",x"0D",x"0A",
+    x"44",x"44",x"52",x"33",x"20",x"46",x"55",x"4C",x"4C",x"20",x"54",x"45",x"53",x"54",x"20",x"52",x"55",x"4E",x"4E",x"49",x"4E",x"47",x"0D",x"0A");
   type state_t is (IDLE,LAUNCH,WAIT_BUSY,WAIT_DONE,FINISHED);
   signal state:state_t:=IDLE; signal idx:natural range 0 to N-1:=0;
   signal valid,busy:std_logic:='0'; signal data:std_logic_vector(7 downto 0);

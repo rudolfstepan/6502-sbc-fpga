@@ -19,7 +19,7 @@ import struct
 from pathlib import Path
 
 MAGIC = 0x31565247  # "GRV1"
-SDRAM_SIZE = 0x1000000       # 16 MB DDR window backed by SDRAM0
+SDRAM_SIZE = 0x40000000      # 1 GiB on-board DDR3 main-memory window
 # Flash space from 0x510000 to the 8 MB chip end; reads past the chip end
 # would wrap onto the bitstream.
 XIP_PAYLOAD_MAX = 0x2F0000
@@ -45,7 +45,7 @@ def main() -> int:
     checksum = 0
     for (dst, name), data in zip(LOADS, blobs):
         if dst + len(data) > SDRAM_SIZE:
-            raise SystemExit(f"{name} does not fit in 16 MB SDRAM")
+            raise SystemExit(f"{name} does not fit in 1 GiB DDR3")
         payload.extend(bytes((-(base + len(payload))) % 512))
         padded = data + bytes((-len(data)) % 4)
         for (word,) in struct.iter_unpack("<I", padded):

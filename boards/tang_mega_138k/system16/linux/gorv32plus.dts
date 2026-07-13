@@ -18,9 +18,9 @@
 		};
 		/* Hart 1 exists in the IP but is parked in the ZSBL (wfi loop). */
 	};
-	/* 16 MB SDRAM behind the AXI DDR window; OpenSBI owns the bottom,
+	/* 1 GiB on-board DDR3 behind the AXI DDR window; OpenSBI owns the bottom,
 	   the DTB sits at $3F0000, the kernel at the RV32 4 MiB boundary. */
-	memory@400000 { device_type = "memory"; reg = <0x00400000 0x00c00000>; };
+	memory@400000 { device_type = "memory"; reg = <0x00400000 0x3fc00000>; };
 	soc0: soc {
 		#address-cells = <1>; #size-cells = <1>; compatible = "simple-bus"; ranges;
 		clint@e6000000 {

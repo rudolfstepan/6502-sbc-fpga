@@ -1,3 +1,4 @@
 menu "System16 packages"
 source "$BR2_EXTERNAL_SYSTEM16_PATH/package/native-gcc/Config.in"
+source "$BR2_EXTERNAL_SYSTEM16_PATH/package/s16bench/Config.in"
 endmenu
